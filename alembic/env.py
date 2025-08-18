@@ -1,7 +1,7 @@
 from app.config import settings
 from app.models import Base
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config
+from sqlalchemy import engine_from_config, make_url
 from sqlalchemy import pool
 from alembic import context
 import os
@@ -33,7 +33,9 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 
 
 def get_url():
-    return settings.database_url
+    # Parse the database URL and force asyncpg driver for Alembic
+    parsed_url = make_url(settings.database_url)
+    return f"postgresql://{parsed_url.username}:{parsed_url.password}@{parsed_url.host}:{parsed_url.port}/{parsed_url.database}"
 
 
 def run_migrations_offline() -> None:
