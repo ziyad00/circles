@@ -33,9 +33,12 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 
 
 def get_url():
-    # Parse the database URL and force asyncpg driver for Alembic
+    # Build a sync URL for Alembic using psycopg (v3) driver
     parsed_url = make_url(settings.database_url)
-    return f"postgresql://{parsed_url.username}:{parsed_url.password}@{parsed_url.host}:{parsed_url.port}/{parsed_url.database}"
+    return (
+        f"postgresql+psycopg://{parsed_url.username}:{parsed_url.password}"
+        f"@{parsed_url.host}:{parsed_url.port}/{parsed_url.database}"
+    )
 
 
 def run_migrations_offline() -> None:
