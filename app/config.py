@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     # OTP settings
     otp_secret_key: str = "your-secret-key-change-in-production"
     otp_expiry_minutes: int = 10
+    otp_requests_per_minute: int = 5
+    otp_requests_burst: int = 10
 
     # JWT settings (for future use)
     jwt_secret_key: str = "your-jwt-secret-key-change-in-production"

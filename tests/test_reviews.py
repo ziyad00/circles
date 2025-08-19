@@ -12,7 +12,7 @@ def event_loop():
     loop.close()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="session")
 async def client():
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -61,10 +61,82 @@ async def test_my_checkins_and_reviews(client: httpx.AsyncClient):
     assert body["limit"] == 10 and body["offset"] == 0 and body["total"] >= 1
     assert isinstance(body["items"], list) and len(body["items"]) >= 1
 
-    # create a review
+
+@pytest.mark.asyncio
+async def test_review_upsert_and_stats(client: httpx.AsyncClient):
+    # create a place without initial rating to rely on computed average
+    r = await client.post(
+        "/places/",
+        json={
+            "name": "Stats Spot",
+            "city": "San Francisco",
+            "neighborhood": "SoMa",
+            "categories": ["coffee"],
+        },
+    )
+    assert r.status_code == 200
+    place_id = r.json()["id"]
+
+    # user1 auth
+    token1 = await auth_token(client)
+    headers1 = {"Authorization": f"Bearer {token1}"}
+
+    # create review 4.0
     r = await client.post(
         f"/places/{place_id}/reviews",
-        headers=headers,
+        headers=headers1,
+        json={"rating": 4.0, "text": "ok"},
+    )
+    assert r.status_code == 200
+
+    # stats should reflect average 4.0, count 1
+    r = await client.get(f"/places/{place_id}/stats")
+    assert r.status_code == 200
+    stats = r.json()
+    assert stats["average_rating"] == 4.0 and stats["reviews_count"] == 1
+
+    # upsert review to 5.0
+    r = await client.post(
+        f"/places/{place_id}/reviews",
+        headers=headers1,
+        json={"rating": 5.0, "text": "great"},
+    )
+    assert r.status_code == 200
+    r = await client.get(f"/places/{place_id}/stats")
+    stats = r.json()
+    assert stats["average_rating"] == 5.0 and stats["reviews_count"] == 1
+
+    # user2 leaves a 3.0 review, average should be 4.0
+    token2 = await auth_token(client, email="stats2@test.com")
+    headers2 = {"Authorization": f"Bearer {token2}"}
+    r = await client.post(
+        f"/places/{place_id}/reviews",
+        headers=headers2,
+        json={"rating": 3.0, "text": "meh"},
+    )
+    assert r.status_code == 200
+    r = await client.get(f"/places/{place_id}/stats")
+    stats = r.json()
+    assert stats["average_rating"] == 4.0 and stats["reviews_count"] == 2
+
+    # user1 deletes review; average becomes 3.0, count 1
+    r = await client.delete(f"/places/{place_id}/reviews/me", headers=headers1)
+    assert r.status_code == 204
+    r = await client.get(f"/places/{place_id}/stats")
+    stats = r.json()
+    assert stats["average_rating"] == 3.0 and stats["reviews_count"] == 1
+
+    # user2 deletes review; no reviews remain
+    r = await client.delete(f"/places/{place_id}/reviews/me", headers=headers2)
+    assert r.status_code == 204
+    r = await client.get(f"/places/{place_id}/stats")
+    stats = r.json()
+    assert stats["average_rating"] is None and stats["reviews_count"] == 0
+
+    # create a review (again) to ensure list endpoint works
+    r = await client.post(
+        f"/places/{place_id}/reviews",
+        headers=headers2,
         json={"rating": 4.5, "text": "Great place"},
     )
     assert r.status_code == 200

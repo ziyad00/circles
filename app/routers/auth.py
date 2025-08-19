@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
@@ -6,6 +6,12 @@ from ..schemas import OTPRequest, OTPVerify, OTPResponse, AuthResponse, UserResp
 from ..services.otp_service import OTPService
 from ..services.jwt_service import JWTService, security
 from ..models import User
+from ..config import settings
+from datetime import datetime, timedelta, timezone
+
+
+# Simple in-memory throttle store (email+ip → list of timestamps)
+_otp_request_log: dict[tuple[str, str], list[datetime]] = {}
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -13,13 +19,35 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 @router.post("/request-otp", response_model=OTPResponse)
 async def request_otp(
     request: OTPRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    http_request: Request = None,
 ):
     """
     Request an OTP code for authentication.
     This will create a user if they don't exist and send an OTP code.
     """
     try:
+        # Throttle by email + IP
+        ip = http_request.client.host if http_request and http_request.client else "unknown"
+        key = (request.email.lower(), ip)
+        now = datetime.now(timezone.utc)
+        window_start = now - timedelta(minutes=1)
+        entries = _otp_request_log.get(key, [])
+        # keep only last minute
+        entries = [ts for ts in entries if ts >= window_start]
+        if len(entries) >= settings.otp_requests_per_minute:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Too many OTP requests. Please try again later.")
+        # enforce simple burst cap over 5 minutes
+        burst_window_start = now - timedelta(minutes=5)
+        burst_entries = [ts for ts in entries if ts >= burst_window_start]
+        if len(burst_entries) >= settings.otp_requests_burst:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Too many OTP requests. Please slow down.")
+        # record request
+        entries.append(now)
+        _otp_request_log[key] = entries
+
         # Create user if not exists
         user = await OTPService.create_user_if_not_exists(db, request.email)
 
@@ -30,7 +58,7 @@ async def request_otp(
         # For now, we'll return it in the response (for development only)
         return OTPResponse(
             message=f"OTP code sent to {request.email}. For development: {otp.code}",
-            expires_in_minutes=10
+            expires_in_minutes=settings.otp_expiry_minutes,
         )
 
     except Exception as e:
