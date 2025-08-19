@@ -121,3 +121,34 @@ class PaginatedSavedPlaces(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class PaginatedCheckIns(BaseModel):
+    items: list[CheckInResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class ReviewCreate(BaseModel):
+    rating: float = Field(..., ge=0, le=5, examples=[4.5])
+    text: Optional[str] = Field(None, examples=["Great spot!"])
+
+
+class ReviewResponse(BaseModel):
+    id: int
+    user_id: int
+    place_id: int
+    rating: float
+    text: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class PaginatedReviews(BaseModel):
+    items: list[ReviewResponse]
+    total: int
+    limit: int
+    offset: int
