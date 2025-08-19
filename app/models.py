@@ -84,3 +84,19 @@ class SavedPlace(Base):
 
     user = relationship("User")
     place = relationship("Place", back_populates="saved_by")
+
+
+class Review(Base):
+    __tablename__ = "reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"),
+                     nullable=False, index=True)
+    place_id = Column(Integer, ForeignKey("places.id"),
+                      nullable=False, index=True)
+    rating = Column(Float, nullable=False)
+    text = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User")
+    place = relationship("Place")

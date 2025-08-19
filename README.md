@@ -220,6 +220,36 @@ curl -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8000/places/saved/me?limit=10&offset=0'
 ```
 
+#### My Check-ins (paginated, auth)
+
+GET `/places/me/check-ins?limit=20&offset=0`
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8000/places/me/check-ins?limit=10&offset=0'
+```
+
+Returns `{ items: CheckInResponse[], total, limit, offset }` ordered by newest first.
+
+#### Reviews
+
+- Create review (auth): POST `/places/{place_id}/reviews`
+
+```bash
+curl -X POST http://localhost:8000/places/1/reviews \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"rating":4.5, "text":"Great spot!"}'
+```
+
+- List reviews (paginated): GET `/places/{place_id}/reviews?limit=20&offset=0`
+
+```bash
+curl 'http://localhost:8000/places/1/reviews?limit=10&offset=0'
+```
+
+Returns `{ items: ReviewResponse[], total, limit, offset }` ordered by newest first.
+
 ## Development
 
 ### Database Migrations

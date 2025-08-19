@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 
 from ..database import get_db
-from ..models import Place, CheckIn, SavedPlace, User
+from ..models import Place, CheckIn, SavedPlace, User, Review
 from ..schemas import (
     PlaceCreate,
     PlaceResponse,
@@ -14,6 +14,10 @@ from ..schemas import (
     SavedPlaceResponse,
     PaginatedPlaces,
     PaginatedSavedPlaces,
+    PaginatedCheckIns,
+    ReviewCreate,
+    ReviewResponse,
+    PaginatedReviews,
 )
 from ..services.jwt_service import JWTService
 
@@ -194,6 +198,70 @@ async def whos_here(place_id: int, db: AsyncSession = Depends(get_db)):
                               place_id, CheckIn.created_at >= since)
     )
     return res.scalars().all()
+
+
+@router.get("/me/check-ins", response_model=PaginatedCheckIns)
+async def my_check_ins(
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = 20,
+    offset: int = 0,
+):
+    total = (
+        await db.execute(select(func.count(CheckIn.id)).where(CheckIn.user_id == current_user.id))
+    ).scalar_one()
+    res = await db.execute(
+        select(CheckIn)
+        .where(CheckIn.user_id == current_user.id)
+        .order_by(CheckIn.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = res.scalars().all()
+    return PaginatedCheckIns(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.post("/{place_id}/reviews", response_model=ReviewResponse)
+async def create_review(
+    place_id: int,
+    payload: ReviewCreate,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # confirm place exists
+    if not (await db.execute(select(Place).where(Place.id == place_id))).scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Place not found")
+    review = Review(
+        user_id=current_user.id,
+        place_id=place_id,
+        rating=payload.rating,
+        text=payload.text,
+    )
+    db.add(review)
+    await db.commit()
+    await db.refresh(review)
+    return review
+
+
+@router.get("/{place_id}/reviews", response_model=PaginatedReviews)
+async def list_reviews(
+    place_id: int,
+    db: AsyncSession = Depends(get_db),
+    limit: int = 20,
+    offset: int = 0,
+):
+    total = (
+        await db.execute(select(func.count(Review.id)).where(Review.place_id == place_id))
+    ).scalar_one()
+    res = await db.execute(
+        select(Review)
+        .where(Review.place_id == place_id)
+        .order_by(Review.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = res.scalars().all()
+    return PaginatedReviews(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("/saved", response_model=SavedPlaceResponse)
