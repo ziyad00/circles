@@ -1,5 +1,6 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, Union, List
+from enum import Enum
 from datetime import datetime
 
 
@@ -16,9 +17,7 @@ class UserResponse(UserBase):
     id: int
     is_verified: bool
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OTPRequest(BaseModel):
@@ -68,16 +67,23 @@ class PlaceCreate(PlaceBase):
 class PlaceResponse(PlaceBase):
     id: int
     created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
 
-    class Config:
-        from_attributes = True
+
+class VisibilityEnum(str, Enum):
+    public = "public"
+    friends = "friends"
+    private = "private"
 
 
 class CheckInCreate(BaseModel):
     place_id: int = Field(..., examples=[1])
     note: Optional[str] = Field(None, examples=["Latte time"])
-    visibility: Optional[str] = Field(
-        "public", examples=["public", "friends", "private"])
+    visibility: Optional[VisibilityEnum] = Field(
+        default=VisibilityEnum.public,
+        examples=[VisibilityEnum.public,
+                  VisibilityEnum.friends, VisibilityEnum.private],
+    )
 
 
 class CheckInResponse(BaseModel):
@@ -85,12 +91,10 @@ class CheckInResponse(BaseModel):
     user_id: int
     place_id: int
     note: Optional[str] = None
-    visibility: str
+    visibility: VisibilityEnum
     created_at: datetime
     expires_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SavedPlaceCreate(BaseModel):
@@ -104,9 +108,7 @@ class SavedPlaceResponse(BaseModel):
     place_id: int
     list_name: Optional[str] = None
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PaginatedPlaces(BaseModel):
@@ -142,9 +144,7 @@ class ReviewResponse(BaseModel):
     rating: float
     text: Optional[str] = None
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PaginatedReviews(BaseModel):
@@ -152,3 +152,10 @@ class PaginatedReviews(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class PlaceStats(BaseModel):
+    place_id: int
+    average_rating: Optional[float] = None
+    reviews_count: int
+    active_checkins: int

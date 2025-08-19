@@ -194,10 +194,10 @@ Rate limiting: prevents repeat check-ins to the same place by same user within 5
 
 #### Who's Here (last 24h)
 
-GET `/places/{id}/whos-here`
+GET `/places/{id}/whos-here?limit=50&offset=0`
 
 ```bash
-curl http://localhost:8000/places/1/whos-here
+curl 'http://localhost:8000/places/1/whos-here?limit=20&offset=0'
 ```
 
 #### Save Place (auth)
@@ -218,6 +218,15 @@ GET `/places/saved/me?limit=20&offset=0`
 ```bash
 curl -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8000/places/saved/me?limit=10&offset=0'
+```
+
+#### Unsave Place (auth)
+
+DELETE `/places/saved/{place_id}`
+
+```bash
+curl -X DELETE http://localhost:8000/places/saved/1 \
+  -H "Authorization: Bearer $TOKEN" -i
 ```
 
 #### My Check-ins (paginated, auth)
@@ -250,6 +259,41 @@ curl 'http://localhost:8000/places/1/reviews?limit=10&offset=0'
 
 Returns `{ items: ReviewResponse[], total, limit, offset }` ordered by newest first.
 
+- Delete my review (auth): DELETE `/places/{place_id}/reviews/me`
+
+```bash
+curl -X DELETE http://localhost:8000/places/1/reviews/me \
+  -H "Authorization: Bearer $TOKEN" -i
+```
+
+- My reviews (paginated, auth): GET `/places/me/reviews?limit=&offset=`
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8000/places/me/reviews?limit=10&offset=0'
+```
+
+Returns `{ items: ReviewResponse[], total, limit, offset }`.
+
+#### Place Stats
+
+GET `/places/{place_id}/stats`
+
+```bash
+curl 'http://localhost:8000/places/1/stats'
+```
+
+Returns:
+
+```json
+{
+  "place_id": 1,
+  "average_rating": 4.3,
+  "reviews_count": 12,
+  "active_checkins": 3
+}
+```
+
 ## Development
 
 ### Database Migrations
@@ -278,7 +322,19 @@ OTP_EXPIRY_MINUTES=10
 JWT_SECRET_KEY=your-jwt-secret-key-change-in-production
 JWT_ALGORITHM=HS256
 JWT_EXPIRY_MINUTES=30
+# OTP throttling (per email+IP)
+APP_OTP_REQUESTS_PER_MINUTE=5
+APP_OTP_REQUESTS_BURST=10
 ```
+
+### OTP Rate Limiting
+
+`POST /auth/request-otp` is throttled per email+IP:
+
+- Default: 5 requests per minute
+- Burst cap: 10 requests across 5 minutes
+
+On limit exceeded, the API returns `429 Too Many Requests` with a descriptive message.
 
 ## Project Structure
 
@@ -317,5 +373,5 @@ uv run pytest
 
 - OTP codes are currently returned in the response for development purposes
 - In production, implement proper email/SMS delivery for OTP codes
-- JWT tokens are prepared for future implementation
-- Database tables are created automatically on application startup
+- JWT tokens are issued and required for auth endpoints
+- Database tables are created automatically on application startup; DB constraints managed via Alembic

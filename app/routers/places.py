@@ -18,6 +18,7 @@ from ..schemas import (
     ReviewCreate,
     ReviewResponse,
     PaginatedReviews,
+    PlaceStats,
 )
 from ..services.jwt_service import JWTService
 
@@ -191,11 +192,23 @@ async def create_check_in(
 
 
 @router.get("/{place_id}/whos-here", response_model=list[CheckInResponse])
-async def whos_here(place_id: int, db: AsyncSession = Depends(get_db)):
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+async def whos_here(
+    place_id: int,
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    now = datetime.now(timezone.utc)
     res = await db.execute(
-        select(CheckIn).where(CheckIn.place_id ==
-                              place_id, CheckIn.created_at >= since)
+        select(CheckIn)
+        .where(
+            CheckIn.place_id == place_id,
+            CheckIn.expires_at >= now,
+            CheckIn.visibility == "public",
+        )
+        .order_by(CheckIn.created_at.desc())
+        .offset(offset)
+        .limit(limit)
     )
     return res.scalars().all()
 
@@ -228,19 +241,79 @@ async def create_review(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # confirm place exists
-    if not (await db.execute(select(Place).where(Place.id == place_id))).scalar_one_or_none():
+    # confirm place exists and load instance
+    place_res = await db.execute(select(Place).where(Place.id == place_id))
+    place = place_res.scalar_one_or_none()
+    if not place:
         raise HTTPException(status_code=404, detail="Place not found")
-    review = Review(
-        user_id=current_user.id,
-        place_id=place_id,
-        rating=payload.rating,
-        text=payload.text,
+
+    # Upsert user's review for this place (one review per user per place)
+    existing_res = await db.execute(
+        select(Review).where(
+            Review.user_id == current_user.id,
+            Review.place_id == place_id,
+        )
     )
-    db.add(review)
+    existing = existing_res.scalars().first()
+
+    if existing:
+        existing.rating = payload.rating
+        existing.text = payload.text
+        review = existing
+    else:
+        review = Review(
+            user_id=current_user.id,
+            place_id=place_id,
+            rating=payload.rating,
+            text=payload.text,
+        )
+        db.add(review)
+
     await db.commit()
     await db.refresh(review)
+
+    # Recalculate and persist average rating on the place
+    avg_res = await db.execute(
+        select(func.avg(Review.rating)).where(Review.place_id == place_id)
+    )
+    avg_rating = avg_res.scalar() or 0
+    place.rating = float(avg_rating)
+    await db.commit()
+
     return review
+
+
+@router.delete("/{place_id}/reviews/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_my_review(
+    place_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # ensure review exists
+    res = await db.execute(
+        select(Review).where(
+            Review.user_id == current_user.id,
+            Review.place_id == place_id,
+        )
+    )
+    review = res.scalars().first()
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+
+    await db.delete(review)
+    await db.commit()
+
+    # Recalculate place average
+    avg_res = await db.execute(
+        select(func.avg(Review.rating)).where(Review.place_id == place_id)
+    )
+    avg_rating = avg_res.scalar()
+    place_res = await db.execute(select(Place).where(Place.id == place_id))
+    place = place_res.scalar_one_or_none()
+    if place is not None:
+        place.rating = float(avg_rating) if avg_rating is not None else None
+        await db.commit()
+    return None
 
 
 @router.get("/{place_id}/reviews", response_model=PaginatedReviews)
@@ -275,15 +348,31 @@ async def save_place(
     if not res.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Place not found")
 
-    saved = SavedPlace(
+    # Prevent duplicates
+    existing = await db.execute(
+        select(SavedPlace).where(
+            SavedPlace.user_id == current_user.id,
+            SavedPlace.place_id == payload.place_id,
+        )
+    )
+    saved = existing.scalars().first()
+    if saved:
+        # Optionally update list name if provided
+        if payload.list_name is not None and payload.list_name != saved.list_name:
+            saved.list_name = payload.list_name
+            await db.commit()
+            await db.refresh(saved)
+        return saved
+
+    saved_new = SavedPlace(
         user_id=current_user.id,
         place_id=payload.place_id,
         list_name=payload.list_name,
     )
-    db.add(saved)
+    db.add(saved_new)
     await db.commit()
-    await db.refresh(saved)
-    return saved
+    await db.refresh(saved_new)
+    return saved_new
 
 
 @router.get("/saved/me", response_model=PaginatedSavedPlaces)
@@ -307,3 +396,64 @@ async def list_saved_places(
     )
     items = res.scalars().all()
     return PaginatedSavedPlaces(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.delete("/saved/{place_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unsave_place(
+    place_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(
+        select(SavedPlace).where(
+            SavedPlace.user_id == current_user.id,
+            SavedPlace.place_id == place_id,
+        )
+    )
+    saved = res.scalars().first()
+    if not saved:
+        raise HTTPException(status_code=404, detail="Saved place not found")
+    await db.delete(saved)
+    await db.commit()
+    return None
+
+
+@router.get("/{place_id}/stats", response_model=PlaceStats)
+async def place_stats(place_id: int, db: AsyncSession = Depends(get_db)):
+    # aggregate counts
+    avg_q = select(func.avg(Review.rating)).where(Review.place_id == place_id)
+    count_q = select(func.count(Review.id)).where(Review.place_id == place_id)
+    now = datetime.now(timezone.utc)
+    active_q = select(func.count(CheckIn.id)).where(
+        CheckIn.place_id == place_id, CheckIn.expires_at >= now
+    )
+    avg = (await db.execute(avg_q)).scalar()
+    count = (await db.execute(count_q)).scalar_one()
+    active = (await db.execute(active_q)).scalar_one()
+    return PlaceStats(
+        place_id=place_id,
+        average_rating=float(avg) if avg is not None else None,
+        reviews_count=count,
+        active_checkins=active,
+    )
+
+
+@router.get("/me/reviews", response_model=PaginatedReviews)
+async def my_reviews(
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = 20,
+    offset: int = 0,
+):
+    total = (
+        await db.execute(select(func.count(Review.id)).where(Review.user_id == current_user.id))
+    ).scalar_one()
+    res = await db.execute(
+        select(Review)
+        .where(Review.user_id == current_user.id)
+        .order_by(Review.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = res.scalars().all()
+    return PaginatedReviews(items=items, total=total, limit=limit, offset=offset)
