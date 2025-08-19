@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..schemas import OTPRequest, OTPVerify, OTPResponse, AuthResponse, UserResponse
 from ..services.otp_service import OTPService
+from ..services.jwt_service import JWTService, security
+from ..models import User
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -55,13 +58,18 @@ async def verify_otp(
                 detail="Invalid or expired OTP code"
             )
 
+            # Generate JWT token
+        access_token = JWTService.create_access_token(
+            data={"sub": str(user.id), "email": user.email}
+        )
+
         # Convert user to response model
         user_response = UserResponse.from_orm(user)
 
         return AuthResponse(
             message="OTP verified successfully",
             user=user_response,
-            access_token=None  # Will be implemented with JWT later
+            access_token=access_token
         )
 
     except HTTPException:
@@ -70,4 +78,27 @@ async def verify_otp(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to verify OTP: {str(e)}"
+        )
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_current_user_info(
+    current_user: User = Depends(JWTService.get_current_user)
+):
+    """
+    Get current authenticated user information.
+    This endpoint requires a valid JWT token.
+    """
+    try:
+        return UserResponse(
+            id=current_user.id,
+            email=current_user.email,
+            phone=current_user.phone,
+            is_verified=current_user.is_verified,
+            created_at=current_user.created_at
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating user response: {str(e)}"
         )
