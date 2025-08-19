@@ -63,8 +63,8 @@ async def verify_otp(
             data={"sub": str(user.id), "email": user.email}
         )
 
-        # Convert user to response model
-        user_response = UserResponse.from_orm(user)
+        # Convert user to response model (pydantic v2)
+        user_response = UserResponse.model_validate(user)
 
         return AuthResponse(
             message="OTP verified successfully",

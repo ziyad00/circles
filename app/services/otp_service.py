@@ -1,6 +1,6 @@
 import random
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from ..models import User, OTPCode
@@ -38,7 +38,7 @@ class OTPService:
             and_(
                 OTPCode.user_id == user_id,
                 OTPCode.is_used == False,
-                OTPCode.expires_at > datetime.utcnow()
+                OTPCode.expires_at > datetime.now(timezone.utc)
             )
         )
         result = await db.execute(stmt)
@@ -49,7 +49,8 @@ class OTPService:
 
         # Generate new OTP
         otp_code = OTPService.generate_otp()
-        expires_at = datetime.utcnow() + timedelta(minutes=settings.otp_expiry_minutes)
+        expires_at = datetime.now(timezone.utc) + \
+            timedelta(minutes=settings.otp_expiry_minutes)
 
         # Create OTP record
         otp = OTPCode(
@@ -81,7 +82,7 @@ class OTPService:
                 OTPCode.user_id == user.id,
                 OTPCode.code == otp_code,
                 OTPCode.is_used == False,
-                OTPCode.expires_at > datetime.utcnow()
+                OTPCode.expires_at > datetime.now(timezone.utc)
             )
         ).order_by(OTPCode.created_at.desc())
 

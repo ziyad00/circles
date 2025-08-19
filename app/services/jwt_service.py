@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 from jose import JWTError, jwt
 from fastapi import HTTPException, status, Depends
@@ -20,9 +20,10 @@ class JWTService:
         to_encode = data.copy()
 
         if expires_delta:
-            expire = datetime.utcnow() + expires_delta
+            expire = datetime.now(timezone.utc) + expires_delta
         else:
-            expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expiry_minutes)
+            expire = datetime.now(timezone.utc) + \
+                timedelta(minutes=settings.jwt_expiry_minutes)
 
         to_encode.update({"exp": expire})
         encoded_jwt = jwt.encode(
