@@ -21,6 +21,7 @@ from ..schemas import (
     PlaceStats,
 )
 from ..services.jwt_service import JWTService
+from ..utils import can_view_checkin
 
 
 router = APIRouter(prefix="/places", tags=["places"])
@@ -58,8 +59,8 @@ async def search_places(
     neighborhood: str | None = None,
     category: str | None = None,
     rating_min: float | None = None,
-    limit: int = 20,
-    offset: int = 0,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     # total count
@@ -97,8 +98,8 @@ async def trending_places(
     city: str | None = None,
     category: str | None = None,
     hours: int = 24,
-    limit: int = 10,
-    offset: int = 0,
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -142,6 +143,47 @@ async def trending_places(
     if category:
         total_q = total_q.where(Place.categories.ilike(f"%{category}%"))
     total = (await db.execute(total_q)).scalar_one()
+    return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/nearby", response_model=PaginatedPlaces)
+async def nearby_places(
+    lat: float,
+    lng: float,
+    radius_m: int = 1000,
+    limit: int = 20,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    # Haversine distance (meters), clamp argument to acos to [-1, 1]
+    lat_rad = func.radians(lat)
+    lng_rad = func.radians(lng)
+    place_lat = func.radians(Place.latitude)
+    place_lng = func.radians(Place.longitude)
+    arg = (
+        func.cos(lat_rad) * func.cos(place_lat) * func.cos(place_lng - lng_rad)
+        + func.sin(lat_rad) * func.sin(place_lat)
+    )
+    arg_clamped = func.greatest(-1.0, func.least(1.0, arg))
+    distance_m = 6371000 * func.acos(arg_clamped)
+
+    # total count within radius where coordinates exist
+    total_q = (
+        select(func.count(Place.id))
+        .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
+        .where(distance_m <= radius_m)
+    )
+    total = (await db.execute(total_q)).scalar_one()
+
+    stmt = (
+        select(Place)
+        .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
+        .where(distance_m <= radius_m)
+        .order_by(distance_m.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = (await db.execute(stmt)).scalars().all()
     return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -212,37 +254,60 @@ async def delete_check_in(
 @router.get("/{place_id}/whos-here", response_model=list[CheckInResponse])
 async def whos_here(
     place_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
     now = datetime.now(timezone.utc)
+
+    # Get all active check-ins for this place
     res = await db.execute(
         select(CheckIn)
         .where(
             CheckIn.place_id == place_id,
             CheckIn.expires_at >= now,
-            CheckIn.visibility == "public",
         )
         .order_by(CheckIn.created_at.desc())
         .offset(offset)
-        .limit(limit)
+        .limit(limit * 2)  # Get more to filter by visibility
     )
-    return res.scalars().all()
+    all_checkins = res.scalars().all()
+
+    # Filter check-ins based on visibility rules
+    visible_checkins = []
+    for checkin in all_checkins:
+        if await can_view_checkin(db, checkin.user_id, current_user.id, checkin.visibility):
+            visible_checkins.append(checkin)
+            if len(visible_checkins) >= limit:
+                break
+
+    return visible_checkins
 
 
 @router.get("/{place_id}/whos-here/count")
-async def whos_here_count(place_id: int, db: AsyncSession = Depends(get_db)):
+async def whos_here_count(
+    place_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     now = datetime.now(timezone.utc)
-    count = (
-        await db.execute(
-            select(func.count(CheckIn.id)).where(
-                CheckIn.place_id == place_id,
-                CheckIn.expires_at >= now,
-                CheckIn.visibility == "public",
-            )
+
+    # Get all active check-ins for this place
+    res = await db.execute(
+        select(CheckIn).where(
+            CheckIn.place_id == place_id,
+            CheckIn.expires_at >= now,
         )
-    ).scalar_one()
+    )
+    all_checkins = res.scalars().all()
+
+    # Count check-ins based on visibility rules
+    count = 0
+    for checkin in all_checkins:
+        if await can_view_checkin(db, checkin.user_id, current_user.id, checkin.visibility):
+            count += 1
+
     return {"count": count}
 
 
@@ -250,8 +315,8 @@ async def whos_here_count(place_id: int, db: AsyncSession = Depends(get_db)):
 async def my_check_ins(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
-    limit: int = 20,
-    offset: int = 0,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
 ):
     total = (
         await db.execute(select(func.count(CheckIn.id)).where(CheckIn.user_id == current_user.id))
@@ -353,8 +418,8 @@ async def delete_my_review(
 async def list_reviews(
     place_id: int,
     db: AsyncSession = Depends(get_db),
-    limit: int = 20,
-    offset: int = 0,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
 ):
     total = (
         await db.execute(select(func.count(Review.id)).where(Review.place_id == place_id))
@@ -412,8 +477,8 @@ async def save_place(
 async def list_saved_places(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
-    limit: int = 20,
-    offset: int = 0,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
 ):
     total = (
         await db.execute(
@@ -429,47 +494,6 @@ async def list_saved_places(
     )
     items = res.scalars().all()
     return PaginatedSavedPlaces(items=items, total=total, limit=limit, offset=offset)
-
-
-@router.get("/nearby", response_model=PaginatedPlaces)
-async def nearby_places(
-    lat: float,
-    lng: float,
-    radius_m: int = 1000,
-    limit: int = 20,
-    offset: int = 0,
-    db: AsyncSession = Depends(get_db),
-):
-    # Haversine distance (meters), clamp argument to acos to [-1, 1]
-    lat_rad = func.radians(lat)
-    lng_rad = func.radians(lng)
-    place_lat = func.radians(Place.latitude)
-    place_lng = func.radians(Place.longitude)
-    arg = (
-        func.cos(lat_rad) * func.cos(place_lat) * func.cos(place_lng - lng_rad)
-        + func.sin(lat_rad) * func.sin(place_lat)
-    )
-    arg_clamped = func.greatest(-1.0, func.least(1.0, arg))
-    distance_m = 6371000 * func.acos(arg_clamped)
-
-    # total count within radius where coordinates exist
-    total_q = (
-        select(func.count(Place.id))
-        .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
-        .where(distance_m <= radius_m)
-    )
-    total = (await db.execute(total_q)).scalar_one()
-
-    stmt = (
-        select(Place)
-        .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
-        .where(distance_m <= radius_m)
-        .order_by(distance_m.asc())
-        .offset(offset)
-        .limit(limit)
-    )
-    items = (await db.execute(stmt)).scalars().all()
-    return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.delete("/saved/{place_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -64,6 +64,15 @@ The API will be available at `http://localhost:8000`
 
 - `GET /health` - Health check endpoint
 
+### Friends & Privacy
+
+- `POST /friends/requests` - Send a friend request
+- `PUT /friends/requests/{request_id}` - Accept/reject a friend request
+- `GET /friends/requests` - List pending friend requests
+- `GET /friends` - List accepted friends
+- `DELETE /friends/requests/{request_id}` - Cancel a sent friend request
+- `DELETE /friends/{friend_id}` - Remove a friend
+
 ## Usage
 
 ### 1. Request OTP
@@ -112,6 +121,76 @@ Use the token:
 ```bash
 TOKEN="<JWT>"
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/auth/me
+```
+
+---
+
+### Friends & Privacy
+
+The friends system enables privacy controls for check-ins. Users can set check-in visibility to:
+
+- `public`: Visible to everyone
+- `friends`: Only visible to accepted friends
+- `private`: Only visible to the check-in creator
+
+#### Send Friend Request
+
+POST `/friends/requests`
+
+```bash
+curl -X POST http://localhost:8000/friends/requests \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"addressee_email": "friend@example.com"}'
+```
+
+#### Accept/Reject Friend Request
+
+PUT `/friends/requests/{request_id}`
+
+```bash
+curl -X PUT http://localhost:8000/friends/requests/1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "accepted"}'
+```
+
+Status options: `"accepted"`, `"rejected"`
+
+#### List Pending Friend Requests
+
+GET `/friends/requests?limit=10&offset=0`
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8000/friends/requests?limit=10&offset=0'
+```
+
+#### List Friends
+
+GET `/friends?limit=10&offset=0`
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8000/friends?limit=10&offset=0'
+```
+
+#### Cancel Friend Request
+
+DELETE `/friends/requests/{request_id}`
+
+```bash
+curl -X DELETE http://localhost:8000/friends/requests/1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+#### Remove Friend
+
+DELETE `/friends/{friend_id}`
+
+```bash
+curl -X DELETE http://localhost:8000/friends/2 \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
@@ -192,13 +271,20 @@ curl -X POST http://localhost:8000/places/check-ins \
 
 Rate limiting: prevents repeat check-ins to the same place by same user within 5 minutes (429).
 
-#### Who's Here (last 24h)
+#### Who's Here (last 24h, respects privacy)
 
 GET `/places/{id}/whos-here?limit=50&offset=0`
 
 ```bash
-curl 'http://localhost:8000/places/1/whos-here?limit=20&offset=0'
+curl -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8000/places/1/whos-here?limit=20&offset=0'
 ```
+
+**Note**: This endpoint now requires authentication and respects check-in visibility settings:
+
+- `public` check-ins are visible to everyone
+- `friends` check-ins are only visible to accepted friends
+- `private` check-ins are only visible to the creator
 
 #### Save Place (auth)
 
@@ -309,10 +395,11 @@ Returns places within radius, ordered by distance (Haversine).
 GET `/places/{place_id}/whos-here/count`
 
 ```bash
-curl 'http://localhost:8000/places/1/whos-here/count'
+curl -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8000/places/1/whos-here/count'
 ```
 
-Returns `{ "count": number }` of public, non-expired check-ins.
+Returns `{ "count": number }` of visible, non-expired check-ins (respects privacy settings).
 
 ### Check-in Delete
 

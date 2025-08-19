@@ -17,8 +17,23 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Relationship with OTP codes
+    # Relationships
     otp_codes = relationship("OTPCode", back_populates="user")
+    check_ins = relationship("CheckIn", back_populates="user")
+    saved_places = relationship("SavedPlace", back_populates="user")
+    reviews = relationship("Review", back_populates="user")
+
+    # Friend relationships
+    sent_friend_requests = relationship(
+        "Friendship",
+        foreign_keys="Friendship.requester_id",
+        back_populates="requester"
+    )
+    received_friend_requests = relationship(
+        "Friendship",
+        foreign_keys="Friendship.addressee_id",
+        back_populates="addressee"
+    )
 
 
 class OTPCode(Base):
@@ -67,7 +82,7 @@ class CheckIn(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
-    user = relationship("User")
+    user = relationship("User", back_populates="check_ins")
     place = relationship("Place", back_populates="check_ins")
 
 
@@ -82,7 +97,7 @@ class SavedPlace(Base):
     list_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    user = relationship("User")
+    user = relationship("User", back_populates="saved_places")
     place = relationship("Place", back_populates="saved_by")
 
 
@@ -98,5 +113,26 @@ class Review(Base):
     text = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    user = relationship("User")
+    user = relationship("User", back_populates="reviews")
     place = relationship("Place")
+
+
+class Friendship(Base):
+    __tablename__ = "friendships"
+
+    id = Column(Integer, primary_key=True, index=True)
+    requester_id = Column(Integer, ForeignKey(
+        "users.id"), nullable=False, index=True)
+    addressee_id = Column(Integer, ForeignKey(
+        "users.id"), nullable=False, index=True)
+    # pending, accepted, rejected
+    status = Column(String, nullable=False, default="pending")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True),
+                        server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    requester = relationship("User", foreign_keys=[
+                             requester_id], back_populates="sent_friend_requests")
+    addressee = relationship("User", foreign_keys=[
+                             addressee_id], back_populates="received_friend_requests")

@@ -61,6 +61,9 @@ async def request_otp(
             expires_in_minutes=settings.otp_expiry_minutes,
         )
 
+    except HTTPException:
+        # bubble up explicit HTTP errors like 429 throttle
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
