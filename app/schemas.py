@@ -44,6 +44,57 @@ class ErrorResponse(BaseModel):
     detail: str
 
 
+# Friends & Privacy
+
+class FriendshipStatusEnum(str, Enum):
+    pending = "pending"
+    accepted = "accepted"
+    rejected = "rejected"
+
+
+class FriendRequestCreate(BaseModel):
+    addressee_email: EmailStr = Field(..., examples=["friend@example.com"])
+
+
+class FriendRequestResponse(BaseModel):
+    id: int
+    requester_id: int
+    addressee_id: int
+    status: FriendshipStatusEnum
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FriendRequestUpdate(BaseModel):
+    status: FriendshipStatusEnum = Field(..., examples=[
+                                         FriendshipStatusEnum.accepted])
+
+
+class FriendResponse(BaseModel):
+    id: int
+    email: str
+    is_verified: bool
+    created_at: datetime
+    friendship_id: int
+    friendship_created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedFriends(BaseModel):
+    items: list[FriendResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class PaginatedFriendRequests(BaseModel):
+    items: list[FriendRequestResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 # Places & Check-ins
 
 class PlaceBase(BaseModel):

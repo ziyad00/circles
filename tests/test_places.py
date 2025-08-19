@@ -139,8 +139,8 @@ async def test_whos_here_visibility_and_unsave_flow(client: httpx.AsyncClient):
     )
     assert r.status_code == 200
 
-    # who's-here should only show public entries
-    r = await client.get(f"/places/{place_id}/whos-here", params={"limit": 10, "offset": 0})
+    # who's-here should only show public entries (now requires auth)
+    r = await client.get(f"/places/{place_id}/whos-here", headers=headers1, params={"limit": 10, "offset": 0})
     assert r.status_code == 200
     whos_here = r.json()
     assert isinstance(whos_here, list) and len(whos_here) >= 1
@@ -170,8 +170,8 @@ async def test_whos_here_visibility_and_unsave_flow(client: httpx.AsyncClient):
     after_unsave_total = r.json()["total"]
     assert after_unsave_total == max(0, first_total - 1)
 
-    # whos-here list
-    r = await client.get(f"/places/{place_id}/whos-here")
+    # whos-here list (now requires auth)
+    r = await client.get(f"/places/{place_id}/whos-here", headers=headers1)
     assert r.status_code == 200
     assert len(r.json()) >= 1
 
@@ -276,3 +276,35 @@ async def test_nearby_places(client: httpx.AsyncClient):
     assert isinstance(body["items"], list) and len(body["items"]) >= 1
     # near spot should be first result
     assert body["items"][0]["id"] == near_id
+
+
+@pytest.mark.asyncio
+async def test_delete_checkin_unauthorized(client: httpx.AsyncClient):
+    # create a place
+    r = await client.post(
+        "/places/",
+        json={
+            "name": "Delete Unauthorized",
+            "city": "SF",
+            "categories": ["coffee"],
+        },
+    )
+    assert r.status_code == 200
+    place_id = r.json()["id"]
+
+    # user A creates check-in
+    token_a = await auth_token_email(client, "del_a@test.com")
+    headers_a = {"Authorization": f"Bearer {token_a}"}
+    r = await client.post(
+        "/places/check-ins",
+        headers=headers_a,
+        json={"place_id": place_id, "note": "mine"},
+    )
+    assert r.status_code == 200
+    checkin_id = r.json()["id"]
+
+    # user B attempts to delete A's check-in
+    token_b = await auth_token_email(client, "del_b@test.com")
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+    r = await client.delete(f"/places/check-ins/{checkin_id}", headers=headers_b)
+    assert r.status_code == 403

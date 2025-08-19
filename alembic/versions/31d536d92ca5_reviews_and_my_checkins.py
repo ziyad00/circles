@@ -24,8 +24,17 @@ def upgrade() -> None:
     op.create_unique_constraint(
         'uq_saved_places_user_place', 'saved_places', ['user_id', 'place_id']
     )
+    # Add check constraints for data integrity
+    op.create_check_constraint(
+        'ck_reviews_rating_range', 'reviews', 'rating >= 0 AND rating <= 5'
+    )
+    op.create_check_constraint(
+        'ck_checkins_visibility', 'check_ins', "visibility IN ('public','friends','private')"
+    )
 
 
 def downgrade() -> None:
     op.drop_constraint('uq_saved_places_user_place', 'saved_places', type_='unique')
     op.drop_constraint('uq_reviews_user_place', 'reviews', type_='unique')
+    op.drop_constraint('ck_checkins_visibility', 'check_ins', type_='check')
+    op.drop_constraint('ck_reviews_rating_range', 'reviews', type_='check')
