@@ -294,6 +294,35 @@ Returns:
 }
 ```
 
+### Nearby Places
+
+GET `/places/nearby?lat=&lng=&radius_m=1000&limit=20&offset=0`
+
+```bash
+curl 'http://localhost:8000/places/nearby?lat=37.78&lng=-122.41&radius_m=1500&limit=10'
+```
+
+Returns places within radius, ordered by distance (Haversine).
+
+### Who's Here Count
+
+GET `/places/{place_id}/whos-here/count`
+
+```bash
+curl 'http://localhost:8000/places/1/whos-here/count'
+```
+
+Returns `{ "count": number }` of public, non-expired check-ins.
+
+### Check-in Delete
+
+DELETE `/places/check-ins/{check_in_id}` (auth)
+
+```bash
+curl -X DELETE http://localhost:8000/places/check-ins/123 \
+  -H "Authorization: Bearer $TOKEN" -i
+```
+
 ## Development
 
 ### Database Migrations

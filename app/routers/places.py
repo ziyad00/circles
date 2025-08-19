@@ -191,6 +191,24 @@ async def create_check_in(
     return check_in
 
 
+@router.delete("/check-ins/{check_in_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_check_in(
+    check_in_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
+    check_in = res.scalars().first()
+    if not check_in:
+        raise HTTPException(status_code=404, detail="Check-in not found")
+    if check_in.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403, detail="Not allowed to delete this check-in")
+    await db.delete(check_in)
+    await db.commit()
+    return None
+
+
 @router.get("/{place_id}/whos-here", response_model=list[CheckInResponse])
 async def whos_here(
     place_id: int,
@@ -211,6 +229,21 @@ async def whos_here(
         .limit(limit)
     )
     return res.scalars().all()
+
+
+@router.get("/{place_id}/whos-here/count")
+async def whos_here_count(place_id: int, db: AsyncSession = Depends(get_db)):
+    now = datetime.now(timezone.utc)
+    count = (
+        await db.execute(
+            select(func.count(CheckIn.id)).where(
+                CheckIn.place_id == place_id,
+                CheckIn.expires_at >= now,
+                CheckIn.visibility == "public",
+            )
+        )
+    ).scalar_one()
+    return {"count": count}
 
 
 @router.get("/me/check-ins", response_model=PaginatedCheckIns)
@@ -396,6 +429,47 @@ async def list_saved_places(
     )
     items = res.scalars().all()
     return PaginatedSavedPlaces(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/nearby", response_model=PaginatedPlaces)
+async def nearby_places(
+    lat: float,
+    lng: float,
+    radius_m: int = 1000,
+    limit: int = 20,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    # Haversine distance (meters), clamp argument to acos to [-1, 1]
+    lat_rad = func.radians(lat)
+    lng_rad = func.radians(lng)
+    place_lat = func.radians(Place.latitude)
+    place_lng = func.radians(Place.longitude)
+    arg = (
+        func.cos(lat_rad) * func.cos(place_lat) * func.cos(place_lng - lng_rad)
+        + func.sin(lat_rad) * func.sin(place_lat)
+    )
+    arg_clamped = func.greatest(-1.0, func.least(1.0, arg))
+    distance_m = 6371000 * func.acos(arg_clamped)
+
+    # total count within radius where coordinates exist
+    total_q = (
+        select(func.count(Place.id))
+        .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
+        .where(distance_m <= radius_m)
+    )
+    total = (await db.execute(total_q)).scalar_one()
+
+    stmt = (
+        select(Place)
+        .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
+        .where(distance_m <= radius_m)
+        .order_by(distance_m.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = (await db.execute(stmt)).scalars().all()
+    return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.delete("/saved/{place_id}", status_code=status.HTTP_204_NO_CONTENT)

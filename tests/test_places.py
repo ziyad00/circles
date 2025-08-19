@@ -183,3 +183,96 @@ async def test_whos_here_visibility_and_unsave_flow(client: httpx.AsyncClient):
     body = r.json()
     assert body["limit"] == 10 and body["offset"] == 0 and body["total"] >= 1
     assert isinstance(body["items"], list) and len(body["items"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_whos_here_count_and_delete_checkin(client: httpx.AsyncClient):
+    # create a place
+    r = await client.post(
+        "/places/",
+        json={
+            "name": "Count Cafe",
+            "city": "San Francisco",
+            "neighborhood": "SoMa",
+            "categories": ["coffee"],
+        },
+    )
+    assert r.status_code == 200
+    place_id = r.json()["id"]
+
+    # two users
+    token1 = await auth_token_email(client, "count1@test.com")
+    token2 = await auth_token_email(client, "count2@test.com")
+    headers1 = {"Authorization": f"Bearer {token1}"}
+    headers2 = {"Authorization": f"Bearer {token2}"}
+
+    # public and private check-ins
+    r = await client.post(
+        "/places/check-ins",
+        headers=headers1,
+        json={"place_id": place_id, "note": "public", "visibility": "public"},
+    )
+    assert r.status_code == 200
+    public_checkin_id = r.json()["id"]
+
+    r = await client.post(
+        "/places/check-ins",
+        headers=headers2,
+        json={"place_id": place_id, "note": "private", "visibility": "private"},
+    )
+    assert r.status_code == 200
+
+    # count should be 1 (only public non-expired)
+    r = await client.get(f"/places/{place_id}/whos-here/count")
+    assert r.status_code == 200 and r.json()["count"] == 1
+
+    # delete public check-in and verify count becomes 0
+    r = await client.delete(f"/places/check-ins/{public_checkin_id}", headers=headers1)
+    assert r.status_code == 204
+    r = await client.get(f"/places/{place_id}/whos-here/count")
+    assert r.status_code == 200 and r.json()["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_nearby_places(client: httpx.AsyncClient):
+    # near center (should come first)
+    r = await client.post(
+        "/places/",
+        json={
+            "name": "Near Spot",
+            "city": "San Francisco",
+            "neighborhood": "SoMa",
+            "categories": ["coffee"],
+            "latitude": 37.7805,
+            "longitude": -122.4105,
+        },
+    )
+    assert r.status_code == 200
+    near_id = r.json()["id"]
+
+    # farther spot
+    r = await client.post(
+        "/places/",
+        json={
+            "name": "Far Spot",
+            "city": "San Francisco",
+            "neighborhood": "Mission",
+            "categories": ["cafe"],
+            "latitude": 37.8000,
+            "longitude": -122.5000,
+        },
+    )
+    assert r.status_code == 200
+
+    # nearby query around SoMa
+    r = await client.get(
+        "/places/nearby",
+        params={"lat": 37.7800, "lng": -122.4100,
+                "radius_m": 5000, "limit": 10, "offset": 0},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] >= 1
+    assert isinstance(body["items"], list) and len(body["items"]) >= 1
+    # near spot should be first result
+    assert body["items"][0]["id"] == near_id
