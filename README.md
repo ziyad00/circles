@@ -1,14 +1,15 @@
-# Circles - OTP Authentication API
+# Circles - OTP Auth + Places/Check-Ins API
 
-A FastAPI application with OTP (One-Time Password) authentication using PostgreSQL database.
+A FastAPI application with OTP (One-Time Password) authentication and core Places/Check-Ins features, backed by PostgreSQL.
 
 ## Features
 
-- OTP-based authentication
-- PostgreSQL database integration
-- User registration and verification
-- Random 6-digit OTP generation
-- Database migrations with Alembic
+- OTP-based authentication (email)
+- JWT issuance and authenticated endpoints
+- Core Places: create, search (filters), trending
+- Check-Ins with 24h visibility window and basic rate-limiting
+- Saved places lists
+- PostgreSQL + Alembic migrations
 
 ## Setup
 
@@ -47,7 +48,7 @@ A FastAPI application with OTP (One-Time Password) authentication using PostgreS
 
 5. **Start the application**
    ```bash
-   uv run python -m app.main
+   uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
    ```
 
 The API will be available at `http://localhost:8000`
@@ -82,7 +83,7 @@ Response:
 }
 ```
 
-### 2. Verify OTP
+### 2. Verify OTP (get JWT)
 
 ```bash
 curl -X POST "http://localhost:8000/auth/verify-otp" \
@@ -90,7 +91,7 @@ curl -X POST "http://localhost:8000/auth/verify-otp" \
      -d '{"email": "user@example.com", "otp_code": "123456"}'
 ```
 
-Response:
+Response (access_token is returned and used as Bearer token):
 
 ```json
 {
@@ -102,8 +103,121 @@ Response:
     "is_verified": true,
     "created_at": "2024-01-01T12:00:00"
   },
-  "access_token": null
+  "access_token": "<JWT>"
 }
+```
+
+Use the token:
+
+```bash
+TOKEN="<JWT>"
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/auth/me
+```
+
+---
+
+### Places & Check-Ins
+
+All new endpoints live under `/places`.
+
+Common pagination format for list endpoints:
+
+```json
+{
+  "items": [
+    /* array of resources */
+  ],
+  "total": 123,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+#### Create Place
+
+POST `/places/`
+
+```bash
+curl -X POST http://localhost:8000/places/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Blue Bottle Coffee",
+    "city": "San Francisco",
+    "neighborhood": "SoMa",
+    "categories": ["coffee","cafe"],
+    "rating": 4.5,
+    "latitude": 37.781,
+    "longitude": -122.404
+  }'
+```
+
+#### Get Place
+
+GET `/places/{id}`
+
+```bash
+curl http://localhost:8000/places/1
+```
+
+#### Search Places (paginated)
+
+GET `/places/search?query=&city=&neighborhood=&category=&rating_min=&limit=20&offset=0`
+
+```bash
+curl 'http://localhost:8000/places/search?city=San%20Francisco&limit=10&offset=0'
+```
+
+Returns `{ items, total, limit, offset }` with `items` as `PlaceResponse[]`.
+
+#### Trending Places (paginated)
+
+GET `/places/trending?city=&category=&hours=24&limit=10&offset=0`
+
+```bash
+curl 'http://localhost:8000/places/trending?city=San%20Francisco&hours=24&limit=10'
+```
+
+Returns `{ items, total, limit, offset }` ranked by recent check-ins.
+
+#### Check-In (auth)
+
+POST `/places/check-ins`
+
+```bash
+curl -X POST http://localhost:8000/places/check-ins \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"place_id":1, "note":"Latte time", "visibility":"public"}'
+```
+
+Rate limiting: prevents repeat check-ins to the same place by same user within 5 minutes (429).
+
+#### Who's Here (last 24h)
+
+GET `/places/{id}/whos-here`
+
+```bash
+curl http://localhost:8000/places/1/whos-here
+```
+
+#### Save Place (auth)
+
+POST `/places/saved`
+
+```bash
+curl -X POST http://localhost:8000/places/saved \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"place_id":1, "list_name":"Favorites"}'
+```
+
+#### My Saved Places (paginated, auth)
+
+GET `/places/saved/me?limit=20&offset=0`
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8000/places/saved/me?limit=10&offset=0'
 ```
 
 ## Development
@@ -128,6 +242,7 @@ Create a `.env` file in the project root:
 
 ```env
 DATABASE_URL=postgresql+asyncpg://postgres:password@localhost/circles
+# OTP is generated internally for development; set a proper secret in prod
 OTP_SECRET_KEY=your-secret-key-change-in-production
 OTP_EXPIRY_MINUTES=10
 JWT_SECRET_KEY=your-jwt-secret-key-change-in-production
