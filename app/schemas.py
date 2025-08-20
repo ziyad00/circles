@@ -128,6 +128,47 @@ class PaginatedPlaces(BaseModel):
     offset: int
 
 
+class AdvancedSearchFilters(BaseModel):
+    # Text search
+    query: Optional[str] = None
+    # Location filters
+    city: Optional[str] = None
+    neighborhood: Optional[str] = None
+    # Category filters
+    categories: Optional[list[str]] = None
+    # Rating filters
+    rating_min: Optional[float] = Field(None, ge=0, le=5)
+    rating_max: Optional[float] = Field(None, ge=0, le=5)
+    # Activity filters
+    has_recent_checkins: Optional[bool] = None  # Has check-ins in last 24h
+    has_reviews: Optional[bool] = None  # Has any reviews
+    has_photos: Optional[bool] = None  # Has photos from reviews
+    # Distance filters (if coordinates provided)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    radius_km: Optional[float] = Field(
+        None, ge=0.1, le=100)  # Search radius in km
+    # Sort options
+    sort_by: Optional[str] = Field(
+        None, pattern="^(name|rating|created_at|checkins|recent_checkins)$")
+    sort_order: Optional[str] = Field(None, pattern="^(asc|desc)$")
+    # Pagination
+    limit: int = Field(20, ge=1, le=100)
+    offset: int = Field(0, ge=0)
+
+
+class SearchSuggestion(BaseModel):
+    type: str  # "city", "neighborhood", "category"
+    value: str
+    count: int
+
+
+class SearchSuggestions(BaseModel):
+    cities: list[SearchSuggestion]
+    neighborhoods: list[SearchSuggestion]
+    categories: list[SearchSuggestion]
+
+
 class PaginatedSavedPlaces(BaseModel):
     items: list[SavedPlaceResponse]
     total: int
