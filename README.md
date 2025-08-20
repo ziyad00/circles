@@ -69,6 +69,7 @@ The API will be available at `http://localhost:8000`
 - `POST /auth/verify-otp` - Verify OTP code and authenticate
 
 ### Health Check
+
 ### Users
 
 - GET `/users/{user_id}` – Public profile

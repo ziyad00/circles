@@ -14,6 +14,10 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     phone = Column(String, unique=True, index=True, nullable=True)
     is_verified = Column(Boolean, default=False)
+    # Profile
+    name = Column(String, nullable=True)
+    bio = Column(Text, nullable=True)
+    avatar_url = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     # Privacy defaults
@@ -252,3 +256,28 @@ class CheckInCollectionItem(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     collection = relationship("CheckInCollection", back_populates="items")
+
+
+class SupportTicket(Base):
+    __tablename__ = "support_tickets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"),
+                     nullable=False, index=True)
+    subject = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+    status = Column(String, nullable=False,
+                    server_default="open")  # open|closed
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True),
+                        server_default=func.now(), onupdate=func.now())
+
+
+class UserInterest(Base):
+    __tablename__ = "user_interests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"),
+                     nullable=False, index=True)
+    name = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
