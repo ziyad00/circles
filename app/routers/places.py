@@ -909,7 +909,7 @@ async def create_check_in(
     if recent.scalars().first():
         raise HTTPException(
             status_code=429, detail="Please wait before checking in again to this place")
-    
+
     # ensure place exists
     res = await db.execute(select(Place).where(Place.id == payload.place_id))
     place = res.scalar_one_or_none()
