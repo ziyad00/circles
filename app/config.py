@@ -49,6 +49,9 @@ class Settings(BaseSettings):
         default=None, env="S3_PUBLIC_BASE_URL")
     s3_use_path_style: bool = Field(default=False, env="S3_USE_PATH_STYLE")
 
+    # Metrics
+    metrics_token: Optional[str] = Field(default=None, env="METRICS_TOKEN")
+
     class Config:
         env_file = ".env"
         env_prefix = "APP_"

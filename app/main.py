@@ -77,12 +77,14 @@ async def add_request_id_and_errors(request: Request, call_next):
         response = await call_next(request)
         elapsed = time.perf_counter() - start
         REQUEST_LATENCY.observe(elapsed)
-        REQUEST_COUNT.labels(method=request.method, path=request.url.path, status=response.status_code).inc()
+        REQUEST_COUNT.labels(
+            method=request.method, path=request.url.path, status=response.status_code).inc()
         response.headers["X-Request-ID"] = request_id
         return response
     except Exception as e:
         logging.exception(f"Unhandled error rid={request_id}")
-        REQUEST_COUNT.labels(method=request.method, path=request.url.path, status=500).inc()
+        REQUEST_COUNT.labels(method=request.method,
+                             path=request.url.path, status=500).inc()
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal Server Error",
@@ -97,6 +99,9 @@ async def root():
 
 
 @app.get("/metrics")
-async def metrics():
+async def metrics(request: Request):
+    token = request.headers.get("X-Metrics-Token")
+    if not settings.metrics_token or token != settings.metrics_token:
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
     data = generate_latest()
     return PlainTextResponse(content=data, media_type=CONTENT_TYPE_LATEST)
