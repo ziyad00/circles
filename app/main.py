@@ -1,9 +1,11 @@
 from typing import Union
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from .routers.health import router as health_router
 from .routers.auth import router as auth_router
 from .routers.places import router as places_router
-from .routers.friends import router as friends_router
+from .routers.dms import router as dms_router
+from .routers.follow import router as follow_router
 from .database import create_tables
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,7 +24,11 @@ app = FastAPI(title="Circles", lifespan=lifespan)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(places_router)
-app.include_router(friends_router)
+app.include_router(dms_router)
+app.include_router(follow_router)
+
+# Serve uploaded media
+app.mount("/media", StaticFiles(directory="media"), name="media")
 
 # CORS for UI
 app.add_middleware(

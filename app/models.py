@@ -22,6 +22,8 @@ class User(Base):
     check_ins = relationship("CheckIn", back_populates="user")
     saved_places = relationship("SavedPlace", back_populates="user")
     reviews = relationship("Review", back_populates="user")
+    photos = relationship("Photo", back_populates="user")
+    dm_messages = relationship("DMMessage", back_populates="sender")
 
     # Friend relationships
     sent_friend_requests = relationship(
@@ -67,6 +69,7 @@ class Place(Base):
     # Relationships
     check_ins = relationship("CheckIn", back_populates="place")
     saved_by = relationship("SavedPlace", back_populates="place")
+    photos = relationship("Photo", back_populates="place")
 
 
 class CheckIn(Base):
@@ -81,6 +84,7 @@ class CheckIn(Base):
     visibility = Column(String, default="public")  # public, friends, private
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
+    photo_url = Column(String, nullable=True)
 
     user = relationship("User", back_populates="check_ins")
     place = relationship("Place", back_populates="check_ins")
@@ -117,6 +121,22 @@ class Review(Base):
     place = relationship("Place")
 
 
+class Photo(Base):
+    __tablename__ = "photos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"),
+                     nullable=False, index=True)
+    place_id = Column(Integer, ForeignKey("places.id"),
+                      nullable=False, index=True)
+    url = Column(String, nullable=False)
+    caption = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="photos")
+    place = relationship("Place", back_populates="photos")
+
+
 class Friendship(Base):
     __tablename__ = "friendships"
 
@@ -136,3 +156,73 @@ class Friendship(Base):
                              requester_id], back_populates="sent_friend_requests")
     addressee = relationship("User", foreign_keys=[
                              addressee_id], back_populates="received_friend_requests")
+
+
+class Follow(Base):
+    __tablename__ = "follows"
+
+    id = Column(Integer, primary_key=True, index=True)
+    follower_id = Column(Integer, ForeignKey(
+        "users.id"), nullable=False, index=True)
+    followee_id = Column(Integer, ForeignKey(
+        "users.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class DMThread(Base):
+    __tablename__ = "dm_threads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_a_id = Column(Integer, ForeignKey(
+        "users.id"), nullable=False, index=True)
+    user_b_id = Column(Integer, ForeignKey(
+        "users.id"), nullable=False, index=True)
+    initiator_id = Column(Integer, ForeignKey(
+        "users.id"), nullable=False, index=True)
+    # pending, accepted, rejected, blocked
+    status = Column(String, nullable=False, default="pending")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True),
+                        server_default=func.now(), onupdate=func.now())
+
+
+class DMMessage(Base):
+    __tablename__ = "dm_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(Integer, ForeignKey(
+        "dm_threads.id"), nullable=False, index=True)
+    sender_id = Column(Integer, ForeignKey(
+        "users.id"), nullable=False, index=True)
+    text = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    sender = relationship("User", back_populates="dm_messages")
+
+
+class DMMessageLike(Base):
+    __tablename__ = "dm_message_likes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey(
+        "dm_messages.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"),
+                     nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class DMParticipantState(Base):
+    __tablename__ = "dm_participant_states"
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(Integer, ForeignKey(
+        "dm_threads.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"),
+                     nullable=False, index=True)
+    last_read_at = Column(DateTime(timezone=True), nullable=True)
+    muted = Column(Boolean, default=False)
+    blocked = Column(Boolean, default=False)
+    typing_until = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True),
+                        server_default=func.now(), onupdate=func.now())

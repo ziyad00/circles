@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, select
-from app.models import User, Friendship
+from app.models import User, Friendship, Follow
 
 
 async def are_friends(db: AsyncSession, user1_id: int, user2_id: int) -> bool:
@@ -53,6 +53,13 @@ async def can_view_checkin(db: AsyncSession, checkin_user_id: int, viewer_user_i
     elif visibility == "private":
         return checkin_user_id == viewer_user_id
     elif visibility == "friends":
-        return await are_friends(db, checkin_user_id, viewer_user_id)
+        # friends now maps to followers: viewer must follow owner
+        if checkin_user_id == viewer_user_id:
+            return True
+        result = await db.execute(
+            select(Follow).where(Follow.follower_id == viewer_user_id,
+                                 Follow.followee_id == checkin_user_id)
+        )
+        return result.scalar_one_or_none() is not None
     else:
         return False  # Unknown visibility level

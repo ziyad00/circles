@@ -16,6 +16,7 @@ dependencies = [
     "greenlet>=3.0.0",
     "python-jose[cryptography]>=3.3.0",
     "psycopg[binary,pool]>=3.2.1",
+    "boto3>=1.40.13",
 ]
 
 [dependency-groups]
