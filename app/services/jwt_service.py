@@ -34,6 +34,14 @@ class JWTService:
         return encoded_jwt
 
     @staticmethod
+    def create_token(user_id: int, phone: str = None, expires_delta: Optional[timedelta] = None) -> str:
+        """Create a JWT token for user authentication"""
+        data = {"sub": str(user_id)}
+        if phone:
+            data["phone"] = phone
+        return JWTService.create_access_token(data, expires_delta)
+
+    @staticmethod
     def verify_token(token: str) -> dict:
         """Verify and decode a JWT token"""
         try:

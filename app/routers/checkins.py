@@ -17,6 +17,7 @@ from ..schemas import (
 )
 from ..services.jwt_service import JWTService
 from ..utils import can_view_checkin
+from ..routers.activity import create_like_activity, create_comment_activity
 
 router = APIRouter(prefix="/check-ins", tags=["check-ins"])
 
@@ -244,6 +245,21 @@ async def add_check_in_comment(
     # Load user info for response
     await db.refresh(comment, ['user'])
 
+    # Create activity for the comment
+    try:
+        await create_comment_activity(
+            db=db,
+            user_id=current_user.id,
+            comment_id=comment.id,
+            checkin_id=check_in_id,
+            checkin_user_id=check_in.user_id,
+            comment_content=comment_data.content
+        )
+    except Exception as e:
+        # Log error but don't fail the comment creation
+        print(
+            f"Failed to create activity for comment on check-in {check_in_id}: {e}")
+
     return CheckInCommentResponse(
         id=comment.id,
         check_in_id=comment.check_in_id,
@@ -394,6 +410,20 @@ async def like_check_in(
 
     db.add(like)
     await db.commit()
+
+    # Create activity for the like
+    try:
+        await create_like_activity(
+            db=db,
+            user_id=current_user.id,
+            checkin_id=check_in_id,
+            checkin_user_id=check_in.user_id,
+            checkin_note=check_in.note
+        )
+    except Exception as e:
+        # Log error but don't fail the like creation
+        print(
+            f"Failed to create activity for like on check-in {check_in_id}: {e}")
 
     return {"message": "Check-in liked successfully"}
 

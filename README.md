@@ -657,6 +657,781 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" \
 
 Unlike a check-in.
 
+## Onboarding Flow
+
+The onboarding flow provides a streamlined user registration and setup process using phone number authentication and OTP verification.
+
+### Onboarding Flow Overview
+
+1. **Phone OTP Request**: User enters phone number to receive OTP
+2. **OTP Verification**: User verifies phone number with 6-digit OTP
+3. **Profile Setup**: User completes profile with name, username, and interests
+4. **Onboarding Complete**: User is ready to use the app
+
+### Onboarding Endpoints
+
+#### Request Phone OTP
+
+POST `/onboarding/request-otp` (public)
+
+```bash
+curl -X POST "http://localhost:8000/onboarding/request-otp" \
+  -H "Content-Type: application/json" \
+  -d '{"phone": "+1234567890"}'
+```
+
+**Request Body:**
+
+```json
+{
+  "phone": "+1234567890"
+}
+```
+
+**Response:**
+
+```json
+{
+  "message": "OTP sent successfully",
+  "otp": "123456",
+  "is_new_user": true
+}
+```
+
+**Features:**
+
+- Phone number validation (international format)
+- Rate limiting (5 minutes between requests)
+- 6-digit OTP generation
+- 10-minute OTP expiration
+- New user detection
+
+#### Verify Phone OTP
+
+POST `/onboarding/verify-otp` (public)
+
+```bash
+curl -X POST "http://localhost:8000/onboarding/verify-otp" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone": "+1234567890",
+    "otp_code": "123456"
+  }'
+```
+
+**Request Body:**
+
+```json
+{
+  "phone": "+1234567890",
+  "otp_code": "123456"
+}
+```
+
+**Response for New User:**
+
+```json
+{
+  "message": "OTP verified. Please complete your profile.",
+  "user": {
+    "id": 18,
+    "phone": "+1234567890",
+    "email": null,
+    "username": null,
+    "first_name": null,
+    "last_name": null,
+    "is_verified": true,
+    "is_onboarded": false
+  },
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "is_new_user": true
+}
+```
+
+**Response for Existing User:**
+
+```json
+{
+  "message": "Login successful",
+  "user": {
+    "id": 18,
+    "phone": "+1234567890",
+    "email": "user@example.com",
+    "username": "john_doe",
+    "first_name": "John",
+    "last_name": "Doe",
+    "is_verified": true,
+    "is_onboarded": true
+  },
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "is_new_user": false
+}
+```
+
+#### Check Username Availability
+
+POST `/onboarding/check-username` (public)
+
+```bash
+curl -X POST "http://localhost:8000/onboarding/check-username" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "john_doe"}'
+```
+
+**Request Body:**
+
+```json
+{
+  "username": "john_doe"
+}
+```
+
+**Response:**
+
+```json
+{
+  "available": true,
+  "message": "Username is available"
+}
+```
+
+**Username Requirements:**
+
+- 3-30 characters long
+- Alphanumeric and underscores only
+- Must be unique
+
+#### Complete User Setup
+
+POST `/onboarding/complete-setup` (authenticated)
+
+```bash
+curl -X POST "http://localhost:8000/onboarding/complete-setup" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "first_name": "John",
+    "last_name": "Doe",
+    "username": "john_doe",
+    "interests": ["coffee", "restaurants", "travel"]
+  }'
+```
+
+**Request Body:**
+
+```json
+{
+  "first_name": "John",
+  "last_name": "Doe",
+  "username": "john_doe",
+  "interests": ["coffee", "restaurants", "travel"]
+}
+```
+
+**Response:**
+
+```json
+{
+  "message": "Profile setup completed successfully",
+  "user": {
+    "id": 18,
+    "phone": "+1234567890",
+    "email": null,
+    "username": "john_doe",
+    "first_name": "John",
+    "last_name": "Doe",
+    "name": "John Doe",
+    "is_verified": true,
+    "is_onboarded": true
+  },
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "is_new_user": false
+}
+```
+
+#### Get Onboarding Status
+
+GET `/onboarding/status` (authenticated)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/onboarding/status"
+```
+
+**Response:**
+
+```json
+{
+  "user": {
+    "id": 18,
+    "phone": "+1234567890",
+    "email": null,
+    "username": "john_doe",
+    "first_name": "John",
+    "last_name": "Doe",
+    "name": "John Doe",
+    "is_verified": true,
+    "is_onboarded": true,
+    "interests": ["coffee", "restaurants", "travel"]
+  },
+  "onboarding_complete": true
+}
+```
+
+### Onboarding Flow Features
+
+#### 1. **Phone Number Authentication**
+
+- International phone number format support
+- Phone number validation
+- OTP-based verification
+- Secure token generation
+
+#### 2. **User Profile Setup**
+
+- First and last name collection
+- Unique username selection
+- Interest selection (1-10 interests)
+- Profile completion tracking
+
+#### 3. **Security Features**
+
+- Rate limiting for OTP requests
+- OTP expiration (10 minutes)
+- One-time use OTP codes
+- JWT token authentication
+
+#### 4. **User Experience**
+
+- New vs existing user detection
+- Real-time username availability check
+- Clear onboarding status tracking
+- Seamless profile completion
+
+#### 5. **Data Validation**
+
+- Phone number format validation
+- Username format validation
+- Interest count limits
+- Required field validation
+
+### Onboarding Flow Steps
+
+#### Step 1: Phone OTP Request
+
+1. User enters phone number
+2. System validates phone format
+3. System checks rate limiting
+4. System generates and sends OTP
+5. System returns OTP (development only)
+
+#### Step 2: OTP Verification
+
+1. User enters 6-digit OTP
+2. System validates OTP
+3. System checks if user exists
+4. System creates new user or returns existing user
+5. System generates authentication token
+
+#### Step 3: Profile Setup (New Users)
+
+1. User enters first and last name
+2. User selects unique username
+3. User selects interests (1-10)
+4. System validates all inputs
+5. System saves profile data
+6. System marks onboarding as complete
+
+#### Step 4: Onboarding Complete
+
+1. User receives confirmation
+2. User can access all app features
+3. User profile is fully set up
+4. User interests are saved
+
+### Phone Number Requirements
+
+#### Format
+
+- International format required
+- Must start with `+`
+- 10-15 digits after `+`
+- Examples: `+1234567890`, `+44123456789`
+
+#### Validation
+
+```javascript
+// Phone number validation regex
+/^\+\d{10,15}$/;
+```
+
+### Username Requirements
+
+#### Format
+
+- 3-30 characters long
+- Alphanumeric and underscores only
+- Must be unique across all users
+- Case-sensitive
+
+#### Validation
+
+```javascript
+// Username validation regex
+/^[a-zA-Z0-9_]{3,30}$/;
+```
+
+### Interest Selection
+
+#### Requirements
+
+- 1-10 interests maximum
+- Each interest trimmed of whitespace
+- Duplicate interests ignored
+- Interests stored as separate records
+
+#### Example Interests
+
+- Coffee
+- Restaurants
+- Travel
+- Music
+- Sports
+- Technology
+- Art
+- Food
+- Photography
+- Fitness
+
+### Onboarding Flow Benefits
+
+#### 1. **Simplified Registration**
+
+- No email required initially
+- Quick phone verification
+- Minimal friction
+
+#### 2. **Secure Authentication**
+
+- OTP-based verification
+- Rate limiting protection
+- Secure token generation
+
+#### 3. **Complete Profile Setup**
+
+- Structured data collection
+- Interest-based personalization
+- Username uniqueness
+
+#### 4. **User Experience**
+
+- Clear progress indication
+- Real-time validation
+- Seamless completion
+
+#### 5. **Data Quality**
+
+- Validated phone numbers
+- Unique usernames
+- Structured interests
+
+### Integration with Other Features
+
+#### 1. **Activity Feed**
+
+- Interests used for content recommendations
+- Personalized activity suggestions
+
+#### 2. **User Profiles**
+
+- Username used in profile URLs
+- Interests displayed on profiles
+
+#### 3. **Search and Discovery**
+
+- Interests used for place recommendations
+- Personalized search results
+
+#### 4. **Social Features**
+
+- Username used in mentions
+- Interests for user matching
+
+### Development vs Production
+
+#### Development Mode
+
+- OTP returned in response
+- No actual SMS sending
+- Faster testing
+
+#### Production Mode
+
+- OTP sent via SMS service
+- OTP not returned in response
+- Real SMS integration required
+
+### Error Handling
+
+#### Common Errors
+
+- Invalid phone number format
+- Rate limit exceeded
+- Invalid or expired OTP
+- Username already taken
+- Invalid username format
+- Too many interests
+
+#### Error Responses
+
+```json
+{
+  "detail": "Invalid phone number format. Please use international format (e.g., +1234567890)"
+}
+```
+
+### Security Considerations
+
+#### 1. **Rate Limiting**
+
+- 5-minute cooldown between OTP requests
+- Prevents OTP spam
+
+#### 2. **OTP Security**
+
+- 10-minute expiration
+- One-time use only
+- 6-digit random generation
+
+#### 3. **Token Security**
+
+- JWT-based authentication
+- User ID and phone in token
+- Secure token generation
+
+#### 4. **Data Validation**
+
+- Input sanitization
+- Format validation
+- Uniqueness checks
+
+## Activity Feed
+
+The Activity Feed shows recent activities from users you follow, providing a social timeline of check-ins, likes, comments, follows, reviews, and collections.
+
+### Activity Feed Endpoints
+
+#### Get Activity Feed
+
+GET `/activity/feed?limit=20&offset=0&activity_types=checkin,like&since=2025-08-20T00:00:00Z` (authenticated)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8000/activity/feed"
+```
+
+Returns activities from users you follow, including:
+
+- Check-ins
+- Likes on check-ins
+- Comments on check-ins
+- Follow actions
+- Reviews
+- Collection creations
+
+**Query Parameters:**
+
+- `limit`: Number of activities to return (1-100, default: 20)
+- `offset`: Number of activities to skip (default: 0)
+- `activity_types`: Comma-separated list of activity types to filter
+- `since`: Show activities since this timestamp
+- `until`: Show activities until this timestamp
+
+#### Get Filtered Activity Feed
+
+POST `/activity/feed/filtered` (authenticated)
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "activity_types": ["checkin", "like"],
+    "user_ids": [2, 3],
+    "since": "2025-08-20T00:00:00Z",
+    "limit": 20,
+    "offset": 0
+  }' \
+  "http://localhost:8000/activity/feed/filtered"
+```
+
+Advanced filtering with multiple criteria.
+
+#### Get My Activities
+
+GET `/activity/my-activities?limit=20&offset=0` (authenticated)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8000/activity/my-activities"
+```
+
+Returns your own activities.
+
+#### Get User Activities
+
+GET `/activity/user/{user_id}/activities?limit=20&offset=0` (authenticated)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8000/activity/user/2/activities"
+```
+
+Returns activities for a specific user (if you follow them or it's your own profile).
+
+### Activity Types
+
+#### Check-in Activity
+
+```json
+{
+  "id": 1,
+  "user_id": 2,
+  "user_name": "John Doe",
+  "user_avatar_url": "https://example.com/avatar.jpg",
+  "activity_type": "checkin",
+  "activity_data": {
+    "checkin_id": 42,
+    "place_name": "Coffee Shop",
+    "note": "Great coffee here!"
+  },
+  "created_at": "2025-08-20T10:30:00Z"
+}
+```
+
+#### Like Activity
+
+```json
+{
+  "id": 2,
+  "user_id": 3,
+  "user_name": "Jane Smith",
+  "user_avatar_url": "https://example.com/avatar2.jpg",
+  "activity_type": "like",
+  "activity_data": {
+    "checkin_id": 42,
+    "checkin_user_id": 2,
+    "checkin_note": "Great coffee here!"
+  },
+  "created_at": "2025-08-20T10:35:00Z"
+}
+```
+
+#### Comment Activity
+
+```json
+{
+  "id": 3,
+  "user_id": 4,
+  "user_name": "Bob Wilson",
+  "user_avatar_url": "https://example.com/avatar3.jpg",
+  "activity_type": "comment",
+  "activity_data": {
+    "comment_id": 15,
+    "checkin_id": 42,
+    "checkin_user_id": 2,
+    "comment_content": "I love this place too!"
+  },
+  "created_at": "2025-08-20T10:40:00Z"
+}
+```
+
+#### Follow Activity
+
+```json
+{
+  "id": 4,
+  "user_id": 5,
+  "user_name": "Alice Brown",
+  "user_avatar_url": "https://example.com/avatar4.jpg",
+  "activity_type": "follow",
+  "activity_data": {
+    "followee_id": 2,
+    "followee_name": "John Doe"
+  },
+  "created_at": "2025-08-20T10:45:00Z"
+}
+```
+
+#### Review Activity
+
+```json
+{
+  "id": 5,
+  "user_id": 2,
+  "user_name": "John Doe",
+  "user_avatar_url": "https://example.com/avatar.jpg",
+  "activity_type": "review",
+  "activity_data": {
+    "review_id": 8,
+    "place_name": "Coffee Shop",
+    "rating": 4.5,
+    "review_text": "Excellent coffee and atmosphere!"
+  },
+  "created_at": "2025-08-20T11:00:00Z"
+}
+```
+
+#### Collection Activity
+
+```json
+{
+  "id": 6,
+  "user_id": 2,
+  "user_name": "John Doe",
+  "user_avatar_url": "https://example.com/avatar.jpg",
+  "activity_type": "collection",
+  "activity_data": {
+    "collection_id": 3,
+    "collection_name": "My Favorite Coffee Shops"
+  },
+  "created_at": "2025-08-20T11:15:00Z"
+}
+```
+
+### Activity Feed Features
+
+#### 1. **Social Timeline**
+
+- Real-time updates from followed users
+- Chronological ordering (newest first)
+- Rich activity data with context
+
+#### 2. **Privacy Controls**
+
+- Only shows activities from users you follow
+- Respects check-in visibility settings
+- User-specific activity access control
+
+#### 3. **Advanced Filtering**
+
+- Filter by activity types
+- Filter by specific users
+- Time-based filtering (since/until)
+- Pagination support
+
+#### 4. **Activity Types**
+
+- **Check-ins**: New place check-ins
+- **Likes**: Reactions to check-ins
+- **Comments**: Comments on check-ins
+- **Follows**: New follow relationships
+- **Reviews**: Place reviews
+- **Collections**: Check-in collections
+
+#### 5. **Performance Optimized**
+
+- Efficient database queries
+- Indexed activity types and timestamps
+- Pagination for large datasets
+- Lazy loading of user information
+
+### Integration with Other Features
+
+#### Automatic Activity Creation
+
+Activities are automatically created when users:
+
+- Create check-ins
+- Like check-ins
+- Comment on check-ins
+- Follow other users
+- Post reviews
+- Create collections
+
+#### WebSocket Integration
+
+Activity feed can be enhanced with real-time updates via WebSocket notifications.
+
+#### Privacy Enforcement
+
+- Activities respect check-in visibility settings
+- Users can only see activities from users they follow
+- Personal activities are private by default
+
+### Activity Feed Response Format
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "user_id": 2,
+      "user_name": "John Doe",
+      "user_avatar_url": "https://example.com/avatar.jpg",
+      "activity_type": "checkin",
+      "activity_data": {
+        "checkin_id": 42,
+        "place_name": "Coffee Shop",
+        "note": "Great coffee here!"
+      },
+      "created_at": "2025-08-20T10:30:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+### Activity Feed Use Cases
+
+#### 1. **Social Discovery**
+
+- Discover new places through friends' check-ins
+- See what places your network is visiting
+- Find trending locations in your area
+
+#### 2. **Engagement**
+
+- React to friends' activities
+- Comment on interesting check-ins
+- Follow users with similar interests
+
+#### 3. **Content Discovery**
+
+- Browse friends' reviews and recommendations
+- Explore collections created by followed users
+- Find new places to visit
+
+#### 4. **Social Connection**
+
+- Stay updated on friends' activities
+- Engage with shared experiences
+- Build community around places
+
+### Activity Feed Best Practices
+
+#### 1. **Performance**
+
+- Use pagination for large feeds
+- Implement caching for frequently accessed data
+- Optimize database queries with proper indexing
+
+#### 2. **Privacy**
+
+- Respect user privacy settings
+- Only show appropriate activities
+- Allow users to control their activity visibility
+
+#### 3. **User Experience**
+
+- Provide clear activity descriptions
+- Include relevant context and metadata
+- Support filtering and search
+
+#### 4. **Content Quality**
+
+- Ensure activity data is accurate
+- Provide meaningful activity descriptions
+- Include relevant place and user information
+
 ## WebSocket Real-time Features
 
 The Circles app provides comprehensive real-time features via WebSocket connections for instant messaging, notifications, and live updates.

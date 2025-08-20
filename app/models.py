@@ -11,8 +11,9 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=True)
     phone = Column(String, unique=True, index=True, nullable=True)
+    username = Column(String, unique=True, index=True, nullable=True)
     is_verified = Column(Boolean, default=False)
     is_admin = Column(Boolean, default=False)
     # Profile
@@ -38,13 +39,17 @@ class User(Base):
     check_in_comments = relationship("CheckInComment", back_populates="user")
     check_in_likes = relationship("CheckInLike", back_populates="user")
     dm_messages = relationship("DMMessage", back_populates="sender")
+    support_tickets = relationship("SupportTicket", back_populates="user")
+    activities = relationship("Activity", back_populates="user")
 
 
 class OTPCode(Base):
     __tablename__ = "otp_codes"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    # Nullable for phone-based OTP
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    phone = Column(String, nullable=True, index=True)  # For phone-based OTP
     code = Column(String(6), nullable=False)  # 6-digit OTP code
     is_used = Column(Boolean, default=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
@@ -305,15 +310,33 @@ class SupportTicket(Base):
     __tablename__ = "support_tickets"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"),
-                     nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey(
+        "users.id", ondelete="CASCADE"), nullable=False, index=True)
     subject = Column(String, nullable=False)
-    body = Column(Text, nullable=False)
-    status = Column(String, nullable=False,
-                    server_default="open")  # open|closed
+    message = Column(Text, nullable=False)
+    # open, in_progress, resolved, closed
+    status = Column(String, default="open")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True),
                         server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User", back_populates="support_tickets")
+
+
+class Activity(Base):
+    __tablename__ = "activities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey(
+        "users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # checkin, like, comment, follow, review, collection
+    activity_type = Column(String, nullable=False, index=True)
+    # JSON string with activity details
+    activity_data = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True),
+                        server_default=func.now(), index=True)
+
+    user = relationship("User", back_populates="activities")
 
 
 class UserInterest(Base):
