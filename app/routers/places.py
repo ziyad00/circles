@@ -17,6 +17,8 @@ from ..schemas import (
     PaginatedPlaces,
     PaginatedSavedPlaces,
     PaginatedCheckIns,
+    PaginatedWhosHere,
+    WhosHereItem,
     ReviewCreate,
     ReviewResponse,
     PaginatedReviews,
@@ -1098,7 +1100,7 @@ async def get_enhanced_place_stats(
     )
 
 
-@router.get("/{place_id}/whos-here", response_model=PaginatedCheckIns)
+@router.get("/{place_id}/whos-here", response_model=PaginatedWhosHere)
 async def whos_here(
     place_id: int,
     current_user: User = Depends(JWTService.get_current_user),
@@ -1125,27 +1127,35 @@ async def whos_here(
 
     # Get check-ins with user info
     stmt = (
-        select(CheckIn)
+        select(CheckIn, User.name, User.avatar_url)
+        .join(User, User.id == CheckIn.user_id)
         .where(CheckIn.place_id == place_id, CheckIn.created_at >= yesterday)
         .order_by(CheckIn.created_at.desc())
         .offset(offset)
         .limit(limit)
     )
-    checkins = (await db.execute(stmt)).scalars().all()
+    rows = (await db.execute(stmt)).all()
 
-    # Filter based on visibility and follow status
+    # Filter based on visibility
     from ..utils import can_view_checkin
-    visible_checkins = []
-    for checkin in checkins:
-        if await can_view_checkin(checkin, current_user, db):
-            visible_checkins.append(checkin)
+    items: list[WhosHereItem] = []
+    for checkin, user_name, avatar_url in rows:
+        if await can_view_checkin(db, checkin.user_id, current_user.id, checkin.visibility):
+            # photos
+            res_ph = await db.execute(select(CheckInPhoto).where(CheckInPhoto.check_in_id == checkin.id).order_by(CheckInPhoto.created_at.asc()))
+            urls = [p.url for p in res_ph.scalars().all()]
+            items.append(
+                WhosHereItem(
+                    check_in_id=checkin.id,
+                    user_id=checkin.user_id,
+                    user_name=user_name or f"User {checkin.user_id}",
+                    user_avatar_url=avatar_url,
+                    created_at=checkin.created_at,
+                    photo_urls=urls,
+                )
+            )
 
-    return PaginatedCheckIns(
-        items=visible_checkins,
-        total=len(visible_checkins),
-        limit=limit,
-        offset=offset
-    )
+    return PaginatedWhosHere(items=items, total=len(items), limit=limit, offset=offset)
 
 
 @router.get("/{place_id}/whos-here-count", response_model=dict)

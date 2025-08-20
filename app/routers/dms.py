@@ -15,6 +15,8 @@ from ..schemas import (
     PaginatedDMMessages,
     DMThreadStatus,
     DMThreadMuteUpdate,
+    DMThreadPinUpdate,
+    DMThreadArchiveUpdate,
     UnreadCountResponse,
     DMThreadBlockUpdate,
     TypingUpdate,
@@ -166,14 +168,67 @@ async def inbox(
     db: AsyncSession = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    q: str | None = Query(None, description="Search text"),
+    include_archived: bool = Query(False),
+    only_pinned: bool = Query(False),
 ):
-    base = select(DMThread).where(
-        DMThread.status == "accepted",
-        or_(DMThread.user_a_id == current_user.id,
-            DMThread.user_b_id == current_user.id),
+    # Join participant state for current user to filter by pinned/archived and enable search ordering
+    base = (
+        select(DMThread)
+        .join(
+            DMParticipantState,
+            and_(
+                DMParticipantState.thread_id == DMThread.id,
+                DMParticipantState.user_id == current_user.id,
+            ),
+            isouter=True,
+        )
+        .where(
+            DMThread.status == "accepted",
+            or_(DMThread.user_a_id == current_user.id,
+                DMThread.user_b_id == current_user.id),
+            # archived filter
+            or_(include_archived, DMParticipantState.archived.is_(
+                False) | DMParticipantState.archived.is_(None)),
+            # pinned filter (optional)
+            or_(~only_pinned, DMParticipantState.pinned.is_(True)),
+        )
     )
+    if q:
+        # search by other participant name/email via subquery on last message text as well
+        # filter where last message text ilike q OR other user's email/name ilike q
+        # last message subquery
+        last_msg_subq = (
+            select(DMMessage.thread_id, func.max(
+                DMMessage.created_at).label("last_ts"))
+            .group_by(DMMessage.thread_id)
+            .subquery()
+        )
+        base = (
+            base.join(last_msg_subq, last_msg_subq.c.thread_id ==
+                      DMThread.id, isouter=True)
+            .join(DMMessage, and_(DMMessage.thread_id == DMThread.id, DMMessage.created_at == last_msg_subq.c.last_ts), isouter=True)
+        )
+        # other participant lookup
+        other_id = func.case(
+            (DMThread.user_a_id == current_user.id, DMThread.user_b_id),
+            else_=DMThread.user_a_id,
+        )
+        other_user_subq = select(User.id, User.email, User.name).subquery()
+        base = base.join(other_user_subq, other_user_subq.c.id ==
+                         other_id, isouter=True)
+        like = f"%{q}%"
+        base = base.where(
+            or_(
+                DMMessage.text.ilike(like),
+                other_user_subq.c.email.ilike(like),
+                other_user_subq.c.name.ilike(like),
+            )
+        )
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
-    stmt = base.order_by(desc(DMThread.updated_at)).offset(offset).limit(limit)
+    # order: pinned first, then updated_at desc
+    stmt = base.order_by(desc(DMParticipantState.pinned.nullslast()), desc(
+        DMThread.updated_at)).offset(offset).limit(limit)
     items = (await db.execute(stmt)).scalars().all()
     return PaginatedDMThreads(items=items, total=total, limit=limit, offset=offset)
 
@@ -400,6 +455,44 @@ async def mute_thread(
     state.muted = payload.muted
     await db.commit()
     return DMThreadMuteUpdate(muted=state.muted)
+
+
+@router.put("/threads/{thread_id}/pin", response_model=DMThreadPinUpdate)
+async def pin_thread(
+    thread_id: int,
+    payload: DMThreadPinUpdate,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(select(DMThread).where(DMThread.id == thread_id))
+    thread = res.scalars().first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if not _is_participant(thread, current_user.id):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    state = await _get_or_create_state(db, thread_id, current_user.id)
+    state.pinned = payload.pinned
+    await db.commit()
+    return DMThreadPinUpdate(pinned=state.pinned)
+
+
+@router.put("/threads/{thread_id}/archive", response_model=DMThreadArchiveUpdate)
+async def archive_thread(
+    thread_id: int,
+    payload: DMThreadArchiveUpdate,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(select(DMThread).where(DMThread.id == thread_id))
+    thread = res.scalars().first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if not _is_participant(thread, current_user.id):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    state = await _get_or_create_state(db, thread_id, current_user.id)
+    state.archived = payload.archived
+    await db.commit()
+    return DMThreadArchiveUpdate(archived=state.archived)
 
 
 @router.put("/threads/{thread_id}/block", response_model=DMThreadBlockUpdate)
