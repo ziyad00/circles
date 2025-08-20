@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, text, or_
+from sqlalchemy import select, func, desc, text, or_, and_
 
 from ..database import get_db
 from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto, CheckInCollection, CheckInCollectionItem
@@ -28,6 +28,9 @@ from ..schemas import (
     AdvancedSearchFilters,
     SearchSuggestions,
     SearchSuggestion,
+    EnhancedPlaceStats,
+    PlaceHourlyStats,
+    PlaceCrowdLevel,
 )
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
@@ -566,55 +569,193 @@ async def delete_review_photo(
 
 
 @router.get("/trending", response_model=PaginatedPlaces)
-async def trending_places(
-    city: str | None = None,
-    category: str | None = None,
-    hours: int = 24,
-    limit: int = Query(10, ge=1, le=100),
+async def get_trending_places(
+    time_window: str = Query(
+        "24h", description="Time window: 1h, 6h, 24h, 7d, 30d"),
+    limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    """Get trending places based on recent activity"""
 
-    # Basic ranking by number of check-ins in timeframe
-    stmt = (
-        select(Place)
-        .join(CheckIn, CheckIn.place_id == Place.id)
-        .where(CheckIn.created_at >= since)
-    )
-    if city:
-        stmt = stmt.where(Place.city == city)
-    if category:
-        stmt = stmt.where(Place.categories.ilike(f"%{category}%"))
+    # Calculate time window
+    now = datetime.now(timezone.utc)
+    time_windows = {
+        "1h": timedelta(hours=1),
+        "6h": timedelta(hours=6),
+        "24h": timedelta(days=1),
+        "7d": timedelta(days=7),
+        "30d": timedelta(days=30),
+    }
 
-    # Order by count desc
-    count_stmt = (
-        select(CheckIn.place_id, func.count(CheckIn.id).label("cnt"))
-        .where(CheckIn.created_at >= since)
-        .group_by(CheckIn.place_id)
+    if time_window not in time_windows:
+        raise HTTPException(
+            status_code=400, detail="Invalid time window. Use: 1h, 6h, 24h, 7d, 30d")
+
+    window_start = now - time_windows[time_window]
+
+    # Build trending score query
+    # Score = (check-ins * 3) + (reviews * 2) + (photos * 1) + (unique users * 2)
+    trending_subq = (
+        select(
+            Place.id,
+            Place.name,
+            Place.address,
+            Place.city,
+            Place.neighborhood,
+            Place.latitude,
+            Place.longitude,
+            Place.categories,
+            Place.rating,
+            Place.created_at,
+            # Check-ins count
+            func.coalesce(func.count(CheckIn.id), 0).label('checkins_count'),
+            # Reviews count
+            func.coalesce(func.count(Review.id), 0).label('reviews_count'),
+            # Photos count (from reviews)
+            func.coalesce(func.count(Photo.id), 0).label('photos_count'),
+            # Unique users who checked in
+            func.coalesce(func.count(func.distinct(CheckIn.user_id)), 0).label(
+                'unique_users'),
+            # Calculate trending score
+            (
+                func.coalesce(func.count(CheckIn.id), 0) * 3 +
+                func.coalesce(func.count(Review.id), 0) * 2 +
+                func.coalesce(func.count(Photo.id), 0) * 1 +
+                func.coalesce(func.count(
+                    func.distinct(CheckIn.user_id)), 0) * 2
+            ).label('trending_score')
+        )
+        .outerjoin(CheckIn, and_(
+            Place.id == CheckIn.place_id,
+            CheckIn.created_at >= window_start
+        ))
+        .outerjoin(Review, and_(
+            Place.id == Review.place_id,
+            Review.created_at >= window_start
+        ))
+        .outerjoin(Photo, and_(
+            Review.id == Photo.review_id,
+            Photo.created_at >= window_start
+        ))
+        .group_by(Place.id)
+        .having(
+            or_(
+                func.coalesce(func.count(CheckIn.id), 0) > 0,
+                func.coalesce(func.count(Review.id), 0) > 0
+            )
+        )
+        .order_by(text('trending_score DESC'))
         .subquery()
     )
+
+    # Main query with pagination
     stmt = (
         select(Place)
-        .join(count_stmt, count_stmt.c.place_id == Place.id)
-        .order_by(desc(count_stmt.c.cnt))
+        .join(trending_subq, Place.id == trending_subq.c.id)
+        .order_by(trending_subq.c.trending_score.desc())
         .offset(offset)
         .limit(limit)
     )
-    if city:
-        stmt = stmt.where(Place.city == city)
-    if category:
-        stmt = stmt.where(Place.categories.ilike(f"%{category}%"))
 
+    # Count query for pagination
+    count_stmt = (
+        select(func.count())
+        .select_from(trending_subq)
+    )
+
+    # Execute queries
+    total = (await db.execute(count_stmt)).scalar_one()
     items = (await db.execute(stmt)).scalars().all()
-    # count unique places with check-ins in window + filters
-    total_q = select(func.count(func.distinct(CheckIn.place_id))).join(
-        Place, CheckIn.place_id == Place.id).where(CheckIn.created_at >= since)
-    if city:
-        total_q = total_q.where(Place.city == city)
-    if category:
-        total_q = total_q.where(Place.categories.ilike(f"%{category}%"))
-    total = (await db.execute(total_q)).scalar_one()
+
+    return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/trending/global", response_model=PaginatedPlaces)
+async def get_global_trending_places(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get globally trending places (no auth required)"""
+
+    # Use last 7 days for global trending
+    window_start = datetime.now(timezone.utc) - timedelta(days=7)
+
+    # Build trending score query
+    trending_subq = (
+        select(
+            Place.id,
+            Place.name,
+            Place.address,
+            Place.city,
+            Place.neighborhood,
+            Place.latitude,
+            Place.longitude,
+            Place.categories,
+            Place.rating,
+            Place.created_at,
+            # Check-ins count
+            func.coalesce(func.count(CheckIn.id), 0).label('checkins_count'),
+            # Reviews count
+            func.coalesce(func.count(Review.id), 0).label('reviews_count'),
+            # Photos count (from reviews)
+            func.coalesce(func.count(Photo.id), 0).label('photos_count'),
+            # Unique users who checked in
+            func.coalesce(func.count(func.distinct(CheckIn.user_id)), 0).label(
+                'unique_users'),
+            # Calculate trending score
+            (
+                func.coalesce(func.count(CheckIn.id), 0) * 3 +
+                func.coalesce(func.count(Review.id), 0) * 2 +
+                func.coalesce(func.count(Photo.id), 0) * 1 +
+                func.coalesce(func.count(
+                    func.distinct(CheckIn.user_id)), 0) * 2
+            ).label('trending_score')
+        )
+        .outerjoin(CheckIn, and_(
+            Place.id == CheckIn.place_id,
+            CheckIn.created_at >= window_start
+        ))
+        .outerjoin(Review, and_(
+            Place.id == Review.place_id,
+            Review.created_at >= window_start
+        ))
+        .outerjoin(Photo, and_(
+            Review.id == Photo.review_id,
+            Photo.created_at >= window_start
+        ))
+        .group_by(Place.id)
+        .having(
+            or_(
+                func.coalesce(func.count(CheckIn.id), 0) > 0,
+                func.coalesce(func.count(Review.id), 0) > 0
+            )
+        )
+        .order_by(text('trending_score DESC'))
+        .subquery()
+    )
+
+    # Main query with pagination
+    stmt = (
+        select(Place)
+        .join(trending_subq, Place.id == trending_subq.c.id)
+        .order_by(trending_subq.c.trending_score.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+
+    # Count query for pagination
+    count_stmt = (
+        select(func.count())
+        .select_from(trending_subq)
+    )
+
+    # Execute queries
+    total = (await db.execute(count_stmt)).scalar_one()
+    items = (await db.execute(stmt)).scalars().all()
+
     return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -812,6 +953,148 @@ async def get_place_stats(place_id: int, db: AsyncSession = Depends(get_db)):
         average_rating=float(avg_rating) if avg_rating else None,
         reviews_count=reviews_count,
         active_checkins=current_checkins
+    )
+
+
+@router.get("/{place_id}/stats/enhanced", response_model=EnhancedPlaceStats)
+async def get_enhanced_place_stats(
+    place_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get enhanced place statistics with time-based analytics"""
+
+    # Get place
+    result = await db.execute(select(Place).where(Place.id == place_id))
+    place = result.scalar_one_or_none()
+
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+
+    now = datetime.now(timezone.utc)
+
+    # Basic stats
+    total_checkins = await db.scalar(
+        select(func.count(CheckIn.id)).where(CheckIn.place_id == place_id)
+    )
+    total_reviews = await db.scalar(
+        select(func.count(Review.id)).where(Review.place_id == place_id)
+    )
+    total_photos = await db.scalar(
+        select(func.count(Photo.id)).join(Review, Photo.review_id ==
+                                          Review.id).where(Review.place_id == place_id)
+    )
+    unique_visitors = await db.scalar(
+        select(func.count(func.distinct(CheckIn.user_id))).where(
+            CheckIn.place_id == place_id)
+    )
+    average_rating = await db.scalar(
+        select(func.avg(Review.rating)).where(Review.place_id == place_id)
+    )
+
+    # Popular hours (last 30 days)
+    thirty_days_ago = now - timedelta(days=30)
+    hourly_stats = await db.execute(
+        select(
+            func.extract('hour', CheckIn.created_at).label('hour'),
+            func.count(CheckIn.id).label('checkins_count'),
+            func.count(func.distinct(CheckIn.user_id)).label('unique_users')
+        )
+        .where(
+            CheckIn.place_id == place_id,
+            CheckIn.created_at >= thirty_days_ago
+        )
+        .group_by(text('hour'))
+        .order_by(text('checkins_count DESC'))
+        .limit(6)
+    )
+
+    popular_hours = [
+        PlaceHourlyStats(
+            hour=int(row.hour),
+            checkins_count=row.checkins_count,
+            unique_users=row.unique_users
+        )
+        for row in hourly_stats.fetchall()
+    ]
+
+    # Crowd level (current vs average)
+    current_checkins = await db.scalar(
+        select(func.count(CheckIn.id))
+        .where(
+            CheckIn.place_id == place_id,
+            CheckIn.created_at >= now - timedelta(hours=1)
+        )
+    )
+
+    # Average check-ins per hour (last 7 days)
+    seven_days_ago = now - timedelta(days=7)
+    total_recent_checkins = await db.scalar(
+        select(func.count(CheckIn.id))
+        .where(
+            CheckIn.place_id == place_id,
+            CheckIn.created_at >= seven_days_ago
+        )
+    )
+    average_checkins_per_hour = total_recent_checkins / \
+        (7 * 24) if total_recent_checkins > 0 else 0
+
+    # Determine crowd level
+    if current_checkins == 0:
+        crowd_level = "low"
+    elif current_checkins <= average_checkins_per_hour * 0.5:
+        crowd_level = "low"
+    elif current_checkins <= average_checkins_per_hour * 1.5:
+        crowd_level = "medium"
+    elif current_checkins <= average_checkins_per_hour * 2.5:
+        crowd_level = "high"
+    else:
+        crowd_level = "very_high"
+
+    crowd_level_data = PlaceCrowdLevel(
+        current_checkins=current_checkins or 0,
+        average_checkins=round(average_checkins_per_hour, 2),
+        crowd_level=crowd_level
+    )
+
+    # Recent activity
+    activity_24h = await db.scalar(
+        select(func.count(CheckIn.id))
+        .where(
+            CheckIn.place_id == place_id,
+            CheckIn.created_at >= now - timedelta(days=1)
+        )
+    )
+    activity_7d = await db.scalar(
+        select(func.count(CheckIn.id))
+        .where(
+            CheckIn.place_id == place_id,
+            CheckIn.created_at >= now - timedelta(days=7)
+        )
+    )
+    activity_30d = await db.scalar(
+        select(func.count(CheckIn.id))
+        .where(
+            CheckIn.place_id == place_id,
+            CheckIn.created_at >= now - timedelta(days=30)
+        )
+    )
+
+    recent_activity = {
+        "24h": activity_24h or 0,
+        "7d": activity_7d or 0,
+        "30d": activity_30d or 0
+    }
+
+    return EnhancedPlaceStats(
+        total_checkins=total_checkins or 0,
+        total_reviews=total_reviews or 0,
+        total_photos=total_photos or 0,
+        unique_visitors=unique_visitors or 0,
+        average_rating=float(average_rating) if average_rating else 0.0,
+        popular_hours=popular_hours,
+        crowd_level=crowd_level_data,
+        recent_activity=recent_activity
     )
 
 

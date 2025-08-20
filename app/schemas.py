@@ -270,7 +270,8 @@ class CheckInPhotoResponse(BaseModel):
 
 
 class CheckInCommentCreate(BaseModel):
-    content: str = Field(..., min_length=1, max_length=1000)
+    content: str = Field(..., min_length=1, max_length=1000,
+                         description="Comment content")
 
 
 class CheckInCommentResponse(BaseModel):
@@ -316,31 +317,22 @@ class DetailedCheckInResponse(BaseModel):
     user_avatar_url: Optional[str] = None
     place_id: int
     place_name: str
-    place_address: Optional[str] = None
-    place_city: Optional[str] = None
-    place_neighborhood: Optional[str] = None
-    place_categories: Optional[str] = None
-    place_rating: Optional[float] = None
     note: Optional[str] = None
-    visibility: str
+    visibility: VisibilityEnum
     created_at: datetime
-    updated_at: datetime
-    # Enhanced details
+    expires_at: datetime
+    photo_url: Optional[str] = None
     photo_urls: list[str] = []
-    likes_count: int
-    comments_count: int
-    is_liked_by_current_user: Optional[bool] = None
-    can_edit: bool
-    can_delete: bool
+    likes_count: int = 0
+    comments_count: int = 0
+    is_liked_by_user: bool = False
     model_config = ConfigDict(from_attributes=True)
 
 
 class CheckInStats(BaseModel):
-    check_in_id: int
     likes_count: int
     comments_count: int
-    views_count: int
-    model_config = ConfigDict(from_attributes=True)
+    is_liked_by_user: bool
 
 
 class PaginatedPhotos(BaseModel):
@@ -634,3 +626,47 @@ class UsernameCheckRequest(BaseModel):
 class UsernameCheckResponse(BaseModel):
     available: bool
     message: str
+
+
+class ProfileStats(BaseModel):
+    checkins_count: int = 0
+    checkins_public_count: int = 0
+    checkins_followers_count: int = 0
+    checkins_private_count: int = 0
+    collections_count: int = 0
+    collections_public_count: int = 0
+    collections_followers_count: int = 0
+    collections_private_count: int = 0
+    followers_count: int = 0
+    following_count: int = 0
+    reviews_count: int = 0
+    photos_count: int = 0
+    total_likes_received: int = 0
+    total_comments_received: int = 0
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlaceHourlyStats(BaseModel):
+    hour: int
+    checkins_count: int
+    unique_users: int
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlaceCrowdLevel(BaseModel):
+    current_checkins: int
+    average_checkins: float
+    crowd_level: str  # "low", "medium", "high", "very_high"
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EnhancedPlaceStats(BaseModel):
+    total_checkins: int
+    total_reviews: int
+    total_photos: int
+    unique_visitors: int
+    average_rating: float
+    popular_hours: list[PlaceHourlyStats]
+    crowd_level: PlaceCrowdLevel
+    recent_activity: dict  # Last 24h, 7d, 30d activity
+    model_config = ConfigDict(from_attributes=True)
