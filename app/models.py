@@ -14,6 +14,7 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     phone = Column(String, unique=True, index=True, nullable=True)
     is_verified = Column(Boolean, default=False)
+    is_admin = Column(Boolean, default=False)
     # Profile
     name = Column(String, nullable=True)
     bio = Column(Text, nullable=True)

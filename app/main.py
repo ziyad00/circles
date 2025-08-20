@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 import uuid
 from fastapi import Request
+from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
 import logging
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
@@ -55,11 +57,8 @@ app.add_middleware(
 )
 
 # Prometheus metrics
-REQUEST_COUNT = Counter(
-    "http_requests_total",
-    "Total HTTP requests",
-    ["method", "path", "status"],
-)
+REQUEST_COUNT = Counter("http_requests_total", "Total HTTP requests", [
+                        "method", "route", "status"])
 REQUEST_LATENCY = Histogram(
     "http_request_duration_seconds",
     "HTTP request latency in seconds",
@@ -70,27 +69,77 @@ REQUEST_LATENCY = Histogram(
 @app.middleware("http")
 async def add_request_id_and_errors(request: Request, call_next):
     request_id = str(uuid.uuid4())
-    logging.info(f"{request.method} {request.url.path} rid={request_id}")
+    user_id = request.headers.get("x-user-id") or "anon"
+    # Lightweight JSON log (sample all in debug, sample 10% in prod)
+    import random
+    if settings.debug or random.random() < 0.1:
+        logging.info({
+            "event": "request",
+            "method": request.method,
+            "path": request.url.path,
+            "rid": request_id,
+            "user_id": user_id,
+        })
     try:
         import time
         start = time.perf_counter()
         response = await call_next(request)
         elapsed = time.perf_counter() - start
         REQUEST_LATENCY.observe(elapsed)
-        REQUEST_COUNT.labels(
-            method=request.method, path=request.url.path, status=response.status_code).inc()
+        route = getattr(request.scope.get("route"), "path", request.url.path)
+        REQUEST_COUNT.labels(method=request.method,
+                             route=route, status=response.status_code).inc()
         response.headers["X-Request-ID"] = request_id
         return response
+    except RequestValidationError as e:
+        logging.exception(f"Validation error rid={request_id}")
+        route = getattr(request.scope.get("route"), "path", request.url.path)
+        REQUEST_COUNT.labels(method=request.method,
+                             route=route, status=422).inc()
+        body = {
+            "error": {
+                "code": "validation_error",
+                "message": "Validation error",
+                "details": e.errors(),
+            },
+            "request_id": request_id,
+        }
+        return JSONResponse(status_code=422, content=body, headers={"X-Request-ID": request_id})
+    except HTTPException as e:
+        code_map = {
+            400: "bad_request",
+            401: "unauthorized",
+            403: "forbidden",
+            404: "not_found",
+            409: "conflict",
+            422: "validation_error",
+            429: "too_many_requests",
+        }
+        code = code_map.get(e.status_code, "error")
+        route = getattr(request.scope.get("route"), "path", request.url.path)
+        REQUEST_COUNT.labels(method=request.method,
+                             route=route, status=e.status_code).inc()
+        body = {
+            "error": {
+                "code": code,
+                "message": e.detail if isinstance(e.detail, str) else str(e.detail),
+            },
+            "request_id": request_id,
+        }
+        return JSONResponse(status_code=e.status_code, content=body, headers={"X-Request-ID": request_id})
     except Exception as e:
         logging.exception(f"Unhandled error rid={request_id}")
+        route = getattr(request.scope.get("route"), "path", request.url.path)
         REQUEST_COUNT.labels(method=request.method,
-                             path=request.url.path, status=500).inc()
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Internal Server Error",
-                     "request_id": request_id},
-            headers={"X-Request-ID": request_id},
-        )
+                             route=route, status=500).inc()
+        body = {
+            "error": {
+                "code": "internal_server_error",
+                "message": "Internal Server Error",
+            },
+            "request_id": request_id,
+        }
+        return JSONResponse(status_code=500, content=body, headers={"X-Request-ID": request_id})
 
 
 @app.get("/")

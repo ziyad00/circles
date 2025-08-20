@@ -19,6 +19,7 @@ from ..schemas import (
     DMThreadBlockUpdate,
     TypingUpdate,
     TypingStatusResponse,
+    PresenceResponse,
     HeartResponse,
 )
 from ..services.jwt_service import JWTService

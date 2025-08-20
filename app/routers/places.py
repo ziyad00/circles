@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, text
 
 from ..database import get_db
 from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto
@@ -55,6 +55,11 @@ async def create_place(payload: PlaceCreate, db: AsyncSession = Depends(get_db))
     db.add(place)
     await db.commit()
     await db.refresh(place)
+    # If PostGIS enabled and lat/lng present, set geography
+    from ..config import settings as app_settings
+    if app_settings.use_postgis and place.latitude is not None and place.longitude is not None:
+        await db.execute(text("UPDATE places SET location = ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography WHERE id = :id"), {"lng": place.longitude, "lat": place.latitude, "id": place.id})
+        await db.commit()
     return place
 
 
@@ -126,7 +131,10 @@ async def add_review_photo(
         ext = ".jpg"
     filename = f"{uuid4().hex}{ext}"
     content = await file.read()
-    url_path = await StorageService.save_review_photo(review_id, filename, content)
+    try:
+        url_path = await StorageService.save_review_photo(review_id, filename, content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     photo = Photo(
         user_id=current_user.id,
@@ -177,6 +185,14 @@ async def delete_review_photo(
     if photo.user_id != current_user.id:
         raise HTTPException(
             status_code=403, detail="Not allowed to delete this photo")
+    # Try to delete underlying file (best-effort)
+    try:
+        # extract filename from URL path
+        import os
+        filename = os.path.basename(photo.url)
+        await StorageService.delete_review_photo(review_id, filename)
+    except Exception:
+        pass
     await db.delete(photo)
     await db.commit()
     return None
@@ -250,36 +266,56 @@ async def nearby_places(
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ):
-    # Haversine distance (meters), clamp argument to acos to [-1, 1]
-    lat_rad = func.radians(lat)
-    lng_rad = func.radians(lng)
-    place_lat = func.radians(Place.latitude)
-    place_lng = func.radians(Place.longitude)
-    arg = (
-        func.cos(lat_rad) * func.cos(place_lat) * func.cos(place_lng - lng_rad)
-        + func.sin(lat_rad) * func.sin(place_lat)
-    )
-    arg_clamped = func.greatest(-1.0, func.least(1.0, arg))
-    distance_m = 6371000 * func.acos(arg_clamped)
+    from ..config import settings as app_settings
+    if app_settings.use_postgis:
+        # Use ST_DWithin and ST_Distance for efficient geo query
+        point = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
+        # Count
+        total_q = select(func.count(Place.id)).where(
+            Place.latitude.is_not(None), Place.longitude.is_not(None), func.ST_DWithin(
+                Place.__table__.c.location, point.cast(text('geography')), radius_m)
+        )
+        total = (await db.execute(total_q)).scalar_one()
+        stmt = (
+            select(Place)
+            .where(Place.latitude.is_not(None), Place.longitude.is_not(None), func.ST_DWithin(Place.__table__.c.location, point.cast(text('geography')), radius_m))
+            .order_by(func.ST_Distance(Place.__table__.c.location, point.cast(text('geography'))).asc())
+            .offset(offset)
+            .limit(limit)
+        )
+        items = (await db.execute(stmt)).scalars().all()
+        return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+    else:
+        # Haversine fallback
+        lat_rad = func.radians(lat)
+        lng_rad = func.radians(lng)
+        place_lat = func.radians(Place.latitude)
+        place_lng = func.radians(Place.longitude)
+        arg = (
+            func.cos(lat_rad) * func.cos(place_lat) *
+            func.cos(place_lng - lng_rad)
+            + func.sin(lat_rad) * func.sin(place_lat)
+        )
+        arg_clamped = func.greatest(-1.0, func.least(1.0, arg))
+        distance_m = 6371000 * func.acos(arg_clamped)
 
-    # total count within radius where coordinates exist
-    total_q = (
-        select(func.count(Place.id))
-        .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
-        .where(distance_m <= radius_m)
-    )
-    total = (await db.execute(total_q)).scalar_one()
+        total_q = (
+            select(func.count(Place.id))
+            .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
+            .where(distance_m <= radius_m)
+        )
+        total = (await db.execute(total_q)).scalar_one()
 
-    stmt = (
-        select(Place)
-        .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
-        .where(distance_m <= radius_m)
-        .order_by(distance_m.asc())
-        .offset(offset)
-        .limit(limit)
-    )
-    items = (await db.execute(stmt)).scalars().all()
-    return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+        stmt = (
+            select(Place)
+            .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
+            .where(distance_m <= radius_m)
+            .order_by(distance_m.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+        items = (await db.execute(stmt)).scalars().all()
+        return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{place_id}", response_model=PlaceResponse)
@@ -353,7 +389,10 @@ async def upload_checkin_photo(
         ext = ".jpg"
     filename = f"{uuid4().hex}{ext}"
     content = await file.read()
-    url_path = await StorageService.save_checkin_photo(check_in_id, filename, content)
+    try:
+        url_path = await StorageService.save_checkin_photo(check_in_id, filename, content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     cip = CheckInPhoto(check_in_id=check_in_id, url=url_path)
     db.add(cip)
@@ -389,9 +428,15 @@ async def delete_checkin_photo(
         raise HTTPException(status_code=404, detail="Check-in not found")
     if checkin.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not allowed")
-    # delete all associated photos records (files are not deleted in this MVP)
+    # delete all associated photos records and underlying files (best-effort)
     res_ph = await db.execute(select(CheckInPhoto).where(CheckInPhoto.check_in_id == check_in_id))
     for ph in res_ph.scalars().all():
+        try:
+            import os
+            filename = os.path.basename(ph.url)
+            await StorageService.delete_checkin_photo(check_in_id, filename)
+        except Exception:
+            pass
         await db.delete(ph)
     checkin.photo_url = None
     await db.commit()
@@ -439,6 +484,13 @@ async def delete_checkin_photo_item(
     photo = res_ph.scalars().first()
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
+    # best-effort file delete
+    try:
+        import os
+        filename = os.path.basename(photo.url)
+        await StorageService.delete_checkin_photo(check_in_id, filename)
+    except Exception:
+        pass
     await db.delete(photo)
     await db.commit()
     return None

@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     # Metrics
     metrics_token: Optional[str] = Field(default=None, env="METRICS_TOKEN")
 
+    # Geo
+    use_postgis: bool = Field(default=False, env="USE_POSTGIS")
+
     class Config:
         env_file = ".env"
         env_prefix = "APP_"

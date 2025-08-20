@@ -17,7 +17,8 @@ async def create_ticket(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    t = SupportTicket(user_id=current_user.id, subject=payload.subject, body=payload.body)
+    t = SupportTicket(user_id=current_user.id,
+                      subject=payload.subject, body=payload.body)
     db.add(t)
     await db.commit()
     await db.refresh(t)
@@ -32,8 +33,45 @@ async def list_my_tickets(
     offset: int = Query(0, ge=0),
 ):
     res = await db.execute(
-        select(SupportTicket).where(SupportTicket.user_id == current_user.id).order_by(SupportTicket.created_at.desc()).offset(offset).limit(limit)
+        select(SupportTicket).where(SupportTicket.user_id == current_user.id).order_by(
+            SupportTicket.created_at.desc()).offset(offset).limit(limit)
     )
     return res.scalars().all()
 
 
+def _require_admin(user: User):
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+
+@router.get("/admin/tickets", response_model=list[SupportTicketResponse])
+async def admin_list_tickets(
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    _require_admin(current_user)
+    res = await db.execute(
+        select(SupportTicket).order_by(
+            SupportTicket.created_at.desc()).offset(offset).limit(limit)
+    )
+    return res.scalars().all()
+
+
+@router.put("/admin/tickets/{ticket_id}", response_model=SupportTicketResponse)
+async def admin_update_ticket(
+    ticket_id: int,
+    status: str = Query(..., pattern="^(open|closed)$"),
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+    res = await db.execute(select(SupportTicket).where(SupportTicket.id == ticket_id))
+    t = res.scalars().first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    t.status = status
+    await db.commit()
+    await db.refresh(t)
+    return t
