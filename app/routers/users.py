@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
-from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, CheckInCollection
+from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, CheckInCollection, CheckInLike, CheckInComment, Review
 from ..schemas import (
     UserUpdate,
     PublicUserResponse,
@@ -14,6 +14,7 @@ from ..schemas import (
     PaginatedCheckIns,
     CheckInResponse,
     PaginatedMedia,
+    ProfileStats,
 )
 
 
@@ -226,5 +227,95 @@ async def remove_interest(
     await db.delete(it)
     await db.commit()
     return None
+
+
+@router.get("/{user_id}/profile-stats", response_model=ProfileStats)
+async def get_user_profile_stats(
+    user_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get comprehensive profile statistics for a user"""
+    
+    # Get user
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if current user can view this profile
+    can_view = user_id == current_user.id or await is_following(db, current_user.id, user_id)
+    
+    # Get check-in counts by visibility
+    checkin_stats = await db.execute(
+        select(
+            func.count(CheckIn.id).label('total'),
+            func.sum(case((CheckIn.visibility == 'public', 1), else_=0)).label('public'),
+            func.sum(case((CheckIn.visibility == 'friends', 1), else_=0)).label('followers'),
+            func.sum(case((CheckIn.visibility == 'private', 1), else_=0)).label('private')
+        ).where(CheckIn.user_id == user_id)
+    )
+    checkin_row = checkin_stats.fetchone()
+    
+    # Get collection counts by visibility
+    collection_stats = await db.execute(
+        select(
+            func.count(CheckInCollection.id).label('total'),
+            func.sum(case((CheckInCollection.visibility == 'public', 1), else_=0)).label('public'),
+            func.sum(case((CheckInCollection.visibility == 'friends', 1), else_=0)).label('followers'),
+            func.sum(case((CheckInCollection.visibility == 'private', 1), else_=0)).label('private')
+        ).where(CheckInCollection.user_id == user_id)
+    )
+    collection_row = collection_stats.fetchone()
+    
+    # Get follower/following counts
+    followers_count = await db.scalar(
+        select(func.count(Follow.id)).where(Follow.followee_id == user_id)
+    )
+    following_count = await db.scalar(
+        select(func.count(Follow.id)).where(Follow.follower_id == user_id)
+    )
+    
+    # Get review and photo counts
+    reviews_count = await db.scalar(
+        select(func.count(Review.id)).where(Review.user_id == user_id)
+    )
+    photos_count = await db.scalar(
+        select(func.count(Photo.id)).join(Review, Photo.review_id == Review.id).where(Review.user_id == user_id)
+    )
+    
+    # Get total likes and comments received (only if user can view)
+    total_likes_received = 0
+    total_comments_received = 0
+    
+    if can_view:
+        total_likes_received = await db.scalar(
+            select(func.count(CheckInLike.id))
+            .join(CheckIn, CheckInLike.check_in_id == CheckIn.id)
+            .where(CheckIn.user_id == user_id)
+        )
+        total_comments_received = await db.scalar(
+            select(func.count(CheckInComment.id))
+            .join(CheckIn, CheckInComment.check_in_id == CheckIn.id)
+            .where(CheckIn.user_id == user_id)
+        )
+    
+    return ProfileStats(
+        checkins_count=checkin_row.total or 0,
+        checkins_public_count=checkin_row.public or 0,
+        checkins_followers_count=checkin_row.followers or 0,
+        checkins_private_count=checkin_row.private or 0,
+        collections_count=collection_row.total or 0,
+        collections_public_count=collection_row.public or 0,
+        collections_followers_count=collection_row.followers or 0,
+        collections_private_count=collection_row.private or 0,
+        followers_count=followers_count or 0,
+        following_count=following_count or 0,
+        reviews_count=reviews_count or 0,
+        photos_count=photos_count or 0,
+        total_likes_received=total_likes_received or 0,
+        total_comments_received=total_comments_received or 0,
+    )
 
 
