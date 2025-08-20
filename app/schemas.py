@@ -85,6 +85,8 @@ class VisibilityEnum(str, Enum):
 class CheckInCreate(BaseModel):
     place_id: int = Field(..., examples=[1])
     note: Optional[str] = Field(None, examples=["Latte time"])
+    latitude: float = Field(..., ge=-90, le=90, examples=[24.7136])
+    longitude: float = Field(..., ge=-180, le=180, examples=[46.6753])
     visibility: Optional[VisibilityEnum] = Field(
         default=None,
         examples=[VisibilityEnum.public,

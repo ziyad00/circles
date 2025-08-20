@@ -54,6 +54,12 @@ class Settings(BaseSettings):
 
     # Geo
     use_postgis: bool = Field(default=False, env="USE_POSTGIS")
+    # Check-in proximity enforcement
+    checkin_enforce_proximity: bool = Field(
+        default=True, env="CHECKIN_ENFORCE_PROXIMITY")
+    # Max allowed distance in meters between user and place to allow check-in
+    checkin_max_distance_meters: int = Field(
+        default=500, env="CHECKIN_MAX_DISTANCE_METERS")
 
     class Config:
         env_file = ".env"
