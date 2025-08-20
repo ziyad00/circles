@@ -233,13 +233,78 @@ curl -X POST http://localhost:8000/places/ \
   }'
 ```
 
-#### Get Place
+#### Get Place Details
 
-GET `/places/{id}`
+GET `/places/{id}` (authenticated)
 
 ```bash
-curl http://localhost:8000/places/1
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/places/1
 ```
+
+Returns detailed place information including:
+
+- Place details (name, address, coordinates, etc.)
+- Statistics (average rating, review count, active check-ins)
+- Current check-ins count (last 24h)
+- Total check-ins ever
+- Recent reviews count (last 30 days)
+- Photos count
+- User-specific data (is checked in, is saved)
+
+#### Get Place Statistics
+
+GET `/places/{id}/stats`
+
+```bash
+curl http://localhost:8000/places/1/stats
+```
+
+Returns place statistics:
+
+- Average rating
+- Total reviews count
+- Active check-ins (last 24h)
+
+#### Who's Here Now
+
+GET `/places/{id}/whos-here` (authenticated)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8000/places/1/whos-here?limit=20&offset=0'
+```
+
+Returns paginated list of users currently checked in (last 24h), respecting privacy settings.
+
+#### Who's Here Count
+
+GET `/places/{id}/whos-here-count` (authenticated)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/places/1/whos-here-count
+```
+
+Returns count of people currently checked in.
+
+#### Place Photos Gallery
+
+GET `/places/{id}/photos`
+
+```bash
+curl 'http://localhost:8000/places/1/photos?limit=20&offset=0'
+```
+
+Returns paginated list of photos from reviews for this place.
+
+#### Place Reviews
+
+GET `/places/{id}/reviews`
+
+```bash
+curl 'http://localhost:8000/places/1/reviews?limit=20&offset=0'
+```
+
+Returns paginated list of reviews for this place.
 
 #### Search Places (paginated)
 
@@ -273,21 +338,6 @@ curl -X POST http://localhost:8000/places/check-ins \
 ```
 
 Rate limiting: prevents repeat check-ins to the same place by same user within 5 minutes (429).
-
-#### Who's Here (last 24h, respects privacy)
-
-GET `/places/{id}/whos-here?limit=50&offset=0`
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8000/places/1/whos-here?limit=20&offset=0'
-```
-
-**Note**: This endpoint requires authentication and respects check-in visibility settings:
-
-- `public` check-ins are visible to everyone
-- `friends` check-ins are only visible to followers
-- `private` check-ins are only visible to the creator
 
 #### Save Place (auth)
 

@@ -171,6 +171,34 @@ class PlaceStats(BaseModel):
     active_checkins: int
 
 
+class EnhancedPlaceResponse(BaseModel):
+    id: int
+    name: str
+    address: Optional[str] = None
+    city: Optional[str] = None
+    neighborhood: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    categories: Optional[str] = None
+    rating: Optional[float] = None
+    created_at: datetime
+    # Enhanced stats
+    stats: PlaceStats
+    # Current active check-ins count (last 24h)
+    current_checkins: int
+    # Total check-ins ever
+    total_checkins: int
+    # Recent reviews count (last 30 days)
+    recent_reviews: int
+    # Photos count
+    photos_count: int
+    # Is user currently checked in (if authenticated)
+    is_checked_in: Optional[bool] = None
+    # User's saved status (if authenticated)
+    is_saved: Optional[bool] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 # Photos
 
 class PhotoCreate(BaseModel):
