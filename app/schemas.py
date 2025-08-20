@@ -185,6 +185,30 @@ class PaginatedCheckIns(BaseModel):
     offset: int
 
 
+class WhosHereItem(BaseModel):
+    check_in_id: int
+    user_id: int
+    user_name: str
+    user_avatar_url: Optional[str] = None
+    created_at: datetime
+    photo_urls: list[str] = []
+
+
+class PaginatedWhosHere(BaseModel):
+    items: list[WhosHereItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class UserSearchFilters(BaseModel):
+    q: Optional[str] = None
+    has_avatar: Optional[bool] = None
+    interests: Optional[list[str]] = None
+    limit: int = Field(20, ge=1, le=100)
+    offset: int = Field(0, ge=0)
+
+
 class ReviewCreate(BaseModel):
     rating: float = Field(..., ge=0, le=5, examples=[4.5])
     text: Optional[str] = Field(None, examples=["Great spot!"])
@@ -406,6 +430,14 @@ class DMThreadMuteUpdate(BaseModel):
     muted: bool = Field(..., examples=[True])
 
 
+class DMThreadPinUpdate(BaseModel):
+    pinned: bool = Field(..., examples=[True])
+
+
+class DMThreadArchiveUpdate(BaseModel):
+    archived: bool = Field(..., examples=[True])
+
+
 class UnreadCountResponse(BaseModel):
     unread: int
 
@@ -557,6 +589,26 @@ class PrivacySettingsResponse(BaseModel):
     dm_privacy: str
     checkins_default_visibility: VisibilityEnum
     collections_default_visibility: VisibilityEnum
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    dm_messages: Optional[bool] = None
+    dm_requests: Optional[bool] = None
+    follows: Optional[bool] = None
+    likes: Optional[bool] = None
+    comments: Optional[bool] = None
+    activity_summary: Optional[bool] = None
+    marketing: Optional[bool] = None
+
+
+class NotificationPreferencesResponse(BaseModel):
+    dm_messages: bool
+    dm_requests: bool
+    follows: bool
+    likes: bool
+    comments: bool
+    activity_summary: bool
+    marketing: bool
 
 
 class ActivityItem(BaseModel):

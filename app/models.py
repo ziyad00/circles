@@ -271,6 +271,8 @@ class DMParticipantState(Base):
     last_read_at = Column(DateTime(timezone=True), nullable=True)
     muted = Column(Boolean, default=False)
     blocked = Column(Boolean, default=False)
+    pinned = Column(Boolean, default=False)
+    archived = Column(Boolean, default=False)
     typing_until = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True),
@@ -347,3 +349,22 @@ class UserInterest(Base):
                      nullable=False, index=True)
     name = Column(String, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class NotificationPreference(Base):
+    __tablename__ = "notification_preferences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey(
+        "users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Toggles
+    dm_messages = Column(Boolean, nullable=False, server_default='true')
+    dm_requests = Column(Boolean, nullable=False, server_default='true')
+    follows = Column(Boolean, nullable=False, server_default='true')
+    likes = Column(Boolean, nullable=False, server_default='true')
+    comments = Column(Boolean, nullable=False, server_default='true')
+    activity_summary = Column(Boolean, nullable=False, server_default='true')
+    marketing = Column(Boolean, nullable=False, server_default='false')
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True),
+                        server_default=func.now(), onupdate=func.now())

@@ -4,8 +4,8 @@ from sqlalchemy import select
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
-from ..models import User
-from ..schemas import PrivacySettingsUpdate, PrivacySettingsResponse
+from ..models import User, NotificationPreference
+from ..schemas import PrivacySettingsUpdate, PrivacySettingsResponse, NotificationPreferencesUpdate, NotificationPreferencesResponse
 
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -43,3 +43,61 @@ async def update_privacy_settings(
     )
 
 
+async def _get_or_create_prefs(db: AsyncSession, user_id: int) -> NotificationPreference:
+    res = await db.execute(select(NotificationPreference).where(NotificationPreference.user_id == user_id))
+    prefs = res.scalars().first()
+    if not prefs:
+        prefs = NotificationPreference(user_id=user_id)
+        db.add(prefs)
+        await db.commit()
+        await db.refresh(prefs)
+    return prefs
+
+
+@router.get("/notifications", response_model=NotificationPreferencesResponse)
+async def get_notification_preferences(
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    prefs = await _get_or_create_prefs(db, current_user.id)
+    return NotificationPreferencesResponse(
+        dm_messages=prefs.dm_messages,
+        dm_requests=prefs.dm_requests,
+        follows=prefs.follows,
+        likes=prefs.likes,
+        comments=prefs.comments,
+        activity_summary=prefs.activity_summary,
+        marketing=prefs.marketing,
+    )
+
+
+@router.put("/notifications", response_model=NotificationPreferencesResponse)
+async def update_notification_preferences(
+    payload: NotificationPreferencesUpdate,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    prefs = await _get_or_create_prefs(db, current_user.id)
+    for field in [
+        "dm_messages",
+        "dm_requests",
+        "follows",
+        "likes",
+        "comments",
+        "activity_summary",
+        "marketing",
+    ]:
+        val = getattr(payload, field)
+        if val is not None:
+            setattr(prefs, field, val)
+    await db.commit()
+    await db.refresh(prefs)
+    return NotificationPreferencesResponse(
+        dm_messages=prefs.dm_messages,
+        dm_requests=prefs.dm_requests,
+        follows=prefs.follows,
+        likes=prefs.likes,
+        comments=prefs.comments,
+        activity_summary=prefs.activity_summary,
+        marketing=prefs.marketing,
+    )
