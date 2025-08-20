@@ -554,6 +554,109 @@ curl -X DELETE http://localhost:8000/places/check-ins/123 \
   -H "Authorization: Bearer $TOKEN" -i
 ```
 
+#### Get My Check-ins
+
+GET `/places/me/check-ins?limit=20&offset=0` (authenticated)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8000/places/me/check-ins"
+```
+
+Returns `{ items, total, limit, offset }` with `items` as `CheckInResponse[]`.
+
+#### Get Check-in Details
+
+GET `/check-ins/{check_in_id}` (authenticated)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8000/check-ins/42"
+```
+
+Returns detailed check-in information including:
+
+- Check-in details (note, visibility, created_at)
+- User information (name, avatar)
+- Place information (name, address, city, neighborhood, categories, rating)
+- Photo URLs
+- Like and comment counts
+- User-specific data (is_liked_by_current_user, can_edit, can_delete)
+
+#### Get Check-in Statistics
+
+GET `/check-ins/{check_in_id}/stats` (authenticated)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8000/check-ins/42/stats"
+```
+
+Returns check-in statistics (likes_count, comments_count, views_count).
+
+#### Get Check-in Comments
+
+GET `/check-ins/{check_in_id}/comments?limit=20&offset=0` (authenticated)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8000/check-ins/42/comments"
+```
+
+Returns paginated list of comments for a check-in.
+
+#### Add Check-in Comment
+
+POST `/check-ins/{check_in_id}/comments` (authenticated)
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Great place! Love the coffee here."}' \
+  "http://localhost:8000/check-ins/42/comments"
+```
+
+Add a comment to a check-in.
+
+#### Delete Check-in Comment
+
+DELETE `/check-ins/{check_in_id}/comments/{comment_id}` (authenticated)
+
+```bash
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/check-ins/42/comments/1"
+```
+
+Delete a comment (only comment author or check-in author can delete).
+
+#### Get Check-in Likes
+
+GET `/check-ins/{check_in_id}/likes?limit=20&offset=0` (authenticated)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8000/check-ins/42/likes"
+```
+
+Returns paginated list of users who liked the check-in.
+
+#### Like Check-in
+
+POST `/check-ins/{check_in_id}/like` (authenticated)
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/check-ins/42/like"
+```
+
+Like a check-in.
+
+#### Unlike Check-in
+
+DELETE `/check-ins/{check_in_id}/like` (authenticated)
+
+```bash
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/check-ins/42/like"
+```
+
+Unlike a check-in.
+
 ## Development
 
 ### Database Migrations
