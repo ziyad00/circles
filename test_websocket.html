@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Circles WebSocket Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .panel {
+            border: 1px solid #ccc;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .log {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 3px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .status {
+            padding: 5px 10px;
+            border-radius: 3px;
+            margin: 5px 0;
+        }
+        .status.connected { background: #d4edda; color: #155724; }
+        .status.disconnected { background: #f8d7da; color: #721c24; }
+        .status.connecting { background: #fff3cd; color: #856404; }
+        button {
+            padding: 8px 16px;
+            margin: 5px;
+            border: none;
+            border-radius: 3px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        input, textarea {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Circles WebSocket Test</h1>
+    
+    <div class="container">
+        <div class="panel">
+            <h3>Connection Setup</h3>
+            <div>
+                <label>JWT Token:</label>
+                <input type="text" id="token" placeholder="Enter your JWT token">
+            </div>
+            <div>
+                <label>User ID:</label>
+                <input type="number" id="userId" placeholder="Enter your user ID">
+            </div>
+            <div>
+                <label>Thread ID (for DM):</label>
+                <input type="number" id="threadId" placeholder="Enter thread ID (optional)">
+            </div>
+            <button onclick="connect()">Connect</button>
+            <button onclick="disconnect()">Disconnect</button>
+            <button onclick="clearLog()">Clear Log</button>
+        </div>
+
+        <div class="panel">
+            <h3>Connection Status</h3>
+            <div id="userStatus" class="status disconnected">User Connection: Disconnected</div>
+            <div id="threadStatus" class="status disconnected">Thread Connection: Disconnected</div>
+            <div id="userConnections">User Connections: 0</div>
+            <div id="threadConnections">Thread Connections: 0</div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="panel">
+            <h3>Send Messages</h3>
+            <div>
+                <label>Message:</label>
+                <textarea id="messageText" placeholder="Enter message text"></textarea>
+            </div>
+            <button onclick="sendMessage()" id="sendBtn" disabled>Send Message</button>
+            <button onclick="sendTyping(true)">Start Typing</button>
+            <button onclick="sendTyping(false)">Stop Typing</button>
+            <button onclick="markAsRead()">Mark as Read</button>
+            <button onclick="sendReaction()">Send Reaction</button>
+        </div>
+
+        <div class="panel">
+            <h3>Message Log</h3>
+            <div id="messageLog" class="log"></div>
+        </div>
+    </div>
+
+    <script>
+        let userWs = null;
+        let threadWs = null;
+        let token = '';
+        let userId = null;
+        let threadId = null;
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('messageLog');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.style.color = type === 'error' ? 'red' : type === 'success' ? 'green' : 'black';
+            logEntry.textContent = `[${timestamp}] ${message}`;
+            logDiv.appendChild(logEntry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('messageLog').innerHTML = '';
+        }
+
+        function updateStatus(elementId, status, text) {
+            const element = document.getElementById(elementId);
+            element.className = `status ${status}`;
+            element.textContent = text;
+        }
+
+        function connect() {
+            token = document.getElementById('token').value.trim();
+            userId = parseInt(document.getElementById('userId').value);
+            threadId = parseInt(document.getElementById('threadId').value) || null;
+
+            if (!token || !userId) {
+                log('Please enter both token and user ID', 'error');
+                return;
+            }
+
+            // Connect to user notifications
+            connectToUser();
+
+            // Connect to thread if provided
+            if (threadId) {
+                connectToThread();
+            }
+        }
+
+        function connectToUser() {
+            if (userWs) {
+                userWs.close();
+            }
+
+            const wsUrl = `ws://localhost:8000/ws/user/${userId}?token=${token}`;
+            userWs = new WebSocket(wsUrl);
+
+            userWs.onopen = () => {
+                log('Connected to user notifications', 'success');
+                updateStatus('userStatus', 'connected', 'User Connection: Connected');
+            };
+
+            userWs.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                log(`User notification: ${JSON.stringify(data)}`);
+                handleMessage(data, 'user');
+            };
+
+            userWs.onclose = () => {
+                log('User connection closed', 'error');
+                updateStatus('userStatus', 'disconnected', 'User Connection: Disconnected');
+            };
+
+            userWs.onerror = (error) => {
+                log(`User connection error: ${error}`, 'error');
+            };
+        }
+
+        function connectToThread() {
+            if (threadWs) {
+                threadWs.close();
+            }
+
+            const wsUrl = `ws://localhost:8000/ws/dms/${threadId}?token=${token}`;
+            threadWs = new WebSocket(wsUrl);
+
+            threadWs.onopen = () => {
+                log(`Connected to thread ${threadId}`, 'success');
+                updateStatus('threadStatus', 'connected', `Thread Connection: Connected (${threadId})`);
+                document.getElementById('sendBtn').disabled = false;
+            };
+
+            threadWs.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                log(`Thread message: ${JSON.stringify(data)}`);
+                handleMessage(data, threadId);
+            };
+
+            threadWs.onclose = () => {
+                log(`Thread ${threadId} connection closed`, 'error');
+                updateStatus('threadStatus', 'disconnected', 'Thread Connection: Disconnected');
+                document.getElementById('sendBtn').disabled = true;
+            };
+
+            threadWs.onerror = (error) => {
+                log(`Thread connection error: ${error}`, 'error');
+            };
+        }
+
+        function handleMessage(data, source) {
+            const { type } = data;
+
+            switch (type) {
+                case 'connection_established':
+                    log(`Connection established for ${source}`, 'success');
+                    break;
+                case 'thread_info':
+                    log(`Thread info: ${JSON.stringify(data.participants)}`);
+                    break;
+                case 'message':
+                    log(`New message from ${data.message.sender_info?.name || 'Unknown'}: ${data.message.text}`);
+                    break;
+                case 'typing':
+                    log(`User ${data.user_id} is ${data.typing ? 'typing' : 'not typing'}`);
+                    break;
+                case 'presence':
+                    log(`User ${data.user_id} is ${data.online ? 'online' : 'offline'}`);
+                    break;
+                case 'notification':
+                    log(`Notification: ${data.data.message}`);
+                    break;
+                case 'error':
+                    log(`Error: ${data.detail}`, 'error');
+                    break;
+                default:
+                    log(`Unknown message type: ${type}`);
+            }
+        }
+
+        function disconnect() {
+            if (userWs) {
+                userWs.close();
+                userWs = null;
+            }
+            if (threadWs) {
+                threadWs.close();
+                threadWs = null;
+            }
+            document.getElementById('sendBtn').disabled = true;
+        }
+
+        function sendMessage() {
+            const text = document.getElementById('messageText').value.trim();
+            if (!text || !threadWs) {
+                log('Please enter a message and ensure thread connection is active', 'error');
+                return;
+            }
+
+            const message = {
+                type: 'message',
+                text: text
+            };
+
+            threadWs.send(JSON.stringify(message));
+            document.getElementById('messageText').value = '';
+            log(`Sent message: ${text}`);
+        }
+
+        function sendTyping(typing) {
+            if (!threadWs) {
+                log('No thread connection active', 'error');
+                return;
+            }
+
+            const message = {
+                type: 'typing',
+                typing: typing
+            };
+
+            threadWs.send(JSON.stringify(message));
+            log(`Sent typing indicator: ${typing}`);
+        }
+
+        function markAsRead() {
+            if (!threadWs) {
+                log('No thread connection active', 'error');
+                return;
+            }
+
+            const message = {
+                type: 'mark_read'
+            };
+
+            threadWs.send(JSON.stringify(message));
+            log('Sent mark as read');
+        }
+
+        function sendReaction() {
+            if (!threadWs) {
+                log('No thread connection active', 'error');
+                return;
+            }
+
+            const messageId = prompt('Enter message ID:');
+            if (!messageId) return;
+
+            const message = {
+                type: 'reaction',
+                message_id: parseInt(messageId),
+                reaction: '❤️'
+            };
+
+            threadWs.send(JSON.stringify(message));
+            log(`Sent reaction to message ${messageId}`);
+        }
+
+        // Auto-ping to keep connections alive
+        setInterval(() => {
+            if (userWs && userWs.readyState === WebSocket.OPEN) {
+                userWs.send(JSON.stringify({ type: 'ping' }));
+            }
+            if (threadWs && threadWs.readyState === WebSocket.OPEN) {
+                threadWs.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000);
+
+        // Handle page unload
+        window.addEventListener('beforeunload', () => {
+            disconnect();
+        });
+    </script>
+</body>
+</html>

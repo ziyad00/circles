@@ -1,12 +1,14 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
-from typing import Dict, Set, Tuple
+from typing import Dict, Set, Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 from datetime import datetime, timezone, timedelta
+import asyncio
+import json
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
-from ..models import DMThread, DMParticipantState, DMMessage
+from ..models import DMThread, DMParticipantState, DMMessage, User
 
 
 router = APIRouter()
@@ -14,33 +16,152 @@ router = APIRouter()
 
 class ConnectionManager:
     def __init__(self) -> None:
-        # (thread_id) -> set of (user_id, websocket)
-        self.active: Dict[int, Set[Tuple[int, WebSocket]]] = {}
+        # (thread_id) -> set of (user_id, websocket, last_ping)
+        self.active: Dict[int, Set[Tuple[int, WebSocket, datetime]]] = {}
+        # (user_id) -> set of (thread_id, websocket)
+        self.user_connections: Dict[int, Set[Tuple[int, WebSocket]]] = {}
+        # Background task for cleanup
+        self.cleanup_task: Optional[asyncio.Task] = None
 
     async def connect(self, thread_id: int, user_id: int, websocket: WebSocket) -> None:
         await websocket.accept()
-        self.active.setdefault(thread_id, set()).add((user_id, websocket))
+        now = datetime.now(timezone.utc)
+
+        # Add to thread connections
+        self.active.setdefault(thread_id, set()).add((user_id, websocket, now))
+
+        # Add to user connections
+        self.user_connections.setdefault(
+            user_id, set()).add((thread_id, websocket))
+
+        # Start cleanup task if not running
+        if not self.cleanup_task or self.cleanup_task.done():
+            self.cleanup_task = asyncio.create_task(
+                self._cleanup_stale_connections())
 
     def disconnect(self, thread_id: int, user_id: int, websocket: WebSocket) -> None:
+        # Remove from thread connections
         conns = self.active.get(thread_id)
-        if not conns:
-            return
-        try:
-            conns.remove((user_id, websocket))
-        except KeyError:
-            pass
-        if not conns:
-            self.active.pop(thread_id, None)
+        if conns:
+            conns.discard((user_id, websocket, datetime.now(timezone.utc)))
+            if not conns:
+                self.active.pop(thread_id, None)
+
+        # Remove from user connections
+        user_conns = self.user_connections.get(user_id)
+        if user_conns:
+            user_conns.discard((thread_id, websocket))
+            if not user_conns:
+                self.user_connections.pop(user_id, None)
 
     async def broadcast(self, thread_id: int, sender_id: int, payload: dict) -> None:
-        for uid, ws in list(self.active.get(thread_id, set())):
+        """Broadcast message to all participants in a thread except sender"""
+        for uid, ws, _ in list(self.active.get(thread_id, set())):
             if uid == sender_id:
                 continue
             try:
                 await ws.send_json(payload)
             except Exception:
-                # Ignore send errors
+                # Remove stale connection
+                self.disconnect(thread_id, uid, ws)
+
+    async def send_to_user(self, user_id: int, payload: dict) -> None:
+        """Send message to all connections of a specific user"""
+        user_conns = self.user_connections.get(user_id, set())
+        for thread_id, ws in list(user_conns):
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                # Remove stale connection
+                self.disconnect(thread_id, user_id, ws)
+
+    async def broadcast_presence(self, thread_id: int, user_id: int, online: bool) -> None:
+        """Broadcast presence update to thread participants"""
+        payload = {
+            "type": "presence",
+            "user_id": user_id,
+            "online": online,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await self.broadcast(thread_id, user_id, payload)
+
+    async def broadcast_typing(self, thread_id: int, user_id: int, typing: bool) -> None:
+        """Broadcast typing indicator"""
+        payload = {
+            "type": "typing",
+            "user_id": user_id,
+            "typing": typing,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await self.broadcast(thread_id, user_id, payload)
+
+    async def broadcast_message(self, thread_id: int, message_data: dict) -> None:
+        """Broadcast new message to thread participants"""
+        payload = {
+            "type": "message",
+            "message": message_data,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        # Send to all participants including sender (for echo)
+        for uid, ws, _ in list(self.active.get(thread_id, set())):
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                self.disconnect(thread_id, uid, ws)
+
+    async def broadcast_reaction(self, thread_id: int, message_id: int, user_id: int, reaction: str) -> None:
+        """Broadcast message reaction"""
+        payload = {
+            "type": "reaction",
+            "message_id": message_id,
+            "user_id": user_id,
+            "reaction": reaction,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await self.broadcast(thread_id, user_id, payload)
+
+    async def broadcast_read_receipt(self, thread_id: int, user_id: int, last_read_at: datetime) -> None:
+        """Broadcast read receipt"""
+        payload = {
+            "type": "read_receipt",
+            "user_id": user_id,
+            "last_read_at": last_read_at.isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await self.broadcast(thread_id, user_id, payload)
+
+    async def _cleanup_stale_connections(self) -> None:
+        """Background task to clean up stale connections"""
+        while True:
+            try:
+                await asyncio.sleep(30)  # Check every 30 seconds
+                now = datetime.now(timezone.utc)
+                stale_connections = []
+
+                for thread_id, connections in self.active.items():
+                    for user_id, ws, last_ping in connections:
+                        # Consider connection stale if no ping for 2 minutes
+                        if (now - last_ping) > timedelta(minutes=2):
+                            stale_connections.append((thread_id, user_id, ws))
+
+                for thread_id, user_id, ws in stale_connections:
+                    self.disconnect(thread_id, user_id, ws)
+                    try:
+                        await ws.close(code=1000)
+                    except Exception:
+                        pass
+
+            except Exception:
+                # Continue cleanup even if there are errors
                 pass
+
+    def update_ping(self, thread_id: int, user_id: int, websocket: WebSocket) -> None:
+        """Update last ping time for a connection"""
+        conns = self.active.get(thread_id)
+        if conns:
+            # Remove old entry and add new one with updated timestamp
+            conns.discard((user_id, websocket, datetime.now(timezone.utc)))
+            conns.add((user_id, websocket, datetime.now(timezone.utc)))
 
 
 manager = ConnectionManager()
@@ -58,86 +179,25 @@ async def _authenticate(websocket: WebSocket) -> int | None:
         return None
 
 
-@router.websocket("/ws/dms/{thread_id}")
-async def dm_ws(websocket: WebSocket, thread_id: int, db: AsyncSession = Depends(get_db)):
-    user_id = await _authenticate(websocket)
-    if not user_id:
-        await websocket.close(code=4401)
-        return
-    # authorize participant and accepted status
-    res = await db.execute(select(DMThread).where(DMThread.id == thread_id))
-    thread = res.scalars().first()
-    if not thread or user_id not in (thread.user_a_id, thread.user_b_id) or thread.status != "accepted":
-        await websocket.close(code=4403)
-        return
-
-    await manager.connect(thread_id, user_id, websocket)
-    try:
-        # announce presence online
-        await manager.broadcast(thread_id, user_id, {"type": "presence", "user_id": user_id, "online": True})
-        while True:
-            data = await websocket.receive_json()
-            msg_type = data.get("type")
-            if msg_type == "typing":
-                typing = bool(data.get("typing", False))
-                # update typing_until ~5s
-                state = await _get_or_create_state(db, thread_id, user_id)
-                state.typing_until = (datetime.now(timezone.utc) + timedelta(seconds=5)) if typing else None
-                await db.commit()
-                await manager.broadcast(thread_id, user_id, {"type": "typing", "user_id": user_id, "typing": typing})
-            elif msg_type == "message":
-                text = (data.get("text") or "").strip()
-                if not text:
-                    await websocket.send_json({"type": "error", "detail": "Empty message"})
-                    continue
-                # prevent sending if the other participant blocked me
-                other_id = thread.user_a_id if user_id == thread.user_b_id else thread.user_b_id
-                other_state = await _get_or_create_state(db, thread_id, other_id)
-                if other_state and getattr(other_state, "blocked", False):
-                    await websocket.send_json({"type": "error", "detail": "You are blocked by this user"})
-                    continue
-                msg = DMMessage(thread_id=thread_id, sender_id=user_id, text=text)
-                db.add(msg)
-                # bump thread updated_at
-                thread.updated_at = datetime.now(timezone.utc)
-                await db.commit()
-                await db.refresh(msg)
-                payload = {
-                    "type": "message",
-                    "message": {
-                        "id": msg.id,
-                        "thread_id": msg.thread_id,
-                        "sender_id": msg.sender_id,
-                        "text": msg.text,
-                        "created_at": msg.created_at.isoformat(),
-                    },
-                }
-                # echo to sender and broadcast to other
-                try:
-                    await websocket.send_json(payload)
-                except Exception:
-                    pass
-                await manager.broadcast(thread_id, user_id, payload)
-            elif msg_type == "mark_read":
-                state = await _get_or_create_state(db, thread_id, user_id)
-                state.last_read_at = datetime.now(timezone.utc)
-                await db.commit()
-                await manager.broadcast(thread_id, user_id, {"type": "read", "user_id": user_id, "last_read_at": state.last_read_at.isoformat()})
-            elif msg_type == "ping":
-                await websocket.send_json({"type": "pong"})
-            else:
-                # ignore unknown
-                pass
-    except WebSocketDisconnect:
-        pass
-    finally:
-        manager.disconnect(thread_id, user_id, websocket)
-        await manager.broadcast(thread_id, user_id, {"type": "presence", "user_id": user_id, "online": False})
+async def _get_user_info(db: AsyncSession, user_id: int) -> dict:
+    """Get user information for presence updates"""
+    res = await db.execute(select(User).where(User.id == user_id))
+    user = res.scalar_one_or_none()
+    if user:
+        return {
+            "id": user.id,
+            "name": user.name or user.email,
+            "avatar_url": user.avatar_url
+        }
+    return {"id": user_id, "name": "Unknown", "avatar_url": None}
 
 
 async def _get_or_create_state(db: AsyncSession, thread_id: int, user_id: int) -> DMParticipantState:
-    res = await db.execute(select(DMParticipantState).where(DMParticipantState.thread_id == thread_id, DMParticipantState.user_id == user_id))
-    state = res.scalars().first()
+    res = await db.execute(select(DMParticipantState).where(
+        DMParticipantState.thread_id == thread_id,
+        DMParticipantState.user_id == user_id
+    ))
+    state = res.scalar_one_or_none()
     if not state:
         state = DMParticipantState(thread_id=thread_id, user_id=user_id)
         db.add(state)
@@ -146,3 +206,196 @@ async def _get_or_create_state(db: AsyncSession, thread_id: int, user_id: int) -
     return state
 
 
+@router.websocket("/ws/dms/{thread_id}")
+async def dm_ws(websocket: WebSocket, thread_id: int, db: AsyncSession = Depends(get_db)):
+    user_id = await _authenticate(websocket)
+    if not user_id:
+        await websocket.close(code=4401)
+        return
+
+    # Authorize participant and accepted status
+    res = await db.execute(select(DMThread).where(DMThread.id == thread_id))
+    thread = res.scalar_one_or_none()
+    if not thread or user_id not in (thread.user_a_id, thread.user_b_id) or thread.status != "accepted":
+        await websocket.close(code=4403)
+        return
+
+    await manager.connect(thread_id, user_id, websocket)
+
+    try:
+        # Get user info for presence
+        user_info = await _get_user_info(db, user_id)
+
+        # Announce presence online
+        await manager.broadcast_presence(thread_id, user_id, True)
+
+        # Send connection confirmation
+        await websocket.send_json({
+            "type": "connection_established",
+            "thread_id": thread_id,
+            "user_id": user_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+
+        # Send current thread participants info
+        other_user_id = thread.user_a_id if user_id == thread.user_b_id else thread.user_b_id
+        other_user_info = await _get_user_info(db, other_user_id)
+
+        # Check if other user is online
+        other_online = any(uid == other_user_id for uid, _,
+                           _ in manager.active.get(thread_id, set()))
+
+        await websocket.send_json({
+            "type": "thread_info",
+            "participants": [user_info, other_user_info],
+            "other_user_online": other_online,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get("type")
+
+            if msg_type == "ping":
+                manager.update_ping(thread_id, user_id, websocket)
+                await websocket.send_json({
+                    "type": "pong",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+
+            elif msg_type == "typing":
+                typing = bool(data.get("typing", False))
+                # Update typing_until ~5s
+                state = await _get_or_create_state(db, thread_id, user_id)
+                state.typing_until = (datetime.now(
+                    timezone.utc) + timedelta(seconds=5)) if typing else None
+                await db.commit()
+                await manager.broadcast_typing(thread_id, user_id, typing)
+
+            elif msg_type == "message":
+                text = (data.get("text") or "").strip()
+                if not text:
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": "Empty message",
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                    continue
+
+                # Prevent sending if the other participant blocked me
+                other_id = thread.user_a_id if user_id == thread.user_b_id else thread.user_b_id
+                other_state = await _get_or_create_state(db, thread_id, other_id)
+                if other_state and getattr(other_state, "blocked", False):
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": "You are blocked by this user",
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                    continue
+
+                # Create message
+                msg = DMMessage(thread_id=thread_id,
+                                sender_id=user_id, text=text)
+                db.add(msg)
+
+                # Bump thread updated_at
+                thread.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                await db.refresh(msg)
+
+                # Prepare message data
+                message_data = {
+                    "id": msg.id,
+                    "thread_id": msg.thread_id,
+                    "sender_id": msg.sender_id,
+                    "text": msg.text,
+                    "created_at": msg.created_at.isoformat(),
+                    "sender_info": user_info
+                }
+
+                # Broadcast message
+                await manager.broadcast_message(thread_id, message_data)
+
+            elif msg_type == "mark_read":
+                state = await _get_or_create_state(db, thread_id, user_id)
+                state.last_read_at = datetime.now(timezone.utc)
+                await db.commit()
+                await manager.broadcast_read_receipt(thread_id, user_id, state.last_read_at)
+
+            elif msg_type == "reaction":
+                message_id = data.get("message_id")
+                reaction = data.get("reaction", "❤️")
+
+                if not message_id:
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": "Message ID required",
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                    continue
+
+                # Here you would add the reaction to the database
+                # For now, just broadcast the reaction
+                await manager.broadcast_reaction(thread_id, message_id, user_id, reaction)
+
+            elif msg_type == "typing_stop":
+                # Stop typing indicator
+                state = await _get_or_create_state(db, thread_id, user_id)
+                state.typing_until = None
+                await db.commit()
+                await manager.broadcast_typing(thread_id, user_id, False)
+
+            else:
+                # Ignore unknown message types
+                await websocket.send_json({
+                    "type": "error",
+                    "detail": f"Unknown message type: {msg_type}",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        # Log error and close connection
+        print(f"WebSocket error: {e}")
+    finally:
+        manager.disconnect(thread_id, user_id, websocket)
+        await manager.broadcast_presence(thread_id, user_id, False)
+
+
+@router.websocket("/ws/user/{user_id}")
+async def user_ws(websocket: WebSocket, user_id: int, db: AsyncSession = Depends(get_db)):
+    """WebSocket connection for user-wide notifications and updates"""
+    authenticated_user_id = await _authenticate(websocket)
+    if not authenticated_user_id or authenticated_user_id != user_id:
+        await websocket.close(code=4401)
+        return
+
+    # Use thread_id 0 for user-wide connections
+    await manager.connect(0, user_id, websocket)
+
+    try:
+        await websocket.send_json({
+            "type": "connection_established",
+            "user_id": user_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get("type")
+
+            if msg_type == "ping":
+                manager.update_ping(0, user_id, websocket)
+                await websocket.send_json({
+                    "type": "pong",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+            else:
+                # Handle user-specific messages here
+                pass
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        manager.disconnect(0, user_id, websocket)

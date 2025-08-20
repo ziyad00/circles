@@ -657,6 +657,308 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" \
 
 Unlike a check-in.
 
+## WebSocket Real-time Features
+
+The Circles app provides comprehensive real-time features via WebSocket connections for instant messaging, notifications, and live updates.
+
+### WebSocket Endpoints
+
+#### DM Thread WebSocket
+
+**Connect:** `ws://localhost:8000/ws/dms/{thread_id}?token={jwt_token}`
+
+Real-time messaging for direct message threads with the following features:
+
+- **Authentication**: JWT token required in query parameter
+- **Authorization**: Only thread participants can connect
+- **Message Types**: Text messages, typing indicators, read receipts, reactions
+- **Presence**: Online/offline status updates
+- **Auto-reconnection**: Built-in reconnection with exponential backoff
+
+#### User Notifications WebSocket
+
+**Connect:** `ws://localhost:8000/ws/user/{user_id}?token={jwt_token}`
+
+User-wide notifications and updates:
+
+- **Global Notifications**: Follow requests, system messages, activity updates
+- **Real-time Updates**: Instant notification delivery
+- **Multi-device Support**: Multiple connections per user
+
+### WebSocket Message Types
+
+#### Client to Server Messages
+
+```javascript
+// Send a message
+{
+  "type": "message",
+  "text": "Hello, world!"
+}
+
+// Send typing indicator
+{
+  "type": "typing",
+  "typing": true
+}
+
+// Mark messages as read
+{
+  "type": "mark_read"
+}
+
+// Send message reaction
+{
+  "type": "reaction",
+  "message_id": 123,
+  "reaction": "❤️"
+}
+
+// Keep connection alive
+{
+  "type": "ping"
+}
+```
+
+#### Server to Client Messages
+
+```javascript
+// Connection established
+{
+  "type": "connection_established",
+  "thread_id": 456,
+  "user_id": 123,
+  "timestamp": "2025-08-20T11:44:58.094385Z"
+}
+
+// Thread information
+{
+  "type": "thread_info",
+  "participants": [
+    {
+      "id": 123,
+      "name": "John Doe",
+      "avatar_url": "https://example.com/avatar.jpg"
+    }
+  ],
+  "other_user_online": true,
+  "timestamp": "2025-08-20T11:44:58.094385Z"
+}
+
+// New message
+{
+  "type": "message",
+  "message": {
+    "id": 789,
+    "thread_id": 456,
+    "sender_id": 123,
+    "text": "Hello, world!",
+    "created_at": "2025-08-20T11:44:58.094385Z",
+    "sender_info": {
+      "id": 123,
+      "name": "John Doe",
+      "avatar_url": "https://example.com/avatar.jpg"
+    }
+  },
+  "timestamp": "2025-08-20T11:44:58.094385Z"
+}
+
+// Typing indicator
+{
+  "type": "typing",
+  "user_id": 123,
+  "typing": true,
+  "timestamp": "2025-08-20T11:44:58.094385Z"
+}
+
+// Presence update
+{
+  "type": "presence",
+  "user_id": 123,
+  "online": true,
+  "timestamp": "2025-08-20T11:44:58.094385Z"
+}
+
+// Read receipt
+{
+  "type": "read_receipt",
+  "user_id": 123,
+  "last_read_at": "2025-08-20T11:44:58.094385Z",
+  "timestamp": "2025-08-20T11:44:58.094385Z"
+}
+
+// Message reaction
+{
+  "type": "reaction",
+  "message_id": 789,
+  "user_id": 123,
+  "reaction": "❤️",
+  "timestamp": "2025-08-20T11:44:58.094385Z"
+}
+
+// Notification
+{
+  "type": "notification",
+  "notification_type": "new_follower",
+  "data": {
+    "follower": {
+      "id": 456,
+      "name": "Jane Smith"
+    },
+    "message": "Jane Smith started following you"
+  },
+  "timestamp": "2025-08-20T11:44:58.094385Z"
+}
+
+// Error message
+{
+  "type": "error",
+  "detail": "Empty message",
+  "timestamp": "2025-08-20T11:44:58.094385Z"
+}
+
+// Pong response
+{
+  "type": "pong",
+  "timestamp": "2025-08-20T11:44:58.094385Z"
+}
+```
+
+### Real-time Features
+
+#### 1. **Instant Messaging**
+
+- Real-time message delivery
+- Message echo to sender
+- Message persistence in database
+- Support for text messages
+
+#### 2. **Typing Indicators**
+
+- Real-time typing status
+- 5-second timeout for typing indicators
+- Visual feedback for users
+
+#### 3. **Presence System**
+
+- Online/offline status
+- Last seen tracking
+- Real-time presence updates
+- Multi-device presence support
+
+#### 4. **Read Receipts**
+
+- Message read status
+- Last read timestamp
+- Real-time read receipt delivery
+
+#### 5. **Message Reactions**
+
+- Heart reactions (❤️)
+- Real-time reaction updates
+- Reaction persistence
+
+#### 6. **Notifications**
+
+- Follow notifications
+- Check-in notifications
+- Like notifications
+- Comment notifications
+- DM request notifications
+- System notifications
+
+#### 7. **Connection Management**
+
+- Automatic reconnection
+- Exponential backoff
+- Connection health monitoring
+- Stale connection cleanup
+- Ping/pong heartbeat
+
+### WebSocket Client Example
+
+See `docs/websocket_client_example.js` for a complete JavaScript client implementation.
+
+#### Basic Usage:
+
+```javascript
+const client = new CirclesWebSocketClient();
+
+// Initialize with token and user ID
+client.init("your-jwt-token", 123);
+
+// Connect to a DM thread
+client.connectToThread(456);
+
+// Register event handlers
+client.on("message", ({ source, data }) => {
+  console.log(`New message:`, data.message);
+});
+
+client.on("typing", ({ source, data }) => {
+  console.log(`User ${data.user_id} is typing`);
+});
+
+client.on("presence", ({ source, data }) => {
+  console.log(`User ${data.user_id} is ${data.online ? "online" : "offline"}`);
+});
+
+// Send a message
+client.sendMessage(456, "Hello, world!");
+
+// Send typing indicator
+client.sendTyping(456, true);
+
+// Mark as read
+client.markAsRead(456);
+```
+
+### WebSocket Service Integration
+
+The `WebSocketService` provides methods for sending notifications and updates from the backend:
+
+```python
+from app.services.websocket_service import WebSocketService
+
+# Send follow notification
+await WebSocketService.send_follow_notification(user_id, follower_data)
+
+# Send check-in notification
+await WebSocketService.send_checkin_notification(user_id, checkin_data)
+
+# Send like notification
+await WebSocketService.send_like_notification(user_id, like_data)
+
+# Send system notification
+await WebSocketService.send_system_notification(user_id, "Welcome!", "Welcome to Circles!")
+
+# Check if user is online
+is_online = WebSocketService.is_user_online(user_id)
+```
+
+### Connection Security
+
+- **Authentication**: JWT token required for all connections
+- **Authorization**: Users can only connect to their own threads
+- **Rate Limiting**: Built-in protection against spam
+- **Input Validation**: All messages validated before processing
+- **Error Handling**: Graceful error handling and recovery
+
+### Performance Features
+
+- **Connection Pooling**: Efficient connection management
+- **Background Cleanup**: Automatic stale connection removal
+- **Memory Management**: Proper cleanup of disconnected users
+- **Scalability**: Designed for horizontal scaling
+- **Heartbeat**: Ping/pong to detect connection health
+
+### Browser Support
+
+- Modern browsers with WebSocket support
+- Automatic reconnection on connection loss
+- Fallback handling for unsupported features
+- Progressive enhancement approach
+
 ## Development
 
 ### Database Migrations
