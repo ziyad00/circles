@@ -16,6 +16,9 @@ class UserCreate(UserBase):
 class UserResponse(UserBase):
     id: int
     is_verified: bool
+    name: Optional[str] = None
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
@@ -317,6 +320,53 @@ class PaginatedFollowing(BaseModel):
 class HeartResponse(BaseModel):
     liked: bool
     heart_count: int
+
+
+# Users / Profiles
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=100)
+    bio: Optional[str] = Field(None, max_length=500)
+    # avatar uploaded via multipart; url is server-filled
+
+
+class PublicUserResponse(BaseModel):
+    id: int
+    email: EmailStr
+    name: Optional[str] = None
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InterestCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=50)
+
+
+class InterestResponse(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SupportTicketCreate(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=200)
+    body: str = Field(..., min_length=1, max_length=5000)
+
+
+class SupportTicketResponse(BaseModel):
+    id: int
+    user_id: int
+    subject: str
+    body: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Check-in Collections

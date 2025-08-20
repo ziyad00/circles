@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 # Simple in-memory throttle store (email+ip → list of timestamps)
 _otp_request_log: dict[tuple[str, str], list[datetime]] = {}
+_otp_verify_log: dict[tuple[str, str], list[datetime]] = {}
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -74,12 +75,31 @@ async def request_otp(
 @router.post("/verify-otp", response_model=AuthResponse)
 async def verify_otp(
     request: OTPVerify,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    http_request: Request = None,
 ):
     """
     Verify OTP code and authenticate user.
     """
     try:
+        # Throttle by email + IP (same limits as request-otp)
+        ip = http_request.client.host if http_request and http_request.client else "unknown"
+        key = (request.email.lower(), ip)
+        now = datetime.now(timezone.utc)
+        window_start = now - timedelta(minutes=1)
+        entries = _otp_verify_log.get(key, [])
+        entries = [ts for ts in entries if ts >= window_start]
+        if len(entries) >= settings.otp_requests_per_minute:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Too many OTP verifications. Please try again later.")
+        burst_window_start = now - timedelta(minutes=5)
+        burst_entries = [ts for ts in entries if ts >= burst_window_start]
+        if len(burst_entries) >= settings.otp_requests_burst:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Too many OTP verifications. Please slow down.")
+        entries.append(now)
+        _otp_verify_log[key] = entries
+
         # Verify OTP
         is_valid, user = await OTPService.verify_otp(db, request.email, request.otp_code)
 
