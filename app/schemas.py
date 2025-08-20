@@ -369,6 +369,13 @@ class SupportTicketResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PaginatedMedia(BaseModel):
+    items: list[str]
+    total: int
+    limit: int
+    offset: int
+
+
 # Check-in Collections
 
 

@@ -5,7 +5,7 @@ from sqlalchemy import select, func
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
-from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest
+from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, CheckInCollection
 from ..schemas import (
     UserUpdate,
     PublicUserResponse,
@@ -13,6 +13,7 @@ from ..schemas import (
     InterestResponse,
     PaginatedCheckIns,
     CheckInResponse,
+    PaginatedMedia,
 )
 
 
@@ -127,7 +128,7 @@ async def list_user_checkins(
     return PaginatedCheckIns(items=result, total=total, limit=limit, offset=offset)
 
 
-@router.get("/{user_id}/media", response_model=list[str])
+@router.get("/{user_id}/media", response_model=PaginatedMedia)
 async def list_user_media(
     user_id: int,
     current_user: User = Depends(JWTService.get_current_user),
@@ -138,6 +139,7 @@ async def list_user_media(
     # collect review photos and check-in photos with visibility checks
     from ..utils import can_view_checkin
     # review photos: always public for now (attached to reviews)
+    total_photos = (await db.execute(select(func.count(Photo.id)).where(Photo.user_id == user_id, Photo.review_id.is_not(None)))).scalar_one()
     res_photos = await db.execute(
         select(Photo.url).where(Photo.user_id == user_id, Photo.review_id.is_not(None)).order_by(Photo.created_at.desc()).offset(offset).limit(limit)
     )
@@ -159,7 +161,30 @@ async def list_user_media(
                 urls.append(cip.url)
                 if len(urls) >= limit:
                     break
-    return urls[:limit]
+    total = total_photos  # approximate; not counting CI photos separately here
+    items = urls[:limit]
+    return PaginatedMedia(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/{user_id}/collections", response_model=list[dict])
+async def list_user_collections(
+    user_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Owner gets all; others get public or friends (followers-only)
+    base = select(CheckInCollection).where(CheckInCollection.user_id == user_id)
+    if current_user.id != user_id:
+        from ..models import Follow
+        is_follower = (await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == user_id))).scalars().first() is not None
+        if is_follower:
+            base = base.where(CheckInCollection.visibility.in_(["public", "friends"]))
+        else:
+            base = base.where(CheckInCollection.visibility == "public")
+    res = await db.execute(base.order_by(CheckInCollection.created_at.desc()))
+    cols = res.scalars().all()
+    # return minimal fields
+    return [{"id": c.id, "name": c.name, "visibility": c.visibility, "created_at": c.created_at} for c in cols]
 
 
 @router.get("/me/interests", response_model=list[InterestResponse])
