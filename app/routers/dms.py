@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_, func, desc
@@ -27,6 +27,36 @@ from ..services.jwt_service import JWTService
 
 router = APIRouter(prefix="/dms", tags=["dms"])
 
+# Rate limiting storage
+# user_id -> list of timestamps
+_dm_request_log: dict[int, list[datetime]] = {}
+# user_id -> list of timestamps
+_dm_message_log: dict[int, list[datetime]] = {}
+
+# Rate limits
+DM_REQUEST_LIMIT = 5  # requests per minute
+DM_MESSAGE_LIMIT = 20  # messages per minute
+
+
+def _check_rate_limit(user_id: int, log_dict: dict, limit: int, window_minutes: int = 1):
+    """Check if user has exceeded rate limit"""
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(minutes=window_minutes)
+
+    if user_id not in log_dict:
+        log_dict[user_id] = []
+
+    # Remove old entries outside the window
+    log_dict[user_id] = [ts for ts in log_dict[user_id] if ts > window_start]
+
+    # Check if limit exceeded
+    if len(log_dict[user_id]) >= limit:
+        return False
+
+    # Add current request
+    log_dict[user_id].append(now)
+    return True
+
 
 def _normalize_pair(user_id: int, other_id: int) -> tuple[int, int]:
     return (user_id, other_id) if user_id < other_id else (other_id, user_id)
@@ -38,6 +68,13 @@ async def send_dm_request(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Rate limiting
+    if not _check_rate_limit(current_user.id, _dm_request_log, DM_REQUEST_LIMIT):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Maximum {DM_REQUEST_LIMIT} DM requests per minute."
+        )
+
     if payload.recipient_email == current_user.email:
         raise HTTPException(status_code=400, detail="Cannot message yourself")
     # find recipient
@@ -213,6 +250,13 @@ async def send_message(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Rate limiting
+    if not _check_rate_limit(current_user.id, _dm_message_log, DM_MESSAGE_LIMIT):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Maximum {DM_MESSAGE_LIMIT} messages per minute."
+        )
+
     res = await db.execute(select(DMThread).where(DMThread.id == thread_id))
     thread = res.scalars().first()
     if not thread:
