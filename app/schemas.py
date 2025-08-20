@@ -267,6 +267,80 @@ class CheckInPhotoResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CheckInCommentCreate(BaseModel):
+    content: str = Field(..., min_length=1, max_length=1000)
+
+
+class CheckInCommentResponse(BaseModel):
+    id: int
+    check_in_id: int
+    user_id: int
+    user_name: str
+    user_avatar_url: Optional[str] = None
+    content: str
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedCheckInComments(BaseModel):
+    items: list[CheckInCommentResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class CheckInLikeResponse(BaseModel):
+    id: int
+    check_in_id: int
+    user_id: int
+    user_name: str
+    user_avatar_url: Optional[str] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedCheckInLikes(BaseModel):
+    items: list[CheckInLikeResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class DetailedCheckInResponse(BaseModel):
+    id: int
+    user_id: int
+    user_name: str
+    user_avatar_url: Optional[str] = None
+    place_id: int
+    place_name: str
+    place_address: Optional[str] = None
+    place_city: Optional[str] = None
+    place_neighborhood: Optional[str] = None
+    place_categories: Optional[str] = None
+    place_rating: Optional[float] = None
+    note: Optional[str] = None
+    visibility: str
+    created_at: datetime
+    updated_at: datetime
+    # Enhanced details
+    photo_urls: list[str] = []
+    likes_count: int
+    comments_count: int
+    is_liked_by_current_user: Optional[bool] = None
+    can_edit: bool
+    can_delete: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CheckInStats(BaseModel):
+    check_in_id: int
+    likes_count: int
+    comments_count: int
+    views_count: int
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PaginatedPhotos(BaseModel):
     items: list[PhotoResponse]
     total: int
