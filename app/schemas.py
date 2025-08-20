@@ -563,3 +563,72 @@ class PrivacySettingsResponse(BaseModel):
     dm_privacy: str
     checkins_default_visibility: VisibilityEnum
     collections_default_visibility: VisibilityEnum
+
+
+class ActivityItem(BaseModel):
+    id: int
+    user_id: int
+    user_name: str
+    user_avatar_url: Optional[str] = None
+    activity_type: str  # "checkin", "like", "comment", "follow", "review", "collection"
+    activity_data: dict
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedActivityFeed(BaseModel):
+    items: list[ActivityItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class ActivityFeedFilters(BaseModel):
+    activity_types: Optional[list[str]] = Field(
+        None, description="Filter by activity types")
+    user_ids: Optional[list[int]] = Field(
+        None, description="Filter by specific users")
+    since: Optional[datetime] = Field(
+        None, description="Show activities since this time")
+    until: Optional[datetime] = Field(
+        None, description="Show activities until this time")
+    limit: int = Field(20, ge=1, le=100)
+    offset: int = Field(0, ge=0)
+
+
+# Onboarding Flow Schemas
+class PhoneOTPRequest(BaseModel):
+    phone: str = Field(..., description="Phone number with country code")
+
+
+class PhoneOTPVerify(BaseModel):
+    phone: str = Field(..., description="Phone number with country code")
+    otp_code: str = Field(..., min_length=6, max_length=6,
+                          description="6-digit OTP code")
+
+
+class OnboardingUserSetup(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=50,
+                            description="User's first name")
+    last_name: str = Field(..., min_length=1, max_length=50,
+                           description="User's last name")
+    username: str = Field(..., min_length=3, max_length=30,
+                          description="Unique username")
+    interests: list[str] = Field(..., min_items=1,
+                                 max_items=10, description="User interests")
+
+
+class OnboardingResponse(BaseModel):
+    message: str
+    user: dict
+    access_token: str
+    is_new_user: bool
+
+
+class UsernameCheckRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=30)
+
+
+class UsernameCheckResponse(BaseModel):
+    available: bool
+    message: str

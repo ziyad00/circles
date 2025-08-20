@@ -32,6 +32,7 @@ from ..schemas import (
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
 from ..utils import can_view_checkin
+from ..routers.activity import create_checkin_activity
 
 
 router = APIRouter(prefix="/places", tags=["places"])
@@ -927,6 +928,20 @@ async def create_check_in(
     db.add(check_in)
     await db.commit()
     await db.refresh(check_in)
+
+    # Create activity for the check-in
+    try:
+        await create_checkin_activity(
+            db=db,
+            user_id=current_user.id,
+            checkin_id=check_in.id,
+            place_name=place.name,
+            note=payload.note
+        )
+    except Exception as e:
+        # Log error but don't fail the check-in creation
+        print(f"Failed to create activity for check-in {check_in.id}: {e}")
+
     return check_in
 
 
