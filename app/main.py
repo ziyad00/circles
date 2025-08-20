@@ -100,8 +100,10 @@ async def root():
 
 @app.get("/metrics")
 async def metrics(request: Request):
-    token = request.headers.get("X-Metrics-Token")
-    if not settings.metrics_token or token != settings.metrics_token:
-        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+    # In dev/debug mode, expose metrics without auth
+    if not settings.debug:
+        token = request.headers.get("X-Metrics-Token")
+        if not settings.metrics_token or token != settings.metrics_token:
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
     data = generate_latest()
     return PlainTextResponse(content=data, media_type=CONTENT_TYPE_LATEST)
