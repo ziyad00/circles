@@ -15,6 +15,8 @@ A FastAPI application with OTP (One-Time Password) authentication and core Place
 - Multiple photos per Check-In
 - Check-In Collections with per-collection visibility (public/friends/private)
 - User privacy settings to control default check-in/collection visibility and DM privacy
+- User Profiles (name, bio, avatar) and Interests
+- Support tickets (create, list by user)
 - PostgreSQL + Alembic migrations
 
 ## Setup
@@ -67,6 +69,21 @@ The API will be available at `http://localhost:8000`
 - `POST /auth/verify-otp` - Verify OTP code and authenticate
 
 ### Health Check
+### Users
+
+- GET `/users/{user_id}` – Public profile
+- PUT `/users/me` – Update my profile (name, bio)
+- POST `/users/me/avatar` – Upload avatar (multipart)
+- GET `/users/{user_id}/check-ins?limit=&offset=` – User check-ins (visibility enforced)
+- GET `/users/{user_id}/media?limit=&offset=` – User media (review + check-in photos)
+- GET `/users/me/interests` – List my interests
+- POST `/users/me/interests` – Add an interest { name }
+- DELETE `/users/me/interests/{interest_id}` – Remove an interest
+
+### Support
+
+- POST `/support/tickets` – Create a support ticket { subject, body }
+- GET `/support/tickets` – List my tickets
 
 - `GET /health` - Health check endpoint
 
@@ -146,7 +163,7 @@ Payload example:
 
 ```json
 {
-  "dm_privacy": "followers",            // everyone | followers | no_one
+  "dm_privacy": "followers", // everyone | followers | no_one
   "checkins_default_visibility": "friends",
   "collections_default_visibility": "private"
 }
@@ -376,6 +393,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 Returns `{ "count": number }` of visible, non-expired check-ins (respects privacy settings).
 
 ### Check-in Delete
+
 ### Photos
 
 - Upload review photo: POST `/places/reviews/{review_id}/photos` (multipart)
@@ -475,6 +493,8 @@ circles/
 │   │   ├── dms.py        # Direct messages
 │   │   ├── collections.py# Check-in collections
 │   │   ├── settings.py   # Privacy settings
+│   │   ├── users.py      # Profiles, interests, user content
+│   │   └── support.py    # Support tickets
 │   │   └── health.py     # Health check endpoint
 │   └── services/
 │       ├── __init__.py
