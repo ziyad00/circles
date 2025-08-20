@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, text, or_
 
 from ..database import get_db
-from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto
+from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto, CheckInCollection, CheckInCollectionItem
 from ..schemas import (
     PlaceCreate,
     PlaceResponse,
@@ -909,7 +909,6 @@ async def create_check_in(
     if recent.scalars().first():
         raise HTTPException(
             status_code=429, detail="Please wait before checking in again to this place")
-
     # ensure place exists
     res = await db.execute(select(Place).where(Place.id == payload.place_id))
     place = res.scalar_one_or_none()
@@ -960,6 +959,138 @@ async def create_check_in(
         print(f"Failed to create activity for check-in {check_in.id}: {e}")
 
     return check_in
+
+
+@router.post("/check-ins/full", response_model=CheckInResponse)
+async def create_check_in_full(
+    place_id: int = Form(...),
+    latitude: float = Form(...),
+    longitude: float = Form(...),
+    note: str | None = Form(None),
+    visibility: str | None = Form(None),
+    # JSON array ("[1,2]") or comma-separated string
+    collection_ids: str | None = Form(None),
+    files: list[UploadFile] | None = File(None),
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Rate limit: prevent duplicate check-ins for same user/place within 5 minutes
+    five_min_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
+    recent = await db.execute(
+        select(CheckIn).where(
+            CheckIn.user_id == current_user.id,
+            CheckIn.place_id == place_id,
+            CheckIn.created_at >= five_min_ago,
+        )
+    )
+    if recent.scalars().first():
+        raise HTTPException(
+            status_code=429, detail="Please wait before checking in again to this place")
+
+    # ensure place exists
+    res = await db.execute(select(Place).where(Place.id == place_id))
+    place = res.scalar_one_or_none()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+
+    # Proximity enforcement (default 500m)
+    from ..config import settings as app_settings
+    if getattr(app_settings, "checkin_enforce_proximity", True):
+        if place.latitude is None or place.longitude is None:
+            raise HTTPException(
+                status_code=400, detail="Place coordinates missing; cannot verify proximity")
+        distance_km = haversine_distance(
+            latitude, longitude, place.latitude, place.longitude)
+        max_meters = getattr(app_settings, "checkin_max_distance_meters", 500)
+        if distance_km * 1000 > max_meters:
+            raise HTTPException(
+                status_code=400, detail=f"You must be within {max_meters} meters of {place.name} to check in")
+
+    # default visibility from user settings if not provided
+    default_vis = getattr(
+        current_user, "checkins_default_visibility", "public")
+    check_in = CheckIn(
+        user_id=current_user.id,
+        place_id=place_id,
+        note=note,
+        visibility=visibility or default_vis,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+    )
+    db.add(check_in)
+    await db.flush()  # get check_in.id before committing
+
+    # Save photos if provided
+    if files:
+        for file in files:
+            if not file:
+                continue
+            content = await file.read()
+            try:
+                url_path = await StorageService.save_checkin_photo(check_in.id, file.filename or "upload.jpg", content)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            db.add(CheckInPhoto(check_in_id=check_in.id, url=url_path))
+            # keep backward-compatible single photo_url set to last uploaded
+            check_in.photo_url = url_path
+
+    # Add to collections if provided
+    if collection_ids:
+        import json
+        ids: list[int] = []
+        try:
+            parsed = json.loads(collection_ids)
+            if isinstance(parsed, list):
+                ids = [int(x) for x in parsed]
+        except Exception:
+            # fallback: comma-separated
+            parts = [p.strip() for p in collection_ids.split(",") if p.strip()]
+            ids = [int(p) for p in parts if p.isdigit()]
+        if ids:
+            # verify ownership of collections
+            owned_q = await db.execute(
+                select(CheckInCollection.id).where(
+                    CheckInCollection.user_id == current_user.id,
+                    CheckInCollection.id.in_(ids),
+                )
+            )
+            owned = {row[0] for row in owned_q.fetchall()}
+            for cid in owned:
+                db.add(CheckInCollectionItem(
+                    collection_id=cid, check_in_id=check_in.id))
+
+    await db.commit()
+    await db.refresh(check_in)
+
+    # enrich response with photo_urls
+    res_ph = await db.execute(
+        select(CheckInPhoto).where(CheckInPhoto.check_in_id ==
+                                   check_in.id).order_by(CheckInPhoto.created_at.asc())
+    )
+    photo_urls = [p.url for p in res_ph.scalars().all()]
+
+    # Create activity for the check-in
+    try:
+        await create_checkin_activity(
+            db=db,
+            user_id=current_user.id,
+            checkin_id=check_in.id,
+            place_name=place.name,
+            note=note,
+        )
+    except Exception as e:
+        print(f"Failed to create activity for check-in {check_in.id}: {e}")
+
+    return CheckInResponse(
+        id=check_in.id,
+        user_id=check_in.user_id,
+        place_id=check_in.place_id,
+        note=check_in.note,
+        visibility=check_in.visibility,
+        created_at=check_in.created_at,
+        expires_at=check_in.expires_at,
+        photo_url=check_in.photo_url,
+        photo_urls=photo_urls,
+    )
 
 
 @router.post("/check-ins/{check_in_id}/photo", response_model=CheckInResponse)

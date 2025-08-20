@@ -398,18 +398,87 @@ curl 'http://localhost:8000/places/trending?city=San%20Francisco&hours=24&limit=
 
 Returns `{ items, total, limit, offset }` ranked by recent check-ins.
 
-#### Check-In (auth)
+#### Create Check-in
 
-POST `/places/check-ins`
+POST `/places/check-ins` (authenticated)
 
 ```bash
-curl -X POST http://localhost:8000/places/check-ins \
+curl -X POST "http://localhost:8000/places/check-ins" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"place_id":1, "note":"Latte time"}'
+  -d '{
+    "place_id": 1,
+    "note": "Great coffee!",
+    "latitude": 24.7136,
+    "longitude": 46.6753,
+    "visibility": "public"
+  }'
 ```
 
-Rate limiting: prevents repeat check-ins to the same place by same user within 5 minutes (429).
+**Request Body:**
+
+```json
+{
+  "place_id": 1,
+  "note": "Great coffee!",
+  "latitude": 24.7136,
+  "longitude": 46.6753,
+  "visibility": "public"
+}
+```
+
+**Response:**
+
+```json
+{
+  "id": 1,
+  "user_id": 1,
+  "place_id": 1,
+  "note": "Great coffee!",
+  "visibility": "public",
+  "created_at": "2024-01-01T12:00:00Z",
+  "expires_at": "2024-01-02T12:00:00Z",
+  "photo_url": null,
+  "photo_urls": []
+}
+```
+
+**Features:**
+
+- **Proximity Enforcement**: Users must be within 500m of the place to check in
+- **Location Validation**: Requires current latitude/longitude coordinates
+- **Rate Limiting**: 5-minute cooldown between check-ins to the same place
+- **Visibility Control**: Public, followers, or private check-ins
+- **Automatic Expiration**: Check-ins expire after 24 hours
+- **Activity Integration**: Creates activity feed entries
+
+**Proximity Enforcement:**
+
+- **Default Distance**: 500 meters maximum distance
+- **Configurable**: Set via `APP_CHECKIN_MAX_DISTANCE_METERS` environment variable
+- **Disable Feature**: Set `APP_CHECKIN_ENFORCE_PROXIMITY=false` to disable
+- **Haversine Calculation**: Uses great-circle distance formula
+- **Error Messages**: Clear feedback when outside allowed range
+
+**Error Responses:**
+
+```json
+{
+  "detail": "You must be within 500 meters of Test Cafe to check in"
+}
+```
+
+```json
+{
+  "detail": "Missing current location: latitude and longitude are required"
+}
+```
+
+```json
+{
+  "detail": "Place coordinates missing; cannot verify proximity"
+}
+```
 
 #### Save Place (auth)
 
@@ -1755,28 +1824,41 @@ alembic upgrade head
 Create a `.env` file in the project root:
 
 ```env
-DATABASE_URL=postgresql+asyncpg://postgres:password@localhost/circles
-# OTP is generated internally for development; set a proper secret in prod
-OTP_SECRET_KEY=your-secret-key-change-in-production
-OTP_EXPIRY_MINUTES=10
+# Database
+DATABASE_URL=postgresql+asyncpg://postgres:password@127.0.0.1:5432/circles
+
+# JWT
 JWT_SECRET_KEY=your-jwt-secret-key-change-in-production
 JWT_ALGORITHM=HS256
 JWT_EXPIRY_MINUTES=30
-# OTP throttling (per email+IP)
-APP_OTP_REQUESTS_PER_MINUTE=5
-APP_OTP_REQUESTS_BURST=10
-# Storage
-STORAGE_BACKEND=local  # or s3
-LOCAL_STORAGE_PATH=media
-S3_BUCKET=your-bucket
-S3_REGION=your-region
-S3_ENDPOINT_URL=
-S3_ACCESS_KEY_ID=
-S3_SECRET_ACCESS_KEY=
-S3_PUBLIC_BASE_URL=
-S3_USE_PATH_STYLE=true
-# CORS
-CORS_ALLOWED_ORIGINS=["http://localhost:3000", "http://localhost:5173"]
+
+# OTP
+OTP_SECRET_KEY=your-secret-key-change-in-production
+OTP_EXPIRY_MINUTES=10
+
+# Storage (S3)
+STORAGE_BACKEND=s3  # or "local"
+S3_BUCKET=your-bucket-name
+S3_REGION=us-east-1
+S3_ACCESS_KEY_ID=your-access-key
+S3_SECRET_ACCESS_KEY=your-secret-key
+S3_ENDPOINT_URL=https://s3.amazonaws.com
+S3_PUBLIC_BASE_URL=https://your-bucket.s3.amazonaws.com
+S3_USE_PATH_STYLE=false
+
+# Geo
+USE_POSTGIS=true  # Enable PostGIS for geospatial features
+
+# Check-in Proximity Enforcement
+CHECKIN_ENFORCE_PROXIMITY=true  # Enable/disable proximity checks
+CHECKIN_MAX_DISTANCE_METERS=500  # Maximum distance in meters
+
+# Metrics
+METRICS_TOKEN=your-metrics-token  # Protect /metrics endpoint
+
+# App Settings
+DEBUG=false
+LOG_SAMPLING_RATE=0.1  # Log sampling rate (0.0 to 1.0)
 ```
 
 ### OTP Rate Limiting
