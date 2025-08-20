@@ -145,6 +145,7 @@ class CheckInResponse(BaseModel):
     visibility: VisibilityEnum
     created_at: datetime
     expires_at: datetime
+    photo_url: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -210,3 +211,146 @@ class PlaceStats(BaseModel):
     average_rating: Optional[float] = None
     reviews_count: int
     active_checkins: int
+
+
+# Photos
+
+class PhotoCreate(BaseModel):
+    review_id: int = Field(..., examples=[1])
+    url: str = Field(..., examples=["https://example.com/photo.jpg"])
+    caption: Optional[str] = Field(None, examples=["Latte art"])
+
+
+class PhotoResponse(BaseModel):
+    id: int
+    user_id: int
+    place_id: int
+    review_id: Optional[int] = None
+    url: str
+    caption: Optional[str] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedPhotos(BaseModel):
+    items: list[PhotoResponse]
+    total: int
+    limit: int
+    offset: int
+
+# Direct Messages (DM)
+
+
+class DMThreadStatus(str, Enum):
+    pending = "pending"
+    accepted = "accepted"
+    rejected = "rejected"
+    blocked = "blocked"
+
+
+class DMThreadResponse(BaseModel):
+    id: int
+    user_a_id: int
+    user_b_id: int
+    initiator_id: int
+    status: DMThreadStatus
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedDMThreads(BaseModel):
+    items: list[DMThreadResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class DMRequestCreate(BaseModel):
+    recipient_email: EmailStr
+    text: str = Field(..., min_length=1, max_length=2000)
+
+
+class DMRequestDecision(BaseModel):
+    status: DMThreadStatus = Field(..., examples=[DMThreadStatus.accepted])
+
+
+class DMMessageCreate(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000)
+
+
+class DMMessageResponse(BaseModel):
+    id: int
+    thread_id: int
+    sender_id: int
+    text: str
+    created_at: datetime
+    # computed for the requester: True if the other participant has read this message
+    seen: Optional[bool] = None
+    heart_count: int = 0
+    liked_by_me: bool = False
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedDMMessages(BaseModel):
+    items: list[DMMessageResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class DMThreadMuteUpdate(BaseModel):
+    muted: bool = Field(..., examples=[True])
+
+
+class UnreadCountResponse(BaseModel):
+    unread: int
+
+
+class DMThreadBlockUpdate(BaseModel):
+    blocked: bool = Field(..., examples=[True])
+
+
+class TypingUpdate(BaseModel):
+    typing: bool = Field(..., examples=[True])
+
+
+class TypingStatusResponse(BaseModel):
+    typing: bool
+    until: Optional[datetime] = None
+
+
+class PresenceResponse(BaseModel):
+    user_id: int
+    online: bool
+    last_active_at: Optional[datetime] = None
+
+# Follows
+
+
+class FollowUserResponse(BaseModel):
+    id: int
+    email: str
+    is_verified: bool
+    created_at: datetime
+    followed_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedFollowers(BaseModel):
+    items: list[FollowUserResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class PaginatedFollowing(BaseModel):
+    items: list[FollowUserResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class HeartResponse(BaseModel):
+    liked: bool
+    heart_count: int

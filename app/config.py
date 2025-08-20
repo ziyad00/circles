@@ -35,6 +35,20 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256", env="JWT_ALGORITHM")
     jwt_expiry_minutes: int = Field(default=30, env="JWT_EXPIRY_MINUTES")
 
+    # Storage settings
+    storage_backend: str = Field(
+        default="local", env="STORAGE_BACKEND")  # "local" or "s3"
+    s3_bucket: Optional[str] = Field(default=None, env="S3_BUCKET")
+    s3_region: Optional[str] = Field(default=None, env="S3_REGION")
+    s3_endpoint_url: Optional[str] = Field(default=None, env="S3_ENDPOINT_URL")
+    s3_access_key_id: Optional[str] = Field(
+        default=None, env="S3_ACCESS_KEY_ID")
+    s3_secret_access_key: Optional[str] = Field(
+        default=None, env="S3_SECRET_ACCESS_KEY")
+    s3_public_base_url: Optional[str] = Field(
+        default=None, env="S3_PUBLIC_BASE_URL")
+    s3_use_path_style: bool = Field(default=False, env="S3_USE_PATH_STYLE")
+
     class Config:
         env_file = ".env"
         env_prefix = "APP_"

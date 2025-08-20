@@ -1,15 +1,17 @@
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 
 from ..database import get_db
-from ..models import Place, CheckIn, SavedPlace, User, Review
+from ..models import Place, CheckIn, SavedPlace, User, Review, Photo
 from ..schemas import (
     PlaceCreate,
     PlaceResponse,
     CheckInCreate,
     CheckInResponse,
+    # for check-in photo upload
+
     SavedPlaceCreate,
     SavedPlaceResponse,
     PaginatedPlaces,
@@ -19,8 +21,11 @@ from ..schemas import (
     ReviewResponse,
     PaginatedReviews,
     PlaceStats,
+    PhotoResponse,
+    PaginatedPhotos,
 )
 from ..services.jwt_service import JWTService
+from ..services.storage import StorageService
 from ..utils import can_view_checkin
 
 
@@ -91,6 +96,95 @@ async def search_places(
     stmt = stmt.offset(offset).limit(limit)
     items = (await db.execute(stmt)).scalars().all()
     return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+
+
+# Removed place-level photo upload; use review-attached photos instead
+# Review photos
+
+@router.post("/reviews/{review_id}/photos", response_model=PhotoResponse)
+async def add_review_photo(
+    review_id: int,
+    file: UploadFile = File(...),
+    caption: str | None = Form(None),
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # ensure review exists and owner is current user
+    res = await db.execute(select(Review).where(Review.id == review_id))
+    review = res.scalars().first()
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+    if review.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403, detail="Not allowed to add photo to this review")
+
+    import os
+    from uuid import uuid4
+    _, ext = os.path.splitext(file.filename or "")
+    if not ext:
+        ext = ".jpg"
+    filename = f"{uuid4().hex}{ext}"
+    content = await file.read()
+    url_path = await StorageService.save_review_photo(review_id, filename, content)
+
+    photo = Photo(
+        user_id=current_user.id,
+        place_id=review.place_id,
+        review_id=review_id,
+        url=url_path,
+        caption=caption,
+    )
+    db.add(photo)
+    await db.commit()
+    await db.refresh(photo)
+    return photo
+
+
+@router.get("/{place_id}/photos", response_model=PaginatedPhotos)
+async def list_review_photos_for_place(
+    place_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    # Only photos attached to reviews for this place
+    total_q = select(func.count(Photo.id)).where(
+        Photo.place_id == place_id, Photo.review_id.is_not(None))
+    total = (await db.execute(total_q)).scalar_one()
+    stmt = (
+        select(Photo)
+        .where(Photo.place_id == place_id, Photo.review_id.is_not(None))
+        .order_by(Photo.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = (await db.execute(stmt)).scalars().all()
+    return PaginatedPhotos(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.delete("/reviews/{review_id}/photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_review_photo(
+    review_id: int,
+    photo_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(select(Photo).where(Photo.id == photo_id, Photo.review_id == review_id))
+    photo = res.scalars().first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    if photo.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403, detail="Not allowed to delete this photo")
+    await db.delete(photo)
+    await db.commit()
+    return None
+
+
+# Removed place-level photo listing; list via reviews endpoint instead
+
+
+# Removed delete via place; use delete via review route
 
 
 @router.get("/trending", response_model=PaginatedPlaces)
@@ -231,6 +325,88 @@ async def create_check_in(
     await db.commit()
     await db.refresh(check_in)
     return check_in
+
+
+@router.post("/check-ins/{check_in_id}/photo", response_model=CheckInResponse)
+async def upload_checkin_photo(
+    check_in_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # fetch check-in and authz
+    res = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
+    checkin = res.scalars().first()
+    if not checkin:
+        raise HTTPException(status_code=404, detail="Check-in not found")
+    if checkin.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed")
+    # save file
+    import os
+    from uuid import uuid4
+    _, ext = os.path.splitext(file.filename or "")
+    if not ext:
+        ext = ".jpg"
+    filename = f"{uuid4().hex}{ext}"
+    content = await file.read()
+    # reuse review storage pathing by placing under media/checkins/{id}/
+    # local backend path
+    from ..config import settings
+    if settings.storage_backend == "local":
+        media_root = os.path.abspath(os.path.join(os.getcwd(), "media"))
+        target_dir = os.path.join(media_root, "checkins", str(check_in_id))
+        os.makedirs(target_dir, exist_ok=True)
+        target_path = os.path.join(target_dir, filename)
+        with open(target_path, "wb") as f:
+            f.write(content)
+        url_path = f"/media/checkins/{check_in_id}/{filename}"
+    else:
+        # S3
+        from ..services.storage import _guess_content_type
+        import boto3
+        from botocore.config import Config as BotoConfig
+        session = boto3.session.Session(
+            aws_access_key_id=settings.s3_access_key_id,
+            aws_secret_access_key=settings.s3_secret_access_key,
+            region_name=settings.s3_region,
+        )
+        s3 = session.client(
+            "s3",
+            endpoint_url=settings.s3_endpoint_url,
+            config=BotoConfig(
+                s3={"addressing_style": "path" if settings.s3_use_path_style else "auto"}),
+        )
+        key = f"checkins/{check_in_id}/{filename}"
+        s3.put_object(Bucket=settings.s3_bucket, Key=key,
+                      Body=content, ContentType=_guess_content_type(filename))
+        if settings.s3_public_base_url:
+            url_path = f"{settings.s3_public_base_url.rstrip('/')}/{key}"
+        else:
+            host = settings.s3_endpoint_url.rstrip(
+                '/') if settings.s3_endpoint_url else f"https://{settings.s3_bucket}.s3.amazonaws.com"
+            url_path = f"{host}/{settings.s3_bucket}/{key}" if settings.s3_use_path_style else f"https://{settings.s3_bucket}.s3.amazonaws.com/{key}"
+
+    checkin.photo_url = url_path
+    await db.commit()
+    await db.refresh(checkin)
+    return checkin
+
+
+@router.delete("/check-ins/{check_in_id}/photo", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_checkin_photo(
+    check_in_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
+    checkin = res.scalars().first()
+    if not checkin:
+        raise HTTPException(status_code=404, detail="Check-in not found")
+    if checkin.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed")
+    checkin.photo_url = None
+    await db.commit()
+    return None
 
 
 @router.delete("/check-ins/{check_in_id}", status_code=status.HTTP_204_NO_CONTENT)
