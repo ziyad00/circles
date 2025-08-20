@@ -1,38 +1,10 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, select
-from app.models import User, Friendship, Follow
+from app.models import User, Follow
 
 
-async def are_friends(db: AsyncSession, user1_id: int, user2_id: int) -> bool:
-    """
-    Check if two users are friends (have an accepted friendship).
-
-    Args:
-        db: Database session
-        user1_id: ID of the first user
-        user2_id: ID of the second user
-
-    Returns:
-        True if users are friends, False otherwise
-    """
-    if user1_id == user2_id:
-        return True  # Users are always "friends" with themselves
-
-    result = await db.execute(
-        select(Friendship).where(
-            Friendship.status == "accepted",
-            or_(
-                and_(Friendship.requester_id == user1_id,
-                     Friendship.addressee_id == user2_id),
-                and_(Friendship.requester_id == user2_id,
-                     Friendship.addressee_id == user1_id)
-            )
-        )
-    )
-    friendship = result.scalar_one_or_none()
-
-    return friendship is not None
+"""Friends helpers removed; using follows instead."""
 
 
 async def can_view_checkin(db: AsyncSession, checkin_user_id: int, viewer_user_id: int, visibility: str) -> bool:

@@ -44,55 +44,7 @@ class ErrorResponse(BaseModel):
     detail: str
 
 
-# Friends & Privacy
-
-class FriendshipStatusEnum(str, Enum):
-    pending = "pending"
-    accepted = "accepted"
-    rejected = "rejected"
-
-
-class FriendRequestCreate(BaseModel):
-    addressee_email: EmailStr = Field(..., examples=["friend@example.com"])
-
-
-class FriendRequestResponse(BaseModel):
-    id: int
-    requester_id: int
-    addressee_id: int
-    status: FriendshipStatusEnum
-    created_at: datetime
-    updated_at: datetime
-    model_config = ConfigDict(from_attributes=True)
-
-
-class FriendRequestUpdate(BaseModel):
-    status: FriendshipStatusEnum = Field(..., examples=[
-                                         FriendshipStatusEnum.accepted])
-
-
-class FriendResponse(BaseModel):
-    id: int
-    email: str
-    is_verified: bool
-    created_at: datetime
-    friendship_id: int
-    friendship_created_at: datetime
-    model_config = ConfigDict(from_attributes=True)
-
-
-class PaginatedFriends(BaseModel):
-    items: list[FriendResponse]
-    total: int
-    limit: int
-    offset: int
-
-
-class PaginatedFriendRequests(BaseModel):
-    items: list[FriendRequestResponse]
-    total: int
-    limit: int
-    offset: int
+"""Friends feature removed in favor of follows."""
 
 
 # Places & Check-ins
@@ -131,7 +83,7 @@ class CheckInCreate(BaseModel):
     place_id: int = Field(..., examples=[1])
     note: Optional[str] = Field(None, examples=["Latte time"])
     visibility: Optional[VisibilityEnum] = Field(
-        default=VisibilityEnum.public,
+        default=None,
         examples=[VisibilityEnum.public,
                   VisibilityEnum.friends, VisibilityEnum.private],
     )
@@ -145,7 +97,10 @@ class CheckInResponse(BaseModel):
     visibility: VisibilityEnum
     created_at: datetime
     expires_at: datetime
+    # Deprecated single photo url; keep for backward compatibility
     photo_url: Optional[str] = None
+    # New: multiple photos
+    photo_urls: list[str] = []
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -228,6 +183,14 @@ class PhotoResponse(BaseModel):
     review_id: Optional[int] = None
     url: str
     caption: Optional[str] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CheckInPhotoResponse(BaseModel):
+    id: int
+    check_in_id: int
+    url: str
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
@@ -354,3 +317,49 @@ class PaginatedFollowing(BaseModel):
 class HeartResponse(BaseModel):
     liked: bool
     heart_count: int
+
+
+# Check-in Collections
+
+
+class CollectionCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    visibility: Optional[VisibilityEnum] = None
+
+
+class CollectionResponse(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    visibility: VisibilityEnum
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedCollections(BaseModel):
+    items: list[CollectionResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class CollectionItemResponse(BaseModel):
+    id: int
+    collection_id: int
+    check_in_id: int
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PrivacySettingsUpdate(BaseModel):
+    dm_privacy: Optional[str] = Field(
+        None, pattern="^(everyone|followers|no_one)$")
+    checkins_default_visibility: Optional[VisibilityEnum] = None
+    collections_default_visibility: Optional[VisibilityEnum] = None
+
+
+class PrivacySettingsResponse(BaseModel):
+    dm_privacy: str
+    checkins_default_visibility: VisibilityEnum
+    collections_default_visibility: VisibilityEnum

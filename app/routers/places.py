@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 
 from ..database import get_db
-from ..models import Place, CheckIn, SavedPlace, User, Review, Photo
+from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto
 from ..schemas import (
     PlaceCreate,
     PlaceResponse,
@@ -23,6 +23,7 @@ from ..schemas import (
     PlaceStats,
     PhotoResponse,
     PaginatedPhotos,
+    CheckInPhotoResponse,
 )
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
@@ -314,11 +315,14 @@ async def create_check_in(
     if not place:
         raise HTTPException(status_code=404, detail="Place not found")
 
+    # default visibility from user settings if not provided
+    default_vis = getattr(
+        current_user, "checkins_default_visibility", "public")
     check_in = CheckIn(
         user_id=current_user.id,
         place_id=payload.place_id,
         note=payload.note,
-        visibility=payload.visibility or "public",
+        visibility=payload.visibility or default_vis,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
     )
     db.add(check_in)
@@ -341,7 +345,7 @@ async def upload_checkin_photo(
         raise HTTPException(status_code=404, detail="Check-in not found")
     if checkin.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not allowed")
-    # save file
+    # save file via storage service
     import os
     from uuid import uuid4
     _, ext = os.path.splitext(file.filename or "")
@@ -349,47 +353,28 @@ async def upload_checkin_photo(
         ext = ".jpg"
     filename = f"{uuid4().hex}{ext}"
     content = await file.read()
-    # reuse review storage pathing by placing under media/checkins/{id}/
-    # local backend path
-    from ..config import settings
-    if settings.storage_backend == "local":
-        media_root = os.path.abspath(os.path.join(os.getcwd(), "media"))
-        target_dir = os.path.join(media_root, "checkins", str(check_in_id))
-        os.makedirs(target_dir, exist_ok=True)
-        target_path = os.path.join(target_dir, filename)
-        with open(target_path, "wb") as f:
-            f.write(content)
-        url_path = f"/media/checkins/{check_in_id}/{filename}"
-    else:
-        # S3
-        from ..services.storage import _guess_content_type
-        import boto3
-        from botocore.config import Config as BotoConfig
-        session = boto3.session.Session(
-            aws_access_key_id=settings.s3_access_key_id,
-            aws_secret_access_key=settings.s3_secret_access_key,
-            region_name=settings.s3_region,
-        )
-        s3 = session.client(
-            "s3",
-            endpoint_url=settings.s3_endpoint_url,
-            config=BotoConfig(
-                s3={"addressing_style": "path" if settings.s3_use_path_style else "auto"}),
-        )
-        key = f"checkins/{check_in_id}/{filename}"
-        s3.put_object(Bucket=settings.s3_bucket, Key=key,
-                      Body=content, ContentType=_guess_content_type(filename))
-        if settings.s3_public_base_url:
-            url_path = f"{settings.s3_public_base_url.rstrip('/')}/{key}"
-        else:
-            host = settings.s3_endpoint_url.rstrip(
-                '/') if settings.s3_endpoint_url else f"https://{settings.s3_bucket}.s3.amazonaws.com"
-            url_path = f"{host}/{settings.s3_bucket}/{key}" if settings.s3_use_path_style else f"https://{settings.s3_bucket}.s3.amazonaws.com/{key}"
+    url_path = await StorageService.save_checkin_photo(check_in_id, filename, content)
 
+    cip = CheckInPhoto(check_in_id=check_in_id, url=url_path)
+    db.add(cip)
+    # keep backward-compatible single photo_url set to last uploaded
     checkin.photo_url = url_path
     await db.commit()
     await db.refresh(checkin)
-    return checkin
+    # enrich response with photo_urls
+    res_ph = await db.execute(select(CheckInPhoto).where(CheckInPhoto.check_in_id == check_in_id).order_by(CheckInPhoto.created_at.asc()))
+    photo_urls = [p.url for p in res_ph.scalars().all()]
+    return CheckInResponse(
+        id=checkin.id,
+        user_id=checkin.user_id,
+        place_id=checkin.place_id,
+        note=checkin.note,
+        visibility=checkin.visibility,
+        created_at=checkin.created_at,
+        expires_at=checkin.expires_at,
+        photo_url=checkin.photo_url,
+        photo_urls=photo_urls,
+    )
 
 
 @router.delete("/check-ins/{check_in_id}/photo", status_code=status.HTTP_204_NO_CONTENT)
@@ -404,7 +389,57 @@ async def delete_checkin_photo(
         raise HTTPException(status_code=404, detail="Check-in not found")
     if checkin.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not allowed")
+    # delete all associated photos records (files are not deleted in this MVP)
+    res_ph = await db.execute(select(CheckInPhoto).where(CheckInPhoto.check_in_id == check_in_id))
+    for ph in res_ph.scalars().all():
+        await db.delete(ph)
     checkin.photo_url = None
+    await db.commit()
+    return None
+
+
+@router.get("/check-ins/{check_in_id}/photos", response_model=list[CheckInPhotoResponse])
+async def list_checkin_photos(
+    check_in_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Only owner can list for now
+    res = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
+    checkin = res.scalars().first()
+    if not checkin:
+        raise HTTPException(status_code=404, detail="Check-in not found")
+    if checkin.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed")
+    res_ph = await db.execute(
+        select(CheckInPhoto).where(CheckInPhoto.check_in_id ==
+                                   check_in_id).order_by(CheckInPhoto.created_at.asc())
+    )
+    photos = res_ph.scalars().all()
+    return [CheckInPhotoResponse(id=p.id, check_in_id=p.check_in_id, url=p.url, created_at=p.created_at) for p in photos]
+
+
+@router.delete("/check-ins/{check_in_id}/photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_checkin_photo_item(
+    check_in_id: int,
+    photo_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
+    checkin = res.scalars().first()
+    if not checkin:
+        raise HTTPException(status_code=404, detail="Check-in not found")
+    if checkin.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed")
+    res_ph = await db.execute(
+        select(CheckInPhoto).where(CheckInPhoto.id == photo_id,
+                                   CheckInPhoto.check_in_id == check_in_id)
+    )
+    photo = res_ph.scalars().first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    await db.delete(photo)
     await db.commit()
     return None
 
@@ -458,7 +493,29 @@ async def whos_here(
             if len(visible_checkins) >= limit:
                 break
 
-    return visible_checkins
+    # hydrate photo_urls
+    result: list[CheckInResponse] = []
+    for ci in visible_checkins:
+        res_ph = await db.execute(
+            select(CheckInPhoto)
+            .where(CheckInPhoto.check_in_id == ci.id)
+            .order_by(CheckInPhoto.created_at.asc())
+        )
+        urls = [p.url for p in res_ph.scalars().all()]
+        result.append(
+            CheckInResponse(
+                id=ci.id,
+                user_id=ci.user_id,
+                place_id=ci.place_id,
+                note=ci.note,
+                visibility=ci.visibility,
+                created_at=ci.created_at,
+                expires_at=ci.expires_at,
+                photo_url=ci.photo_url,
+                photo_urls=urls,
+            )
+        )
+    return result
 
 
 @router.get("/{place_id}/whos-here/count")
@@ -505,7 +562,28 @@ async def my_check_ins(
         .limit(limit)
     )
     items = res.scalars().all()
-    return PaginatedCheckIns(items=items, total=total, limit=limit, offset=offset)
+    enriched: list[CheckInResponse] = []
+    for ci in items:
+        res_ph = await db.execute(
+            select(CheckInPhoto)
+            .where(CheckInPhoto.check_in_id == ci.id)
+            .order_by(CheckInPhoto.created_at.asc())
+        )
+        urls = [p.url for p in res_ph.scalars().all()]
+        enriched.append(
+            CheckInResponse(
+                id=ci.id,
+                user_id=ci.user_id,
+                place_id=ci.place_id,
+                note=ci.note,
+                visibility=ci.visibility,
+                created_at=ci.created_at,
+                expires_at=ci.expires_at,
+                photo_url=ci.photo_url,
+                photo_urls=urls,
+            )
+        )
+    return PaginatedCheckIns(items=enriched, total=total, limit=limit, offset=offset)
 
 
 @router.post("/{place_id}/reviews", response_model=ReviewResponse)

@@ -16,6 +16,13 @@ class User(Base):
     is_verified = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    # Privacy defaults
+    # everyone|followers|no_one
+    dm_privacy = Column(String, nullable=False, server_default="everyone")
+    checkins_default_visibility = Column(
+        String, nullable=False, server_default="public")
+    collections_default_visibility = Column(
+        String, nullable=False, server_default="public")
 
     # Relationships
     otp_codes = relationship("OTPCode", back_populates="user")
@@ -25,17 +32,6 @@ class User(Base):
     photos = relationship("Photo", back_populates="user")
     dm_messages = relationship("DMMessage", back_populates="sender")
 
-    # Friend relationships
-    sent_friend_requests = relationship(
-        "Friendship",
-        foreign_keys="Friendship.requester_id",
-        back_populates="requester"
-    )
-    received_friend_requests = relationship(
-        "Friendship",
-        foreign_keys="Friendship.addressee_id",
-        back_populates="addressee"
-    )
 
 
 class OTPCode(Base):
@@ -88,6 +84,13 @@ class CheckIn(Base):
 
     user = relationship("User", back_populates="check_ins")
     place = relationship("Place", back_populates="check_ins")
+    # Multiple photos relationship
+    photos = relationship(
+        "CheckInPhoto",
+        back_populates="check_in",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
 
 class SavedPlace(Base):
@@ -129,6 +132,10 @@ class Photo(Base):
                      nullable=False, index=True)
     place_id = Column(Integer, ForeignKey("places.id"),
                       nullable=False, index=True)
+    # Optional linkage to a review (for review-attached photos)
+    # Note: Some routers already reference review_id
+    review_id = Column(Integer, ForeignKey(
+        "reviews.id"), nullable=True, index=True)
     url = Column(String, nullable=False)
     caption = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -136,26 +143,6 @@ class Photo(Base):
     user = relationship("User", back_populates="photos")
     place = relationship("Place", back_populates="photos")
 
-
-class Friendship(Base):
-    __tablename__ = "friendships"
-
-    id = Column(Integer, primary_key=True, index=True)
-    requester_id = Column(Integer, ForeignKey(
-        "users.id"), nullable=False, index=True)
-    addressee_id = Column(Integer, ForeignKey(
-        "users.id"), nullable=False, index=True)
-    # pending, accepted, rejected
-    status = Column(String, nullable=False, default="pending")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True),
-                        server_default=func.now(), onupdate=func.now())
-
-    # Relationships
-    requester = relationship("User", foreign_keys=[
-                             requester_id], back_populates="sent_friend_requests")
-    addressee = relationship("User", foreign_keys=[
-                             addressee_id], back_populates="received_friend_requests")
 
 
 class Follow(Base):
@@ -184,6 +171,18 @@ class DMThread(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True),
                         server_default=func.now(), onupdate=func.now())
+
+
+class CheckInPhoto(Base):
+    __tablename__ = "check_in_photos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    check_in_id = Column(Integer, ForeignKey(
+        "check_ins.id"), nullable=False, index=True)
+    url = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    check_in = relationship("CheckIn", back_populates="photos")
 
 
 class DMMessage(Base):
@@ -226,3 +225,32 @@ class DMParticipantState(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True),
                         server_default=func.now(), onupdate=func.now())
+
+
+class CheckInCollection(Base):
+    __tablename__ = "check_in_collections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"),
+                     nullable=False, index=True)
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True),
+                        server_default=func.now(), onupdate=func.now())
+    visibility = Column(String, nullable=False, server_default="public")
+
+    items = relationship("CheckInCollectionItem",
+                         back_populates="collection", cascade="all, delete-orphan")
+
+
+class CheckInCollectionItem(Base):
+    __tablename__ = "check_in_collection_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    collection_id = Column(Integer, ForeignKey(
+        "check_in_collections.id"), nullable=False, index=True)
+    check_in_id = Column(Integer, ForeignKey(
+        "check_ins.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    collection = relationship("CheckInCollection", back_populates="items")

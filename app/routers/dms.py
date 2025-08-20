@@ -44,17 +44,29 @@ async def send_dm_request(
     recipient = res.scalars().first()
     if not recipient:
         raise HTTPException(status_code=404, detail="Recipient not found")
+    # enforce recipient dm_privacy strictly
+    # everyone | followers | no_one
+    if recipient.dm_privacy == "no_one":
+        raise HTTPException(
+            status_code=403, detail="Recipient does not accept DMs")
+    if recipient.dm_privacy == "followers":
+        resf = await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == recipient.id))
+        if resf.scalars().first() is None:
+            raise HTTPException(
+                status_code=403, detail="Recipient accepts DMs from followers only")
 
     a, b = _normalize_pair(current_user.id, recipient.id)
-    # if sender follows recipient, auto-accept thread (no request needed)
+    # if sender follows recipient and recipient allows followers DMs, auto-accept; else pending
     res_follow = await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == recipient.id))
     follows = res_follow.scalars().first()
     # existing thread
     res = await db.execute(select(DMThread).where(DMThread.user_a_id == a, DMThread.user_b_id == b))
     thread = res.scalars().first()
     if not thread:
+        auto = bool(follows) and recipient.dm_privacy in (
+            "everyone", "followers")
         thread = DMThread(user_a_id=a, user_b_id=b,
-                          initiator_id=current_user.id, status=("accepted" if follows else "pending"))
+                          initiator_id=current_user.id, status=("accepted" if auto else "pending"))
         db.add(thread)
         await db.flush()
     # if accepted (follower), create initial message; if pending, store as request note (message) too
