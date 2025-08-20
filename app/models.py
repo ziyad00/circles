@@ -33,7 +33,6 @@ class User(Base):
     dm_messages = relationship("DMMessage", back_populates="sender")
 
 
-
 class OTPCode(Base):
     __tablename__ = "otp_codes"
 
@@ -142,7 +141,6 @@ class Photo(Base):
 
     user = relationship("User", back_populates="photos")
     place = relationship("Place", back_populates="photos")
-
 
 
 class Follow(Base):
