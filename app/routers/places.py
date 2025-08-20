@@ -24,6 +24,7 @@ from ..schemas import (
     PhotoResponse,
     PaginatedPhotos,
     CheckInPhotoResponse,
+    EnhancedPlaceResponse,
 )
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
@@ -156,6 +157,13 @@ async def list_review_photos_for_place(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
+    """Get all photos for a place (from reviews)"""
+    # Verify place exists
+    res = await db.execute(select(Place).where(Place.id == place_id))
+    place = res.scalar_one_or_none()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+
     # Only photos attached to reviews for this place
     total_q = select(func.count(Photo.id)).where(
         Photo.place_id == place_id, Photo.review_id.is_not(None))
@@ -169,6 +177,36 @@ async def list_review_photos_for_place(
     )
     items = (await db.execute(stmt)).scalars().all()
     return PaginatedPhotos(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/{place_id}/reviews", response_model=PaginatedReviews)
+async def list_place_reviews(
+    place_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all reviews for a place"""
+    # Verify place exists
+    res = await db.execute(select(Place).where(Place.id == place_id))
+    place = res.scalar_one_or_none()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+
+    # Count total reviews
+    total_q = select(func.count(Review.id)).where(Review.place_id == place_id)
+    total = (await db.execute(total_q)).scalar_one()
+
+    # Get reviews with user info
+    stmt = (
+        select(Review)
+        .where(Review.place_id == place_id)
+        .order_by(Review.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = (await db.execute(stmt)).scalars().all()
+    return PaginatedReviews(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.delete("/reviews/{review_id}/photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -318,13 +356,216 @@ async def nearby_places(
         return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
-@router.get("/{place_id}", response_model=PlaceResponse)
-async def get_place(place_id: int, db: AsyncSession = Depends(get_db)):
+@router.get("/{place_id}", response_model=EnhancedPlaceResponse)
+async def get_place(
+    place_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get place details with enhanced statistics and user-specific data"""
+    # Get place
     res = await db.execute(select(Place).where(Place.id == place_id))
     place = res.scalar_one_or_none()
     if not place:
         raise HTTPException(status_code=404, detail="Place not found")
-    return place
+
+    # Calculate statistics
+    now = datetime.now(timezone.utc)
+    yesterday = now - timedelta(days=1)
+    thirty_days_ago = now - timedelta(days=30)
+
+    # Current active check-ins (last 24h)
+    current_checkins_res = await db.execute(
+        select(func.count(CheckIn.id))
+        .where(CheckIn.place_id == place_id, CheckIn.created_at >= yesterday)
+    )
+    current_checkins = current_checkins_res.scalar_one()
+
+    # Total check-ins ever
+    total_checkins_res = await db.execute(
+        select(func.count(CheckIn.id))
+        .where(CheckIn.place_id == place_id)
+    )
+    total_checkins = total_checkins_res.scalar_one()
+
+    # Recent reviews (last 30 days)
+    recent_reviews_res = await db.execute(
+        select(func.count(Review.id))
+        .where(Review.place_id == place_id, Review.created_at >= thirty_days_ago)
+    )
+    recent_reviews = recent_reviews_res.scalar_one()
+
+    # Photos count
+    photos_count_res = await db.execute(
+        select(func.count(Photo.id))
+        .where(Photo.place_id == place_id)
+    )
+    photos_count = photos_count_res.scalar_one()
+
+    # Average rating and total reviews
+    reviews_stats_res = await db.execute(
+        select(func.avg(Review.rating), func.count(Review.id))
+        .where(Review.place_id == place_id)
+    )
+    avg_rating, reviews_count = reviews_stats_res.first()
+
+    # Check if user is currently checked in (last 24h)
+    user_checkin_res = await db.execute(
+        select(CheckIn.id)
+        .where(
+            CheckIn.place_id == place_id,
+            CheckIn.user_id == current_user.id,
+            CheckIn.created_at >= yesterday
+        )
+    )
+    is_checked_in = user_checkin_res.scalar_one_or_none() is not None
+
+    # Check if user has saved this place
+    saved_res = await db.execute(
+        select(SavedPlace.id)
+        .where(SavedPlace.place_id == place_id, SavedPlace.user_id == current_user.id)
+    )
+    is_saved = saved_res.scalar_one_or_none() is not None
+
+    # Create stats object
+    stats = PlaceStats(
+        place_id=place_id,
+        average_rating=float(avg_rating) if avg_rating else None,
+        reviews_count=reviews_count,
+        active_checkins=current_checkins
+    )
+
+    # Create enhanced response
+    return EnhancedPlaceResponse(
+        id=place.id,
+        name=place.name,
+        address=place.address,
+        city=place.city,
+        neighborhood=place.neighborhood,
+        latitude=place.latitude,
+        longitude=place.longitude,
+        categories=place.categories,
+        rating=place.rating,
+        created_at=place.created_at,
+        stats=stats,
+        current_checkins=current_checkins,
+        total_checkins=total_checkins,
+        recent_reviews=recent_reviews,
+        photos_count=photos_count,
+        is_checked_in=is_checked_in,
+        is_saved=is_saved
+    )
+
+
+@router.get("/{place_id}/stats", response_model=PlaceStats)
+async def get_place_stats(place_id: int, db: AsyncSession = Depends(get_db)):
+    """Get place statistics"""
+    # Verify place exists
+    res = await db.execute(select(Place).where(Place.id == place_id))
+    place = res.scalar_one_or_none()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+
+    # Calculate statistics
+    now = datetime.now(timezone.utc)
+    yesterday = now - timedelta(days=1)
+
+    # Current active check-ins (last 24h)
+    current_checkins_res = await db.execute(
+        select(func.count(CheckIn.id))
+        .where(CheckIn.place_id == place_id, CheckIn.created_at >= yesterday)
+    )
+    current_checkins = current_checkins_res.scalar_one()
+
+    # Average rating and total reviews
+    reviews_stats_res = await db.execute(
+        select(func.avg(Review.rating), func.count(Review.id))
+        .where(Review.place_id == place_id)
+    )
+    avg_rating, reviews_count = reviews_stats_res.first()
+
+    return PlaceStats(
+        place_id=place_id,
+        average_rating=float(avg_rating) if avg_rating else None,
+        reviews_count=reviews_count,
+        active_checkins=current_checkins
+    )
+
+
+@router.get("/{place_id}/whos-here", response_model=PaginatedCheckIns)
+async def whos_here(
+    place_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """Get who's currently checked in at this place (last 24h)"""
+    # Verify place exists
+    res = await db.execute(select(Place).where(Place.id == place_id))
+    place = res.scalar_one_or_none()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+
+    # Get check-ins from last 24h
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+
+    # Count total
+    total_res = await db.execute(
+        select(func.count(CheckIn.id))
+        .where(CheckIn.place_id == place_id, CheckIn.created_at >= yesterday)
+    )
+    total = total_res.scalar_one()
+
+    # Get check-ins with user info
+    stmt = (
+        select(CheckIn)
+        .where(CheckIn.place_id == place_id, CheckIn.created_at >= yesterday)
+        .order_by(CheckIn.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    checkins = (await db.execute(stmt)).scalars().all()
+
+    # Filter based on visibility and follow status
+    from ..utils import can_view_checkin
+    visible_checkins = []
+    for checkin in checkins:
+        if await can_view_checkin(checkin, current_user, db):
+            visible_checkins.append(checkin)
+
+    return PaginatedCheckIns(
+        items=visible_checkins,
+        total=len(visible_checkins),
+        limit=limit,
+        offset=offset
+    )
+
+
+@router.get("/{place_id}/whos-here-count", response_model=dict)
+async def whos_here_count(
+    place_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get count of people currently checked in at this place (last 24h)"""
+    # Verify place exists
+    res = await db.execute(select(Place).where(Place.id == place_id))
+    place = res.scalar_one_or_none()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+
+    # Get check-ins from last 24h
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+
+    # Count total
+    total_res = await db.execute(
+        select(func.count(CheckIn.id))
+        .where(CheckIn.place_id == place_id, CheckIn.created_at >= yesterday)
+    )
+    total = total_res.scalar_one()
+
+    return {"count": total, "place_id": place_id}
 
 
 @router.post("/check-ins", response_model=CheckInResponse)
@@ -820,26 +1061,6 @@ async def unsave_place(
     await db.delete(saved)
     await db.commit()
     return None
-
-
-@router.get("/{place_id}/stats", response_model=PlaceStats)
-async def place_stats(place_id: int, db: AsyncSession = Depends(get_db)):
-    # aggregate counts
-    avg_q = select(func.avg(Review.rating)).where(Review.place_id == place_id)
-    count_q = select(func.count(Review.id)).where(Review.place_id == place_id)
-    now = datetime.now(timezone.utc)
-    active_q = select(func.count(CheckIn.id)).where(
-        CheckIn.place_id == place_id, CheckIn.expires_at >= now
-    )
-    avg = (await db.execute(avg_q)).scalar()
-    count = (await db.execute(count_q)).scalar_one()
-    active = (await db.execute(active_q)).scalar_one()
-    return PlaceStats(
-        place_id=place_id,
-        average_rating=float(avg) if avg is not None else None,
-        reviews_count=count,
-        active_checkins=active,
-    )
 
 
 @router.get("/me/reviews", response_model=PaginatedReviews)

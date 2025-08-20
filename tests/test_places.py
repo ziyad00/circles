@@ -87,11 +87,65 @@ async def test_places_flow(client: httpx.AsyncClient):
     assert r.status_code == 429
 
     # trending should include at least one
-    r = await client.get("/places/trending", params={"city": "San Francisco", "hours": 24, "limit": 10})
+    r = await client.get("/places/trending")
     assert r.status_code == 200
     body = r.json()
     assert body["limit"] == 10 and body["offset"] == 0 and body["total"] >= 1
     assert isinstance(body["items"], list) and len(body["items"]) >= 1
+
+    # Test enhanced place endpoint (now the main place endpoint)
+    r = await client.get(f"/places/{place_id}", headers=headers)
+    assert r.status_code == 200
+    enhanced_place = r.json()
+    assert enhanced_place["id"] == place_id
+    assert "stats" in enhanced_place
+    assert "current_checkins" in enhanced_place
+    assert "total_checkins" in enhanced_place
+    assert "recent_reviews" in enhanced_place
+    assert "photos_count" in enhanced_place
+    assert "is_checked_in" in enhanced_place
+    assert "is_saved" in enhanced_place
+    # Should include our check-in
+    assert enhanced_place["current_checkins"] >= 1
+    assert enhanced_place["is_checked_in"] is True  # User should be checked in
+
+    # Test place stats endpoint
+    r = await client.get(f"/places/{place_id}/stats")
+    assert r.status_code == 200
+    stats = r.json()
+    assert stats["place_id"] == place_id
+    assert "average_rating" in stats
+    assert "reviews_count" in stats
+    assert "active_checkins" in stats
+    assert stats["active_checkins"] >= 1
+
+    # Test who's here endpoint
+    r = await client.get(f"/places/{place_id}/whos-here", headers=headers)
+    assert r.status_code == 200
+    whos_here = r.json()
+    assert whos_here["total"] >= 1
+    assert len(whos_here["items"]) >= 1
+
+    # Test who's here count endpoint
+    r = await client.get(f"/places/{place_id}/whos-here-count", headers=headers)
+    assert r.status_code == 200
+    count = r.json()
+    assert count["place_id"] == place_id
+    assert count["count"] >= 1
+
+    # Test place photos endpoint
+    r = await client.get(f"/places/{place_id}/photos")
+    assert r.status_code == 200
+    photos = r.json()
+    assert "items" in photos
+    assert "total" in photos
+
+    # Test place reviews endpoint
+    r = await client.get(f"/places/{place_id}/reviews")
+    assert r.status_code == 200
+    reviews = r.json()
+    assert "items" in reviews
+    assert "total" in reviews
 
 
 async def auth_token_email(client: httpx.AsyncClient, email: str) -> str:
