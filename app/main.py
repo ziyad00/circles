@@ -18,7 +18,8 @@ from .config import settings
 import uuid
 from fastapi import Request
 import logging
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 
 @asynccontextmanager
@@ -53,17 +54,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Prometheus metrics
+REQUEST_COUNT = Counter(
+    "http_requests_total",
+    "Total HTTP requests",
+    ["method", "path", "status"],
+)
+REQUEST_LATENCY = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request latency in seconds",
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5)
+)
+
 
 @app.middleware("http")
 async def add_request_id_and_errors(request: Request, call_next):
     request_id = str(uuid.uuid4())
     logging.info(f"{request.method} {request.url.path} rid={request_id}")
     try:
+        import time
+        start = time.perf_counter()
         response = await call_next(request)
+        elapsed = time.perf_counter() - start
+        REQUEST_LATENCY.observe(elapsed)
+        REQUEST_COUNT.labels(method=request.method, path=request.url.path, status=response.status_code).inc()
         response.headers["X-Request-ID"] = request_id
         return response
     except Exception as e:
         logging.exception(f"Unhandled error rid={request_id}")
+        REQUEST_COUNT.labels(method=request.method, path=request.url.path, status=500).inc()
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal Server Error",
@@ -75,3 +94,9 @@ async def add_request_id_and_errors(request: Request, call_next):
 @app.get("/")
 async def root():
     return {"hello": "world"}
+
+
+@app.get("/metrics")
+async def metrics():
+    data = generate_latest()
+    return PlainTextResponse(content=data, media_type=CONTENT_TYPE_LATEST)
