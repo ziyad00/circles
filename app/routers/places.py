@@ -38,6 +38,7 @@ from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
 from ..utils import can_view_checkin, haversine_distance
 from ..routers.activity import create_checkin_activity
+from ..models import Follow
 
 
 router = APIRouter(prefix="/places", tags=["places"])
@@ -112,6 +113,94 @@ async def search_places(
     stmt = stmt.offset(offset).limit(limit)
     items = (await db.execute(stmt)).scalars().all()
     return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/recommendations", response_model=PaginatedPlaces)
+async def get_recommendations(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    lat: float | None = Query(None),
+    lng: float | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    """Personalized place recommendations based on follows and interests."""
+    now = datetime.now(timezone.utc)
+    seven_days_ago = now - timedelta(days=7)
+    thirty_days_ago = now - timedelta(days=30)
+
+    # Get followed users
+    followed_subq = select(Follow.followee_id).where(
+        Follow.follower_id == current_user.id
+    ).subquery()
+
+    # Counts for followed users' recent check-ins and reviews
+    checkins_subq = (
+        select(CheckIn.place_id, func.count(CheckIn.id).label("c"))
+        .where(CheckIn.user_id.in_(select(followed_subq.c.followee_id)), CheckIn.created_at >= seven_days_ago)
+        .group_by(CheckIn.place_id)
+        .subquery()
+    )
+    reviews_subq = (
+        select(Review.place_id, func.count(Review.id).label("r"))
+        .where(Review.user_id.in_(select(followed_subq.c.followee_id)), Review.created_at >= thirty_days_ago)
+        .group_by(Review.place_id)
+        .subquery()
+    )
+
+    # User interests
+    from ..models import UserInterest
+    interests_rows = (await db.execute(select(UserInterest.name).where(UserInterest.user_id == current_user.id))).all()
+    interest_terms = [row[0] for row in interests_rows]
+
+    # Base selectable with score
+    score_expr = (
+        func.coalesce(checkins_subq.c.c, 0) * 5 +
+        func.coalesce(reviews_subq.c.r, 0) * 3
+    )
+
+    stmt = (
+        select(Place, score_expr.label("score"))
+        .join(checkins_subq, Place.id == checkins_subq.c.place_id, isouter=True)
+        .join(reviews_subq, Place.id == reviews_subq.c.place_id, isouter=True)
+    )
+
+    # Boost by interests (simple category match boosts)
+    if interest_terms:
+        like_boosts = []
+        for term in interest_terms:
+            like_boosts.append(
+                func.case((Place.categories.ilike(f"%{term}%"), 1), else_=0))
+        if like_boosts:
+            stmt = stmt.add_columns((sum(like_boosts)).label("interest_boost"))
+        else:
+            stmt = stmt.add_columns(func.literal(0).label("interest_boost"))
+    else:
+        stmt = stmt.add_columns(func.literal(0).label("interest_boost"))
+
+    # Order by combined score
+    total_score = (score_expr + text("interest_boost"))
+    stmt = stmt.order_by(desc(total_score)).offset(offset).limit(limit)
+
+    rows = (await db.execute(stmt)).all()
+    places = [row[0] for row in rows]
+
+    # Optional: re-rank by proximity if coordinates provided
+    if lat is not None and lng is not None:
+        from ..utils import haversine_distance
+
+        def distance_or_inf(p: Place) -> float:
+            if p.latitude is None or p.longitude is None:
+                return float("inf")
+            return haversine_distance(lat, lng, p.latitude, p.longitude)
+        places = sorted(places, key=distance_or_inf)
+
+    # Estimate total as number of places with any score in last 30 days
+    count_stmt = select(func.count(func.distinct(Place.id))).join(checkins_subq, Place.id == checkins_subq.c.place_id,
+                                                                  isouter=True).join(reviews_subq, Place.id == reviews_subq.c.place_id, isouter=True)
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    return PaginatedPlaces(items=places, total=total, limit=limit, offset=offset)
 
 
 @router.post("/search/advanced", response_model=PaginatedPlaces)
@@ -576,6 +665,8 @@ async def get_trending_places(
         "24h", description="Time window: 1h, 6h, 24h, 7d, 30d"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    lat: float | None = Query(None),
+    lng: float | None = Query(None),
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -671,6 +762,16 @@ async def get_trending_places(
     total = (await db.execute(count_stmt)).scalar_one()
     items = (await db.execute(stmt)).scalars().all()
 
+    # Optional: re-rank by proximity if coordinates provided
+    if lat is not None and lng is not None:
+        from ..utils import haversine_distance
+
+        def distance_or_inf(p: Place) -> float:
+            if p.latitude is None or p.longitude is None:
+                return float("inf")
+            return haversine_distance(lat, lng, p.latitude, p.longitude)
+        items = sorted(items, key=distance_or_inf)
+
     return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -678,6 +779,8 @@ async def get_trending_places(
 async def get_global_trending_places(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    lat: float | None = Query(None),
+    lng: float | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Get globally trending places (no auth required)"""
@@ -757,6 +860,16 @@ async def get_global_trending_places(
     # Execute queries
     total = (await db.execute(count_stmt)).scalar_one()
     items = (await db.execute(stmt)).scalars().all()
+
+    # Optional: re-rank by proximity if coordinates provided
+    if lat is not None and lng is not None:
+        from ..utils import haversine_distance
+
+        def distance_or_inf(p: Place) -> float:
+            if p.latitude is None or p.longitude is None:
+                return float("inf")
+            return haversine_distance(lat, lng, p.latitude, p.longitude)
+        items = sorted(items, key=distance_or_inf)
 
     return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
