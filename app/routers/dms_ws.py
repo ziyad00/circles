@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
-from ..models import DMThread, DMParticipantState
+from ..models import DMThread, DMParticipantState, DMMessage
 
 
 router = APIRouter()
@@ -85,6 +85,44 @@ async def dm_ws(websocket: WebSocket, thread_id: int, db: AsyncSession = Depends
                 state.typing_until = (datetime.now(timezone.utc) + timedelta(seconds=5)) if typing else None
                 await db.commit()
                 await manager.broadcast(thread_id, user_id, {"type": "typing", "user_id": user_id, "typing": typing})
+            elif msg_type == "message":
+                text = (data.get("text") or "").strip()
+                if not text:
+                    await websocket.send_json({"type": "error", "detail": "Empty message"})
+                    continue
+                # prevent sending if the other participant blocked me
+                other_id = thread.user_a_id if user_id == thread.user_b_id else thread.user_b_id
+                other_state = await _get_or_create_state(db, thread_id, other_id)
+                if other_state and getattr(other_state, "blocked", False):
+                    await websocket.send_json({"type": "error", "detail": "You are blocked by this user"})
+                    continue
+                msg = DMMessage(thread_id=thread_id, sender_id=user_id, text=text)
+                db.add(msg)
+                # bump thread updated_at
+                thread.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                await db.refresh(msg)
+                payload = {
+                    "type": "message",
+                    "message": {
+                        "id": msg.id,
+                        "thread_id": msg.thread_id,
+                        "sender_id": msg.sender_id,
+                        "text": msg.text,
+                        "created_at": msg.created_at.isoformat(),
+                    },
+                }
+                # echo to sender and broadcast to other
+                try:
+                    await websocket.send_json(payload)
+                except Exception:
+                    pass
+                await manager.broadcast(thread_id, user_id, payload)
+            elif msg_type == "mark_read":
+                state = await _get_or_create_state(db, thread_id, user_id)
+                state.last_read_at = datetime.now(timezone.utc)
+                await db.commit()
+                await manager.broadcast(thread_id, user_id, {"type": "read", "user_id": user_id, "last_read_at": state.last_read_at.isoformat()})
             elif msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
             else:
