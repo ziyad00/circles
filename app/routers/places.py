@@ -31,7 +31,7 @@ from ..schemas import (
 )
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
-from ..utils import can_view_checkin
+from ..utils import can_view_checkin, haversine_distance
 from ..routers.activity import create_checkin_activity
 
 
@@ -909,11 +909,28 @@ async def create_check_in(
     if recent.scalars().first():
         raise HTTPException(
             status_code=429, detail="Please wait before checking in again to this place")
+    
     # ensure place exists
     res = await db.execute(select(Place).where(Place.id == payload.place_id))
     place = res.scalar_one_or_none()
     if not place:
         raise HTTPException(status_code=404, detail="Place not found")
+
+    # Proximity enforcement (default 500m)
+    from ..config import settings as app_settings
+    if getattr(app_settings, "checkin_enforce_proximity", True):
+        if place.latitude is None or place.longitude is None:
+            raise HTTPException(
+                status_code=400, detail="Place coordinates missing; cannot verify proximity")
+        if payload.latitude is None or payload.longitude is None:
+            raise HTTPException(
+                status_code=400, detail="Missing current location: latitude and longitude are required")
+        distance_km = haversine_distance(
+            payload.latitude, payload.longitude, place.latitude, place.longitude)
+        max_meters = getattr(app_settings, "checkin_max_distance_meters", 500)
+        if distance_km * 1000 > max_meters:
+            raise HTTPException(
+                status_code=400, detail=f"You must be within {max_meters} meters of {place.name} to check in")
 
     # default visibility from user settings if not provided
     default_vis = getattr(
