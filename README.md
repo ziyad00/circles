@@ -65,10 +65,21 @@ The API will be available at `http://localhost:8000`
 
 ### Authentication
 
-- `POST /auth/request-otp` - Request an OTP code
-- `POST /auth/verify-otp` - Verify OTP code and authenticate
+- `POST /auth/request-otp` - Request an OTP code (rate limited: 3/min)
+- `POST /auth/verify-otp` - Verify OTP code and authenticate (rate limited: 5/min)
 
 ### Health Check
+
+### Rate Limiting
+
+The API implements rate limiting to prevent abuse:
+
+- **OTP Requests**: 3 requests per minute per IP
+- **OTP Verification**: 5 attempts per minute per IP
+- **DM Requests**: 5 requests per minute per user
+- **DM Messages**: 20 messages per minute per user
+
+Rate limited requests return HTTP 429 with a descriptive error message.
 
 ### Users
 
@@ -172,12 +183,12 @@ Payload example:
 
 ### Direct Messages (DM)
 
-- POST `/dms/requests` – Start a DM (subject to recipient `dm_privacy`)
+- POST `/dms/requests` – Start a DM (subject to recipient `dm_privacy`, rate limited: 5/min)
 - GET `/dms/requests` – Pending DM requests
 - PUT `/dms/requests/{thread_id}` – Accept/Reject
 - GET `/dms/inbox` – Accepted threads
 - GET `/dms/threads/{thread_id}/messages` – List messages
-- POST `/dms/threads/{thread_id}/messages` – Send message
+- POST `/dms/threads/{thread_id}/messages` – Send message (rate limited: 20/min)
 - POST `/dms/threads/{thread_id}/messages/{message_id}/heart` – Like/Unlike
 - GET `/dms/unread-count` and `/dms/threads/{id}/unread-count`
 - POST `/dms/threads/{id}/mark-read`
