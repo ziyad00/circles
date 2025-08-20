@@ -316,6 +316,78 @@ curl 'http://localhost:8000/places/search?city=San%20Francisco&limit=10&offset=0
 
 Returns `{ items, total, limit, offset }` with `items` as `PlaceResponse[]`.
 
+#### Advanced Search
+
+POST `/places/search/advanced`
+
+```bash
+curl -X POST "http://localhost:8000/places/search/advanced" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "coffee",
+    "city": "San Francisco",
+    "categories": ["coffee", "cafe"],
+    "rating_min": 4.0,
+    "rating_max": 5.0,
+    "has_recent_checkins": true,
+    "has_reviews": true,
+    "has_photos": true,
+    "latitude": 37.7749,
+    "longitude": -122.4194,
+    "radius_km": 5.0,
+    "sort_by": "rating",
+    "sort_order": "desc",
+    "limit": 20,
+    "offset": 0
+  }'
+```
+
+Advanced search with multiple filters:
+
+- **Text search**: Search in place names
+- **Location filters**: City, neighborhood
+- **Category filters**: Multiple categories support
+- **Rating filters**: Min/max rating range
+- **Activity filters**: Has recent check-ins, reviews, photos
+- **Distance search**: Radius-based search with coordinates
+- **Sorting**: By name, rating, created_at, checkins, recent_checkins
+- **Pagination**: Limit and offset
+
+#### Quick Search
+
+GET `/places/search/quick?q=&limit=20&offset=0`
+
+```bash
+curl 'http://localhost:8000/places/search/quick?q=coffee&limit=10'
+```
+
+Quick search across multiple fields (name, city, neighborhood, categories).
+
+#### Search Suggestions
+
+GET `/places/search/suggestions?query=&limit=10`
+
+```bash
+curl 'http://localhost:8000/places/search/suggestions?query=san&limit=5'
+```
+
+Returns autocomplete suggestions for cities, neighborhoods, and categories.
+
+#### Filter Options
+
+GET `/places/search/filter-options`
+
+```bash
+curl 'http://localhost:8000/places/search/filter-options'
+```
+
+Returns available filter options with counts:
+
+- Cities with place counts
+- Neighborhoods with place counts
+- Categories with place counts
+- Rating range (min, max, average)
+
 #### Trending Places (paginated)
 
 GET `/places/trending?city=&category=&hours=24&limit=10&offset=0`

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, text
+from sqlalchemy import select, func, desc, text, or_
 
 from ..database import get_db
 from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto
@@ -25,6 +25,9 @@ from ..schemas import (
     PaginatedPhotos,
     CheckInPhotoResponse,
     EnhancedPlaceResponse,
+    AdvancedSearchFilters,
+    SearchSuggestions,
+    SearchSuggestion,
 )
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
@@ -102,6 +105,325 @@ async def search_places(
         stmt = stmt.where(Place.rating >= rating_min)
     stmt = stmt.offset(offset).limit(limit)
     items = (await db.execute(stmt)).scalars().all()
+    return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.post("/search/advanced", response_model=PaginatedPlaces)
+async def advanced_search_places(
+    filters: AdvancedSearchFilters,
+    db: AsyncSession = Depends(get_db),
+):
+    """Advanced search with multiple filters, sorting, and distance-based search"""
+
+    # Build base query
+    stmt = select(Place)
+    count_stmt = select(func.count(Place.id))
+
+    # Text search
+    if filters.query:
+        query_filter = Place.name.ilike(f"%{filters.query}%")
+        stmt = stmt.where(query_filter)
+        count_stmt = count_stmt.where(query_filter)
+
+    # Location filters
+    if filters.city:
+        city_filter = Place.city.ilike(f"%{filters.city}%")
+        stmt = stmt.where(city_filter)
+        count_stmt = count_stmt.where(city_filter)
+
+    if filters.neighborhood:
+        neighborhood_filter = Place.neighborhood.ilike(
+            f"%{filters.neighborhood}%")
+        stmt = stmt.where(neighborhood_filter)
+        count_stmt = count_stmt.where(neighborhood_filter)
+
+    # Category filters (support multiple categories)
+    if filters.categories:
+        category_conditions = []
+        for category in filters.categories:
+            category_conditions.append(Place.categories.ilike(f"%{category}%"))
+        if category_conditions:
+            category_filter = or_(*category_conditions)
+            stmt = stmt.where(category_filter)
+            count_stmt = count_stmt.where(category_filter)
+
+    # Rating filters
+    if filters.rating_min is not None:
+        rating_min_filter = Place.rating >= filters.rating_min
+        stmt = stmt.where(rating_min_filter)
+        count_stmt = count_stmt.where(rating_min_filter)
+
+    if filters.rating_max is not None:
+        rating_max_filter = Place.rating <= filters.rating_max
+        stmt = stmt.where(rating_max_filter)
+        count_stmt = count_stmt.where(rating_max_filter)
+
+    # Activity filters
+    if filters.has_recent_checkins is not None:
+        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        recent_checkins_subq = (
+            select(CheckIn.place_id)
+            .where(CheckIn.created_at >= yesterday)
+            .group_by(CheckIn.place_id)
+            .subquery()
+        )
+        if filters.has_recent_checkins:
+            stmt = stmt.where(Place.id.in_(
+                select(recent_checkins_subq.c.place_id)))
+            count_stmt = count_stmt.where(Place.id.in_(
+                select(recent_checkins_subq.c.place_id)))
+        else:
+            stmt = stmt.where(~Place.id.in_(
+                select(recent_checkins_subq.c.place_id)))
+            count_stmt = count_stmt.where(~Place.id.in_(
+                select(recent_checkins_subq.c.place_id)))
+
+    if filters.has_reviews is not None:
+        reviews_subq = (
+            select(Review.place_id)
+            .group_by(Review.place_id)
+            .subquery()
+        )
+        if filters.has_reviews:
+            stmt = stmt.where(Place.id.in_(select(reviews_subq.c.place_id)))
+            count_stmt = count_stmt.where(
+                Place.id.in_(select(reviews_subq.c.place_id)))
+        else:
+            stmt = stmt.where(~Place.id.in_(select(reviews_subq.c.place_id)))
+            count_stmt = count_stmt.where(
+                ~Place.id.in_(select(reviews_subq.c.place_id)))
+
+    if filters.has_photos is not None:
+        photos_subq = (
+            select(Photo.place_id)
+            .where(Photo.review_id.is_not(None))
+            .group_by(Photo.place_id)
+            .subquery()
+        )
+        if filters.has_photos:
+            stmt = stmt.where(Place.id.in_(select(photos_subq.c.place_id)))
+            count_stmt = count_stmt.where(
+                Place.id.in_(select(photos_subq.c.place_id)))
+        else:
+            stmt = stmt.where(~Place.id.in_(select(photos_subq.c.place_id)))
+            count_stmt = count_stmt.where(
+                ~Place.id.in_(select(photos_subq.c.place_id)))
+
+    # Distance-based search (if coordinates provided)
+    if filters.latitude is not None and filters.longitude is not None and filters.radius_km is not None:
+        from ..config import settings as app_settings
+        if app_settings.use_postgis:
+            # Use PostGIS for efficient distance search
+            point = func.ST_SetSRID(func.ST_MakePoint(
+                filters.longitude, filters.latitude), 4326)
+            distance_filter = func.ST_DWithin(
+                Place.__table__.c.location,
+                point.cast(text('geography')),
+                filters.radius_km * 1000  # Convert km to meters
+            )
+            stmt = stmt.where(distance_filter)
+            count_stmt = count_stmt.where(distance_filter)
+        else:
+            # Fallback to Haversine formula
+            from ..utils import haversine_distance
+            # This is a simplified approach - in production you'd want to optimize this
+            # For now, we'll filter after the query
+            pass
+
+    # Sorting
+    if filters.sort_by:
+        sort_column = getattr(Place, filters.sort_by, Place.name)
+        if filters.sort_by == "checkins":
+            # Sort by total check-ins count
+            checkins_subq = (
+                select(CheckIn.place_id, func.count(
+                    CheckIn.id).label('checkin_count'))
+                .group_by(CheckIn.place_id)
+                .subquery()
+            )
+            stmt = stmt.outerjoin(checkins_subq, Place.id ==
+                                  checkins_subq.c.place_id)
+            sort_column = func.coalesce(checkins_subq.c.checkin_count, 0)
+        elif filters.sort_by == "recent_checkins":
+            # Sort by recent check-ins count
+            yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+            recent_checkins_subq = (
+                select(CheckIn.place_id, func.count(
+                    CheckIn.id).label('recent_count'))
+                .where(CheckIn.created_at >= yesterday)
+                .group_by(CheckIn.place_id)
+                .subquery()
+            )
+            stmt = stmt.outerjoin(recent_checkins_subq,
+                                  Place.id == recent_checkins_subq.c.place_id)
+            sort_column = func.coalesce(recent_checkins_subq.c.recent_count, 0)
+
+        if filters.sort_order == "desc":
+            stmt = stmt.order_by(sort_column.desc())
+        else:
+            stmt = stmt.order_by(sort_column.asc())
+    else:
+        # Default sorting by name
+        stmt = stmt.order_by(Place.name.asc())
+
+    # Pagination
+    stmt = stmt.offset(filters.offset).limit(filters.limit)
+
+    # Execute queries
+    total = (await db.execute(count_stmt)).scalar_one()
+    items = (await db.execute(stmt)).scalars().all()
+
+    # Apply distance filtering for non-PostGIS fallback
+    if (filters.latitude is not None and filters.longitude is not None and
+            filters.radius_km is not None and not getattr(app_settings, 'use_postgis', False)):
+        from ..utils import haversine_distance
+        filtered_items = []
+        for place in items:
+            if place.latitude and place.longitude:
+                distance = haversine_distance(
+                    filters.latitude, filters.longitude,
+                    place.latitude, place.longitude
+                )
+                if distance <= filters.radius_km:
+                    filtered_items.append(place)
+        items = filtered_items
+        total = len(filtered_items)  # This is approximate for pagination
+
+    return PaginatedPlaces(items=items, total=total, limit=filters.limit, offset=filters.offset)
+
+
+@router.get("/search/suggestions", response_model=SearchSuggestions)
+async def get_search_suggestions(
+    query: str | None = None,
+    limit: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get search suggestions for cities, neighborhoods, and categories"""
+
+    # City suggestions
+    city_stmt = select(Place.city, func.count(Place.id).label('count'))
+    if query:
+        city_stmt = city_stmt.where(Place.city.ilike(f"%{query}%"))
+    city_stmt = city_stmt.where(Place.city.is_not(None)).group_by(
+        Place.city).order_by(desc('count')).limit(limit)
+    city_results = (await db.execute(city_stmt)).all()
+
+    # Neighborhood suggestions
+    neighborhood_stmt = select(
+        Place.neighborhood, func.count(Place.id).label('count'))
+    if query:
+        neighborhood_stmt = neighborhood_stmt.where(
+            Place.neighborhood.ilike(f"%{query}%"))
+    neighborhood_stmt = neighborhood_stmt.where(Place.neighborhood.is_not(
+        None)).group_by(Place.neighborhood).order_by(desc('count')).limit(limit)
+    neighborhood_results = (await db.execute(neighborhood_stmt)).all()
+
+    # Category suggestions (extract from comma-separated categories)
+    category_stmt = select(
+        Place.categories, func.count(Place.id).label('count'))
+    if query:
+        category_stmt = category_stmt.where(
+            Place.categories.ilike(f"%{query}%"))
+    category_stmt = category_stmt.where(Place.categories.is_not(None)).group_by(Place.categories).order_by(
+        # Get more to extract individual categories
+        desc('count')).limit(limit * 2)
+    category_results = (await db.execute(category_stmt)).all()
+
+    # Process categories (split comma-separated values)
+    category_counts = {}
+    for result in category_results:
+        if result.categories:
+            categories = [cat.strip() for cat in result.categories.split(',')]
+            for category in categories:
+                if category and (not query or query.lower() in category.lower()):
+                    category_counts[category] = category_counts.get(
+                        category, 0) + result.count
+
+    # Sort categories by count and take top results
+    sorted_categories = sorted(
+        category_counts.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+    return SearchSuggestions(
+        cities=[SearchSuggestion(
+            type="city", value=result.city, count=result.count) for result in city_results],
+        neighborhoods=[SearchSuggestion(
+            type="neighborhood", value=result.neighborhood, count=result.count) for result in neighborhood_results],
+        categories=[SearchSuggestion(type="category", value=category, count=count)
+                    for category, count in sorted_categories]
+    )
+
+
+@router.get("/search/filter-options")
+async def get_filter_options(db: AsyncSession = Depends(get_db)):
+    """Get available filter options for search"""
+
+    # Get all cities
+    cities_stmt = select(Place.city, func.count(Place.id).label('count')).where(
+        Place.city.is_not(None)).group_by(Place.city).order_by(desc('count'))
+    cities = (await db.execute(cities_stmt)).all()
+
+    # Get all neighborhoods
+    neighborhoods_stmt = select(Place.neighborhood, func.count(Place.id).label('count')).where(
+        Place.neighborhood.is_not(None)).group_by(Place.neighborhood).order_by(desc('count'))
+    neighborhoods = (await db.execute(neighborhoods_stmt)).all()
+
+    # Get all categories
+    categories_stmt = select(Place.categories, func.count(Place.id).label('count')).where(
+        Place.categories.is_not(None)).group_by(Place.categories).order_by(desc('count'))
+    categories_results = (await db.execute(categories_stmt)).all()
+
+    # Process categories
+    category_counts = {}
+    for result in categories_results:
+        if result.categories:
+            categories = [cat.strip() for cat in result.categories.split(',')]
+            for category in categories:
+                if category:
+                    category_counts[category] = category_counts.get(
+                        category, 0) + result.count
+
+    # Get rating range
+    rating_stats = (await db.execute(select(func.min(Place.rating), func.max(Place.rating), func.avg(Place.rating)))).first()
+
+    return {
+        "cities": [{"name": city.city, "count": city.count} for city in cities],
+        "neighborhoods": [{"name": neighborhood.neighborhood, "count": neighborhood.count} for neighborhood in neighborhoods],
+        "categories": [{"name": category, "count": count} for category, count in sorted(category_counts.items(), key=lambda x: x[1], reverse=True)],
+        "rating_range": {
+            "min": float(rating_stats[0]) if rating_stats[0] else 0,
+            "max": float(rating_stats[1]) if rating_stats[1] else 5,
+            "average": float(rating_stats[2]) if rating_stats[2] else 0
+        }
+    }
+
+
+@router.get("/search/quick", response_model=PaginatedPlaces)
+async def quick_search_places(
+    q: str,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Quick search across multiple fields (name, city, neighborhood, categories)"""
+
+    # Build search query across multiple fields
+    search_conditions = [
+        Place.name.ilike(f"%{q}%"),
+        Place.city.ilike(f"%{q}%"),
+        Place.neighborhood.ilike(f"%{q}%"),
+        Place.categories.ilike(f"%{q}%")
+    ]
+
+    # Count total
+    count_stmt = select(func.count(Place.id)).where(
+        or_(*search_conditions))
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    # Get results
+    stmt = select(Place).where(or_(*search_conditions)
+                               ).order_by(Place.name.asc()).offset(offset).limit(limit)
+    items = (await db.execute(stmt)).scalars().all()
+
     return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
