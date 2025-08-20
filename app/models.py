@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, Float
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, Float, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -35,6 +35,8 @@ class User(Base):
     saved_places = relationship("SavedPlace", back_populates="user")
     reviews = relationship("Review", back_populates="user")
     photos = relationship("Photo", back_populates="user")
+    check_in_comments = relationship("CheckInComment", back_populates="user")
+    check_in_likes = relationship("CheckInLike", back_populates="user")
     dm_messages = relationship("DMMessage", back_populates="sender")
 
 
@@ -95,6 +97,11 @@ class CheckIn(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
+    # Comments and likes relationships
+    comments = relationship(
+        "CheckInComment", back_populates="check_in", cascade="all, delete-orphan")
+    likes = relationship(
+        "CheckInLike", back_populates="check_in", cascade="all, delete-orphan")
 
 
 class SavedPlace(Base):
@@ -186,6 +193,41 @@ class CheckInPhoto(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     check_in = relationship("CheckIn", back_populates="photos")
+
+
+class CheckInComment(Base):
+    __tablename__ = "check_in_comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    check_in_id = Column(Integer, ForeignKey(
+        "check_ins.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey(
+        "users.id"), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True),
+                        server_default=func.now(), onupdate=func.now())
+
+    check_in = relationship("CheckIn", back_populates="comments")
+    user = relationship("User", back_populates="check_in_comments")
+
+
+class CheckInLike(Base):
+    __tablename__ = "check_in_likes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    check_in_id = Column(Integer, ForeignKey(
+        "check_ins.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey(
+        "users.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    check_in = relationship("CheckIn", back_populates="likes")
+    user = relationship("User", back_populates="check_in_likes")
+
+    # Unique constraint to prevent duplicate likes
+    __table_args__ = (UniqueConstraint(
+        'check_in_id', 'user_id', name='uq_check_in_like'),)
 
 
 class DMMessage(Base):
