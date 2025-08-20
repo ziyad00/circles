@@ -9,6 +9,12 @@ A FastAPI application with OTP (One-Time Password) authentication and core Place
 - Core Places: create, search (filters), trending
 - Check-Ins with 24h visibility window and basic rate-limiting
 - Saved places lists
+- Follows (one-way) model; privacy for check-ins respects followers/private/public
+- Direct Messages (DMs): requests, inbox, unread counts, mark-as-read, mute, block, typing, presence, heart/like
+- Photos on Reviews (multipart upload), pluggable storage (local/S3)
+- Multiple photos per Check-In
+- Check-In Collections with per-collection visibility (public/friends/private)
+- User privacy settings to control default check-in/collection visibility and DM privacy
 - PostgreSQL + Alembic migrations
 
 ## Setup
@@ -64,14 +70,12 @@ The API will be available at `http://localhost:8000`
 
 - `GET /health` - Health check endpoint
 
-### Friends & Privacy
+### Follows
 
-- `POST /friends/requests` - Send a friend request
-- `PUT /friends/requests/{request_id}` - Accept/reject a friend request
-- `GET /friends/requests` - List pending friend requests
-- `GET /friends` - List accepted friends
-- `DELETE /friends/requests/{request_id}` - Cancel a sent friend request
-- `DELETE /friends/{friend_id}` - Remove a friend
+- `POST /follow/{user_id}` - Follow a user
+- `DELETE /follow/{user_id}` - Unfollow a user
+- `GET /follow/followers?limit=&offset=` - List my followers
+- `GET /follow/following?limit=&offset=` - List who I follow
 
 ## Usage
 
@@ -125,73 +129,43 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/auth/me
 
 ---
 
-### Friends & Privacy
+### Privacy & Visibility
 
-The friends system enables privacy controls for check-ins. Users can set check-in visibility to:
+Check-ins and collections have visibility:
 
 - `public`: Visible to everyone
-- `friends`: Only visible to accepted friends
-- `private`: Only visible to the check-in creator
+- `friends` (followers): Visible to users who follow the owner
+- `private`: Visible only to the owner
 
-#### Send Friend Request
+#### User Privacy Settings
 
-POST `/friends/requests`
+- GET `/settings/privacy`
+- PUT `/settings/privacy`
 
-```bash
-curl -X POST http://localhost:8000/friends/requests \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"addressee_email": "friend@example.com"}'
+Payload example:
+
+```json
+{
+  "dm_privacy": "followers",            // everyone | followers | no_one
+  "checkins_default_visibility": "friends",
+  "collections_default_visibility": "private"
+}
 ```
 
-#### Accept/Reject Friend Request
+### Direct Messages (DM)
 
-PUT `/friends/requests/{request_id}`
-
-```bash
-curl -X PUT http://localhost:8000/friends/requests/1 \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"status": "accepted"}'
-```
-
-Status options: `"accepted"`, `"rejected"`
-
-#### List Pending Friend Requests
-
-GET `/friends/requests?limit=10&offset=0`
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8000/friends/requests?limit=10&offset=0'
-```
-
-#### List Friends
-
-GET `/friends?limit=10&offset=0`
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8000/friends?limit=10&offset=0'
-```
-
-#### Cancel Friend Request
-
-DELETE `/friends/requests/{request_id}`
-
-```bash
-curl -X DELETE http://localhost:8000/friends/requests/1 \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-#### Remove Friend
-
-DELETE `/friends/{friend_id}`
-
-```bash
-curl -X DELETE http://localhost:8000/friends/2 \
-  -H "Authorization: Bearer $TOKEN"
-```
+- POST `/dms/requests` – Start a DM (subject to recipient `dm_privacy`)
+- GET `/dms/requests` – Pending DM requests
+- PUT `/dms/requests/{thread_id}` – Accept/Reject
+- GET `/dms/inbox` – Accepted threads
+- GET `/dms/threads/{thread_id}/messages` – List messages
+- POST `/dms/threads/{thread_id}/messages` – Send message
+- POST `/dms/threads/{thread_id}/messages/{message_id}/heart` – Like/Unlike
+- GET `/dms/unread-count` and `/dms/threads/{id}/unread-count`
+- POST `/dms/threads/{id}/mark-read`
+- PUT `/dms/threads/{id}/mute` and `/dms/threads/{id}/block`
+- POST `/dms/threads/{id}/typing` and GET `/dms/threads/{id}/typing`
+- GET `/dms/threads/{id}/presence`
 
 ---
 
@@ -266,7 +240,7 @@ POST `/places/check-ins`
 curl -X POST http://localhost:8000/places/check-ins \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"place_id":1, "note":"Latte time", "visibility":"public"}'
+  -d '{"place_id":1, "note":"Latte time"}'
 ```
 
 Rate limiting: prevents repeat check-ins to the same place by same user within 5 minutes (429).
@@ -280,10 +254,10 @@ curl -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8000/places/1/whos-here?limit=20&offset=0'
 ```
 
-**Note**: This endpoint now requires authentication and respects check-in visibility settings:
+**Note**: This endpoint requires authentication and respects check-in visibility settings:
 
 - `public` check-ins are visible to everyone
-- `friends` check-ins are only visible to accepted friends
+- `friends` check-ins are only visible to followers
 - `private` check-ins are only visible to the creator
 
 #### Save Place (auth)
@@ -402,6 +376,24 @@ curl -H "Authorization: Bearer $TOKEN" \
 Returns `{ "count": number }` of visible, non-expired check-ins (respects privacy settings).
 
 ### Check-in Delete
+### Photos
+
+- Upload review photo: POST `/places/reviews/{review_id}/photos` (multipart)
+- List place photos (from reviews): GET `/places/{place_id}/photos`
+- Delete review photo: DELETE `/places/reviews/{review_id}/photos/{photo_id}`
+- Upload check-in photo: POST `/places/check-ins/{check_in_id}/photo` (repeat to add multiple)
+- List check-in photos: GET `/places/check-ins/{check_in_id}/photos`
+- Delete one/all check-in photos: DELETE `/places/check-ins/{check_in_id}/photos/{photo_id}` and `/places/check-ins/{check_in_id}/photo`
+
+### Collections
+
+- Create: POST `/collections` { name, visibility? }
+- List: GET `/collections`
+- Rename/update visibility: PATCH `/collections/{collection_id}` { name, visibility? }
+- Delete: DELETE `/collections/{collection_id}`
+- Add check-in: POST `/collections/{collection_id}/items/{check_in_id}`
+- List items: GET `/collections/{collection_id}/items` (respects collection visibility)
+- Remove item: DELETE `/collections/{collection_id}/items/{item_id}`
 
 DELETE `/places/check-ins/{check_in_id}` (auth)
 
@@ -441,6 +433,18 @@ JWT_EXPIRY_MINUTES=30
 # OTP throttling (per email+IP)
 APP_OTP_REQUESTS_PER_MINUTE=5
 APP_OTP_REQUESTS_BURST=10
+# Storage
+STORAGE_BACKEND=local  # or s3
+LOCAL_STORAGE_PATH=media
+S3_BUCKET=your-bucket
+S3_REGION=your-region
+S3_ENDPOINT_URL=
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
+S3_PUBLIC_BASE_URL=
+S3_USE_PATH_STYLE=true
+# CORS
+CORS_ALLOWED_ORIGINS=["http://localhost:3000", "http://localhost:5173"]
 ```
 
 ### OTP Rate Limiting
@@ -466,10 +470,17 @@ circles/
 │   ├── routers/
 │   │   ├── __init__.py
 │   │   ├── auth.py       # Authentication endpoints
+│   │   ├── places.py     # Places, reviews, check-ins, photos
+│   │   ├── follow.py     # Follow/Followers
+│   │   ├── dms.py        # Direct messages
+│   │   ├── collections.py# Check-in collections
+│   │   ├── settings.py   # Privacy settings
 │   │   └── health.py     # Health check endpoint
 │   └── services/
 │       ├── __init__.py
-│       └── otp_service.py # OTP generation and validation
+│       ├── otp_service.py # OTP generation and validation
+│       ├── jwt_service.py # JWT utilities
+│       └── storage.py     # File storage (local/S3)
 ├── alembic/              # Database migrations
 ├── tests/               # Test files
 ├── docker-compose.yml   # PostgreSQL setup
