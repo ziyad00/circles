@@ -15,7 +15,14 @@ from ..schemas import (
 from ..services.jwt_service import JWTService
 from ..utils import can_view_checkin
 
-router = APIRouter(prefix="/activity", tags=["activity"])
+router = APIRouter(
+    prefix="/activity", 
+    tags=["activity feed"],
+    responses={
+        400: {"description": "Invalid filter parameters"},
+        500: {"description": "Internal server error"}
+    }
+)
 
 
 async def _create_activity(
@@ -42,14 +49,42 @@ async def get_activity_feed(
     db: AsyncSession = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    activity_types: str = Query(
-        None, description="Comma-separated activity types to filter"),
-    since: datetime = Query(
-        None, description="Show activities since this time"),
-    until: datetime = Query(
-        None, description="Show activities until this time"),
 ):
-    """Get activity feed for the current user (activities from followed users)"""
+    """
+    Get activity feed from followed users.
+    
+    **Authentication Required:** Yes
+    
+    **Features:**
+    - Shows activities from users you follow
+    - Real-time social timeline
+    - Privacy-respecting content
+    - Rich activity data
+    
+    **Activity Types:**
+    - Check-ins with photos and notes
+    - Reviews and ratings
+    - Follow relationships
+    - Collection creations
+    - Likes and comments
+    
+    **Privacy Enforcement:**
+    - Only shows content user has permission to see
+    - Respects visibility settings (public, friends, private)
+    - Followers can see friends-only content
+    
+    **Response Format:**
+    - Activity type and timestamp
+    - User information (name, avatar)
+    - Activity-specific data (place, photos, etc.)
+    - Pagination information
+    
+    **Use Cases:**
+    - Social timeline
+    - Friend activity monitoring
+    - Content discovery
+    - Social networking features
+    """
 
     # Get list of users the current user follows
     following_query = select(Follow.followee_id).where(

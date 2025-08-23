@@ -14,7 +14,15 @@ from datetime import datetime, timedelta, timezone
 _otp_request_log: dict[tuple[str, str], list[datetime]] = {}
 _otp_verify_log: dict[tuple[str, str], list[datetime]] = {}
 
-router = APIRouter(prefix="/auth", tags=["authentication"])
+router = APIRouter(
+    prefix="/auth",
+    tags=["authentication"],
+    responses={
+        404: {"description": "User not found"},
+        429: {"description": "Rate limit exceeded"},
+        500: {"description": "Internal server error"}
+    }
+)
 
 
 @router.post("/request-otp", response_model=OTPResponse)
@@ -25,7 +33,23 @@ async def request_otp(
 ):
     """
     Request an OTP code for authentication.
-    This will create a user if they don't exist and send an OTP code.
+
+    This endpoint will:
+    - Create a new user if they don't exist
+    - Generate and send an OTP code
+    - Apply rate limiting (3 requests per minute per IP)
+
+    **Rate Limits:**
+    - 3 requests per minute per IP address
+    - 10 requests per 5 minutes per IP address (burst protection)
+
+    **Development Mode:**
+    - OTP code is returned in response for testing
+    - In production, this would be sent via email/SMS
+
+    **Response:**
+    - `message`: Success message with OTP code (dev mode)
+    - `expires_in_minutes`: How long the OTP is valid
     """
     try:
         # Throttle by email + IP
@@ -80,6 +104,25 @@ async def verify_otp(
 ):
     """
     Verify OTP code and authenticate user.
+
+    This endpoint will:
+    - Validate the provided OTP code
+    - Return user information and JWT access token
+    - Apply rate limiting (5 attempts per minute per IP)
+
+    **Rate Limits:**
+    - 5 verification attempts per minute per IP address
+
+    **Response:**
+    - `message`: Success message
+    - `user`: User profile information
+    - `access_token`: JWT token for authenticated requests
+
+    **Usage:**
+    Include the access_token in subsequent requests:
+    ```
+    Authorization: Bearer <access_token>
+    ```
     """
     try:
         # Throttle by email + IP (same limits as request-otp)
@@ -133,12 +176,22 @@ async def verify_otp(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user_info(
-    current_user: User = Depends(JWTService.get_current_user)
+async def get_current_user(
+    current_user: User = Depends(JWTService.get_current_user),
 ):
     """
-    Get current authenticated user information.
-    This endpoint requires a valid JWT token.
+    Get current authenticated user's profile.
+
+    **Authentication Required:** Yes
+
+    **Response:**
+    - Complete user profile information
+    - Includes privacy settings and preferences
+
+    **Use Cases:**
+    - Display user profile in app
+    - Check user settings and preferences
+    - Verify authentication status
     """
     try:
         return UserResponse(

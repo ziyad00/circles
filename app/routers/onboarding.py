@@ -16,7 +16,16 @@ from ..schemas import (
 )
 from ..services.jwt_service import JWTService
 
-router = APIRouter(prefix="/onboarding", tags=["onboarding"])
+router = APIRouter(
+    prefix="/onboarding", 
+    tags=["onboarding"],
+    responses={
+        400: {"description": "Invalid phone number or username format"},
+        409: {"description": "Username already taken"},
+        429: {"description": "Rate limit exceeded"},
+        500: {"description": "Internal server error"}
+    }
+)
 
 
 def validate_phone_number(phone: str) -> bool:
@@ -38,7 +47,41 @@ async def request_phone_otp(
     payload: PhoneOTPRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Request OTP for phone number authentication"""
+    """
+    Request OTP for phone number authentication.
+    
+    **Authentication Required:** No
+    
+    **Features:**
+    - Phone number validation (international format)
+    - Rate limiting (5-minute cooldown)
+    - Creates user if not exists
+    - Development mode returns OTP in response
+    
+    **Phone Validation:**
+    - Must be international format (+1234567890)
+    - 10-15 digits after country code
+    - Basic format validation
+    
+    **Rate Limiting:**
+    - 5-minute cooldown between requests
+    - Prevents OTP spam
+    
+    **Development Mode:**
+    - OTP returned in response for testing
+    - In production, would send via SMS
+    
+    **Response:**
+    - Success message
+    - OTP code (dev mode only)
+    - Whether user is new or existing
+    
+    **Use Cases:**
+    - Phone-based authentication
+    - User registration flow
+    - Account recovery
+    - Mobile app onboarding
+    """
 
     # Validate phone number format
     if not validate_phone_number(payload.phone):
