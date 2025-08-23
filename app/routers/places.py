@@ -41,11 +41,44 @@ from ..routers.activity import create_checkin_activity
 from ..models import Follow
 
 
-router = APIRouter(prefix="/places", tags=["places"])
+router = APIRouter(
+    prefix="/places",
+    tags=["places"],
+    responses={
+        404: {"description": "Place not found"},
+        400: {"description": "Invalid request data"},
+        429: {"description": "Rate limit exceeded"},
+        500: {"description": "Internal server error"}
+    }
+)
 
 
 @router.post("/", response_model=PlaceResponse)
 async def create_place(payload: PlaceCreate, db: AsyncSession = Depends(get_db)):
+    """
+    Create a new place in the system.
+
+    **Authentication Required:** No (public endpoint)
+
+    **Features:**
+    - Creates a new place with location data
+    - Supports PostGIS integration for geospatial queries
+    - Normalizes categories to comma-separated format
+
+    **Location Data:**
+    - `latitude`/`longitude`: Required for proximity features
+    - PostGIS geography column is automatically set if enabled
+
+    **Categories:**
+    - Can be provided as list or string
+    - Automatically normalized to comma-separated format
+    - Used for search and filtering
+
+    **Use Cases:**
+    - Add new businesses/venues to the platform
+    - Enable check-ins at new locations
+    - Expand place database
+    """
     # Normalize categories to comma-separated string
     categories = None
     if payload.categories is not None:
@@ -85,6 +118,33 @@ async def search_places(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Search for places with basic filters.
+
+    **Authentication Required:** No (public endpoint)
+
+    **Search Filters:**
+    - `query`: Search in place names (partial match)
+    - `city`: Filter by specific city
+    - `neighborhood`: Filter by neighborhood
+    - `category`: Filter by category (partial match)
+    - `rating_min`: Minimum rating filter
+
+    **Pagination:**
+    - `limit`: Number of results (1-100, default 20)
+    - `offset`: Number of results to skip (default 0)
+
+    **Response:**
+    - `items`: Array of places matching criteria
+    - `total`: Total number of matching places
+    - `limit`/`offset`: Pagination info
+
+    **Use Cases:**
+    - Basic place discovery
+    - Location-based searches
+    - Category browsing
+    - Rating-based filtering
+    """
     # total count
     count_stmt = select(func.count(Place.id))
     if query:
@@ -124,7 +184,32 @@ async def get_recommendations(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(JWTService.get_current_user),
 ):
-    """Personalized place recommendations based on follows and interests."""
+    """
+    Get personalized place recommendations.
+
+    **Authentication Required:** Yes
+
+    **Recommendation Algorithm:**
+    - Based on followed users' recent check-ins (7 days)
+    - Considers followed users' reviews (30 days)
+    - Boosts places matching user interests
+    - Optional geo-reranking by proximity
+
+    **Parameters:**
+    - `lat`/`lng`: Optional coordinates for proximity re-ranking
+    - `limit`/`offset`: Standard pagination
+
+    **Scoring:**
+    - Check-ins from followed users: 5 points each
+    - Reviews from followed users: 3 points each
+    - Interest matches: 1 point per match
+
+    **Use Cases:**
+    - Personalized place discovery
+    - Social recommendations
+    - Interest-based suggestions
+    - Location-aware recommendations
+    """
     now = datetime.now(timezone.utc)
     seven_days_ago = now - timedelta(days=7)
     thirty_days_ago = now - timedelta(days=30)
@@ -670,8 +755,40 @@ async def get_trending_places(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get trending places based on recent activity"""
+    """
+    Get trending places based on recent activity.
 
+    **Authentication Required:** Yes
+
+    **Trending Algorithm:**
+    - Calculates activity score over specified time window
+    - Considers check-ins, reviews, photos, and unique users
+    - Optional geo-reranking by proximity
+
+    **Time Windows:**
+    - `1h`: Last hour
+    - `6h`: Last 6 hours
+    - `24h`: Last 24 hours (default)
+    - `7d`: Last 7 days
+    - `30d`: Last 30 days
+
+    **Scoring Formula:**
+    - Check-ins: 3 points each
+    - Reviews: 2 points each
+    - Photos: 1 point each
+    - Unique users: 2 points each
+
+    **Parameters:**
+    - `time_window`: Activity time period
+    - `lat`/`lng`: Optional coordinates for proximity re-ranking
+    - `limit`/`offset`: Standard pagination
+
+    **Use Cases:**
+    - Discover popular places
+    - Real-time trending content
+    - Location-aware trending
+    - Activity-based discovery
+    """
     # Calculate time window
     now = datetime.now(timezone.utc)
     time_windows = {
@@ -936,12 +1053,41 @@ async def nearby_places(
 
 
 @router.get("/{place_id}", response_model=EnhancedPlaceResponse)
-async def get_place(
+async def get_place_details(
     place_id: int,
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get place details with enhanced statistics and user-specific data"""
+    """
+    Get detailed information about a place.
+
+    **Authentication Required:** Yes
+
+    **Enhanced Response Includes:**
+    - Basic place information (name, address, coordinates)
+    - Real-time statistics (check-ins, reviews, photos)
+    - Current activity (who's here now)
+    - User-specific data (is checked in, is saved)
+    - Recent reviews and photos
+
+    **Statistics:**
+    - Average rating and total reviews
+    - Active check-ins (last 24 hours)
+    - Total check-ins ever
+    - Recent reviews (last 30 days)
+    - Photos count
+
+    **User Context:**
+    - Whether user is currently checked in
+    - Whether place is saved to user's lists
+    - User's relationship to the place
+
+    **Use Cases:**
+    - Place detail pages
+    - Pre-check-in information
+    - Social proof and activity
+    - Place discovery and exploration
+    """
     # Get place
     res = await db.execute(select(Place).where(Place.id == place_id))
     place = res.scalar_one_or_none()
@@ -1221,7 +1367,34 @@ async def whos_here(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
-    """Get who's currently checked in at this place (last 24h)"""
+    """
+    Get who's currently checked in at this place.
+
+    **Authentication Required:** Yes
+
+    **Features:**
+    - Shows users checked in within last 24 hours
+    - Respects privacy settings (visibility controls)
+    - Rich user information (name, avatar, check-in time)
+    - Photo URLs from check-ins
+
+    **Privacy Enforcement:**
+    - Only shows check-ins user has permission to see
+    - Respects `public`, `friends`, `private` visibility
+    - Followers can see `friends` visibility check-ins
+
+    **Response Data:**
+    - User ID, name, and avatar
+    - Check-in timestamp
+    - Photo URLs from the check-in
+    - Pagination information
+
+    **Use Cases:**
+    - Social discovery at places
+    - Real-time activity monitoring
+    - Privacy-respecting social features
+    - Location-based social networking
+    """
     # Verify place exists
     res = await db.execute(select(Place).where(Place.id == place_id))
     place = res.scalar_one_or_none()
@@ -1303,6 +1476,42 @@ async def create_check_in(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Create a new check-in at a place.
+
+    **Authentication Required:** Yes
+
+    **Features:**
+    - Check-in with optional note and visibility
+    - Proximity enforcement (500m default)
+    - Rate limiting (5-minute cooldown per place)
+    - Uses user's default visibility if not specified
+
+    **Proximity Enforcement:**
+    - User must be within 500m of place (configurable)
+    - Can be disabled with `APP_CHECKIN_ENFORCE_PROXIMITY=false`
+    - Requires valid place coordinates
+
+    **Visibility Options:**
+    - `public`: Visible to everyone
+    - `friends`: Visible to followers only
+    - `private`: Visible only to user
+
+    **Rate Limiting:**
+    - 5-minute cooldown between check-ins at same place
+    - Prevents spam and duplicate check-ins
+
+    **Check-in Lifecycle:**
+    - Expires after 24 hours
+    - Appears in "who's here" for 24 hours
+    - Creates activity feed entry
+
+    **Use Cases:**
+    - Share current location
+    - Start social interactions
+    - Track visited places
+    - Privacy-controlled location sharing
+    """
     # Rate limit: prevent duplicate check-ins for same user/place within 5 minutes
     five_min_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
     recent = await db.execute(
@@ -1380,6 +1589,46 @@ async def create_check_in_full(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Create a check-in with photos and collection assignments in one request.
+
+    **Authentication Required:** Yes
+
+    **Features:**
+    - One-shot check-in creation with multiple photos
+    - Automatic collection assignment
+    - Proximity enforcement (500m default)
+    - Rate limiting (5-minute cooldown per place)
+
+    **Proximity Enforcement:**
+    - User must be within 500m of place (configurable)
+    - Can be disabled with `APP_CHECKIN_ENFORCE_PROXIMITY=false`
+    - Requires valid place coordinates
+
+    **Photo Upload:**
+    - Multiple photos supported
+    - Formats: JPEG, PNG, WebP
+    - Max size: 10MB per photo
+    - Stored locally in development
+
+    **Collection Assignment:**
+    - `collection_ids`: JSON array or comma-separated string
+    - Only user's own collections allowed
+    - Automatic validation of ownership
+
+    **Rate Limiting:**
+    - 5-minute cooldown between check-ins at same place
+    - Prevents spam and duplicate check-ins
+
+    **Visibility:**
+    - Uses user's default if not specified
+    - Options: public, friends (followers), private
+
+    **Use Cases:**
+    - Quick check-in with photos
+    - Social sharing with collections
+    - Location-based social updates
+    """
     # Rate limit: prevent duplicate check-ins for same user/place within 5 minutes
     five_min_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
     recent = await db.execute(

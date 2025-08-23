@@ -1,0 +1,654 @@
+CIRCLES API DOCUMENTATION
+========================
+
+Base URL: http://localhost:8000
+API Version: 1.0.0
+
+OVERVIEW
+--------
+Circles is a social location-based application that allows users to check in at places, 
+follow other users, send direct messages, create collections, and discover trending places.
+
+AUTHENTICATION
+--------------
+Most endpoints require authentication via JWT token in the Authorization header:
+Authorization: Bearer <jwt_token>
+
+================================================================================
+AUTHENTICATION ENDPOINTS
+================================================================================
+
+POST /auth/request-otp
+---------------------
+Request OTP for email authentication
+- Body: {"email": "user@example.com"}
+- Response: {"message": "OTP sent to email"}
+
+POST /auth/verify-otp
+---------------------
+Verify OTP and get JWT token
+- Body: {"email": "user@example.com", "otp": "123456"}
+- Response: {"access_token": "jwt_token", "token_type": "bearer"}
+
+POST /auth/refresh
+-----------------
+Refresh JWT token
+- Headers: Authorization: Bearer <current_token>
+- Response: {"access_token": "new_jwt_token", "token_type": "bearer"}
+
+================================================================================
+ONBOARDING ENDPOINTS
+================================================================================
+
+POST /onboarding/request-phone-otp
+---------------------------------
+Request OTP for phone number verification
+- Body: {"phone": "+1234567890"}
+- Response: {"message": "OTP sent to phone"}
+
+POST /onboarding/verify-phone-otp
+--------------------------------
+Verify phone OTP
+- Body: {"phone": "+1234567890", "otp": "123456"}
+- Response: {"message": "Phone verified"}
+
+GET /onboarding/check-username/{username}
+----------------------------------------
+Check if username is available
+- Response: {"available": true/false}
+
+POST /onboarding/complete-setup
+------------------------------
+Complete user onboarding setup
+- Body: {
+    "username": "username",
+    "display_name": "Display Name",
+    "bio": "User bio",
+    "interests": ["food", "travel"]
+  }
+- Response: {"message": "Setup completed"}
+
+GET /onboarding/status
+---------------------
+Get onboarding completion status
+- Response: {"completed": true/false, "steps_completed": [...]}
+
+================================================================================
+USER ENDPOINTS
+================================================================================
+
+GET /users/me
+------------
+Get current user profile
+- Response: User profile with all fields
+
+PUT /users/me
+------------
+Update current user profile
+- Body: {"display_name": "New Name", "bio": "New bio"}
+- Response: Updated user profile
+
+GET /users/{user_id}
+-------------------
+Get public user profile
+- Response: Public user profile (respects privacy settings)
+
+GET /users/{user_id}/profile-stats
+---------------------------------
+Get user profile statistics
+- Response: {"total_checkins": 10, "total_followers": 5, "total_following": 3}
+
+GET /users/{user_id}/media
+-------------------------
+Get user's media (check-ins with photos)
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of check-ins with photos
+
+GET /users/{user_id}/collections
+-------------------------------
+Get user's collections (respects visibility settings)
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of collections
+
+POST /users/search
+-----------------
+Search users with filters
+- Body: {
+    "query": "search term",
+    "location": {"lat": 40.7128, "lng": -74.0060, "radius_km": 10},
+    "interests": ["food", "travel"],
+    "page": 1,
+    "per_page": 20
+  }
+- Response: Paginated list of matching users
+
+GET /users/{user_id}/whos-here
+-----------------------------
+Get users currently at a place
+- Query params: place_id (int)
+- Response: List of users at the place
+
+POST /users/follow/{user_id}
+---------------------------
+Follow a user
+- Response: {"message": "User followed"}
+
+DELETE /users/follow/{user_id}
+-----------------------------
+Unfollow a user
+- Response: {"message": "User unfollowed"}
+
+GET /users/following
+-------------------
+Get users you're following
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of followed users
+
+GET /users/followers
+-------------------
+Get your followers
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of followers
+
+================================================================================
+PLACES ENDPOINTS
+================================================================================
+
+GET /places/{id}
+---------------
+Get place details
+- Response: Place information with basic stats
+
+GET /places/{id}/stats/enhanced
+------------------------------
+Get enhanced place statistics
+- Response: Detailed place statistics including check-ins, photos, ratings
+
+GET /places/{id}/whos-here
+-------------------------
+Get detailed list of users at place
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of users with check-in details
+
+GET /places/search/advanced
+--------------------------
+Advanced place search with filters
+- Query params: 
+  - q (string): Search query
+  - lat, lng (float): Location coordinates
+  - radius_km (float): Search radius
+  - categories (string): Comma-separated categories
+  - min_rating (float): Minimum rating
+  - has_photos (bool): Places with photos only
+  - page (int): Page number
+  - per_page (int): Items per page
+- Response: Paginated list of matching places
+
+GET /places/search/quick
+-----------------------
+Quick place search
+- Query params: q (string), lat (float), lng (float), radius_km (float)
+- Response: List of nearby places matching query
+
+GET /places/search/suggestions
+-----------------------------
+Get place search suggestions
+- Query params: q (string), lat (float), lng (float)
+- Response: List of place name suggestions
+
+GET /places/search/filter-options
+--------------------------------
+Get available filter options
+- Response: Available categories, rating ranges, etc.
+
+GET /places/trending
+-------------------
+Get trending places in user's area
+- Query params: lat (float), lng (float), radius_km (float), page (int), per_page (int)
+- Response: Paginated list of trending places
+
+GET /places/trending/global
+--------------------------
+Get globally trending places
+- Query params: page (int), per_page (int)
+- Response: Paginated list of globally trending places
+
+GET /places/recommendations
+--------------------------
+Get personalized place recommendations
+- Query params: page (int), per_page (int)
+- Response: Paginated list of recommended places
+
+POST /places/check-ins/full
+--------------------------
+Create a full check-in with details
+- Body: {
+    "place_id": 1,
+    "message": "Check-in message",
+    "visibility": "public",
+    "photos": [file1, file2],
+    "rating": 4.5,
+    "tags": ["food", "dinner"]
+  }
+- Response: Created check-in details
+
+================================================================================
+CHECK-INS ENDPOINTS
+================================================================================
+
+GET /check-ins/{check_in_id}
+---------------------------
+Get detailed check-in view
+- Response: Check-in details with comments and likes
+
+GET /check-ins/{check_in_id}/stats
+---------------------------------
+Get check-in statistics
+- Response: {"likes_count": 5, "comments_count": 3, "views_count": 25}
+
+POST /check-ins/{check_in_id}/comments
+-------------------------------------
+Add comment to check-in
+- Body: {"content": "Comment text"}
+- Response: Created comment
+
+GET /check-ins/{check_in_id}/comments
+------------------------------------
+Get check-in comments
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of comments
+
+POST /check-ins/{check_in_id}/like
+---------------------------------
+Like a check-in
+- Response: {"message": "Check-in liked"}
+
+DELETE /check-ins/{check_in_id}/like
+-----------------------------------
+Unlike a check-in
+- Response: {"message": "Check-in unliked"}
+
+GET /check-ins/{check_in_id}/likes
+---------------------------------
+Get check-in likes
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of users who liked
+
+================================================================================
+DIRECT MESSAGES ENDPOINTS
+================================================================================
+
+GET /dms/inbox
+-------------
+Get DM inbox
+- Query params: 
+  - q (string): Search query
+  - include_archived (bool): Include archived threads
+  - only_pinned (bool): Only pinned threads
+  - page (int), per_page (int, max 50)
+- Response: Paginated list of DM threads
+
+GET /dms/threads/{thread_id}
+---------------------------
+Get DM thread messages
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of messages
+
+POST /dms/threads/{thread_id}/messages
+-------------------------------------
+Send message in thread
+- Body: {"content": "Message text", "attachments": [file1, file2]}
+- Response: Created message
+
+POST /dms/threads/{thread_id}/read
+---------------------------------
+Mark thread as read
+- Response: {"message": "Thread marked as read"}
+
+PUT /dms/threads/{thread_id}/pin
+-------------------------------
+Pin/unpin DM thread
+- Response: {"message": "Thread pinned/unpinned"}
+
+PUT /dms/threads/{thread_id}/archive
+-----------------------------------
+Archive/unarchive DM thread
+- Response: {"message": "Thread archived/unarchived"}
+
+POST /dms/threads
+-----------------
+Create new DM thread
+- Body: {"user_id": 123, "message": "Initial message"}
+- Response: Created thread with initial message
+
+================================================================================
+WEBSOCKET ENDPOINTS
+================================================================================
+
+WS /dms/ws
+----------
+WebSocket connection for real-time DMs
+- Headers: Authorization: Bearer <jwt_token>
+- Messages:
+  - Send: {"type": "message", "thread_id": 1, "content": "text"}
+  - Typing: {"type": "typing", "thread_id": 1, "is_typing": true}
+  - Read: {"type": "read", "thread_id": 1}
+  - Reaction: {"type": "reaction", "message_id": 1, "reaction": "👍"}
+
+================================================================================
+COLLECTIONS ENDPOINTS
+================================================================================
+
+GET /collections
+---------------
+Get user's collections
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of collections
+
+POST /collections
+-----------------
+Create new collection
+- Body: {"name": "Collection name", "visibility": "public"}
+- Response: Created collection
+
+GET /collections/{collection_id}
+------------------------------
+Get collection details
+- Response: Collection with items
+
+PUT /collections/{collection_id}
+------------------------------
+Update collection
+- Body: {"name": "New name", "visibility": "private"}
+- Response: Updated collection
+
+DELETE /collections/{collection_id}
+---------------------------------
+Delete collection
+- Response: {"message": "Collection deleted"}
+
+POST /collections/{collection_id}/items
+-------------------------------------
+Add check-in to collection
+- Body: {"check_in_id": 123}
+- Response: {"message": "Item added"}
+
+DELETE /collections/{collection_id}/items/{check_in_id}
+-----------------------------------------------------
+Remove check-in from collection
+- Response: {"message": "Item removed"}
+
+================================================================================
+ACTIVITY FEED ENDPOINTS
+================================================================================
+
+GET /activity/feed
+-----------------
+Get activity feed
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of activities from followed users
+
+POST /activity/feed/filtered
+---------------------------
+Get filtered activity feed
+- Body: {
+    "activity_types": ["check_in", "follow", "like"],
+    "date_from": "2024-01-01",
+    "date_to": "2024-12-31"
+  }
+- Response: Filtered activity feed
+
+GET /activity/my-activities
+--------------------------
+Get current user's activities
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of user's activities
+
+GET /activity/user/{user_id}/activities
+--------------------------------------
+Get specific user's activities
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of user's activities
+
+================================================================================
+SETTINGS ENDPOINTS
+================================================================================
+
+GET /settings/privacy
+--------------------
+Get privacy settings
+- Response: Current privacy settings
+
+PUT /settings/privacy
+--------------------
+Update privacy settings
+- Body: {
+    "dm_privacy": "followers_only",
+    "checkins_default_visibility": "public",
+    "collections_default_visibility": "private"
+  }
+- Response: Updated privacy settings
+
+GET /settings/notifications
+--------------------------
+Get notification preferences
+- Response: Current notification preferences
+
+PUT /settings/notifications
+--------------------------
+Update notification preferences
+- Body: {
+    "dm_messages": true,
+    "dm_requests": true,
+    "follows": true,
+    "likes": true,
+    "comments": true,
+    "activity_summary": false,
+    "marketing": false
+  }
+- Response: Updated notification preferences
+
+================================================================================
+SUPPORT ENDPOINTS
+================================================================================
+
+POST /support/tickets
+--------------------
+Create support ticket
+- Body: {"subject": "Issue subject", "message": "Issue description"}
+- Response: Created ticket
+
+GET /support/tickets
+-------------------
+Get user's support tickets
+- Query params: page (int), per_page (int, max 50)
+- Response: Paginated list of tickets
+
+GET /support/tickets/{ticket_id}
+------------------------------
+Get ticket details
+- Response: Ticket with messages
+
+POST /support/tickets/{ticket_id}/messages
+----------------------------------------
+Add message to ticket
+- Body: {"message": "Response message"}
+- Response: Created message
+
+# ADMIN ENDPOINTS (Admin access required)
+
+GET /support/admin/tickets
+-------------------------
+Get all support tickets (admin only)
+- Query params: status (string), page (int), per_page (int, max 50)
+- Response: Paginated list of all tickets
+
+PUT /support/admin/tickets/{ticket_id}
+------------------------------------
+Update ticket status (admin only)
+- Body: {"status": "closed", "admin_response": "Issue resolved"}
+- Response: Updated ticket
+
+================================================================================
+FILE UPLOAD ENDPOINTS
+================================================================================
+
+POST /upload/photo
+-----------------
+Upload photo
+- Body: multipart/form-data with photo file
+- Response: {"url": "photo_url", "filename": "filename.jpg"}
+
+DELETE /upload/photo/{filename}
+------------------------------
+Delete photo
+- Response: {"message": "Photo deleted"}
+
+================================================================================
+SYSTEM ENDPOINTS
+================================================================================
+
+GET /health
+----------
+Health check
+- Response: {"status": "healthy"}
+
+GET /metrics
+-----------
+Application metrics (protected in production)
+- Headers: X-Metrics-Token: <token> (required in production)
+- Response: Prometheus metrics
+
+================================================================================
+ERROR RESPONSES
+================================================================================
+
+All endpoints return consistent error responses:
+
+400 Bad Request:
+{
+  "error": "Validation error",
+  "message": "Invalid input data",
+  "details": {...}
+}
+
+401 Unauthorized:
+{
+  "error": "Authentication required",
+  "message": "Valid JWT token required"
+}
+
+403 Forbidden:
+{
+  "error": "Access denied",
+  "message": "Insufficient permissions"
+}
+
+404 Not Found:
+{
+  "error": "Resource not found",
+  "message": "Requested resource does not exist"
+}
+
+422 Validation Error:
+{
+  "error": "Validation error",
+  "message": "Invalid request data",
+  "details": {...}
+}
+
+500 Internal Server Error:
+{
+  "error": "Internal server error",
+  "message": "An unexpected error occurred"
+}
+
+================================================================================
+RATE LIMITING
+================================================================================
+
+The following endpoints have rate limiting:
+- OTP requests: 3 requests per 5 minutes
+- DM messages: 10 messages per minute
+- Check-ins: 5 check-ins per minute
+- File uploads: 10 uploads per minute
+
+Rate limit headers:
+- X-RateLimit-Limit: Maximum requests per window
+- X-RateLimit-Remaining: Remaining requests in current window
+- X-RateLimit-Reset: Time when rate limit resets
+
+================================================================================
+PAGINATION
+================================================================================
+
+Paginated endpoints return:
+{
+  "items": [...],
+  "total": 100,
+  "page": 1,
+  "per_page": 20,
+  "pages": 5,
+  "has_next": true,
+  "has_prev": false
+}
+
+Default pagination: page=1, per_page=20
+Maximum per_page: 50
+
+================================================================================
+WEBSOCKET MESSAGE FORMATS
+================================================================================
+
+Client to Server:
+{
+  "type": "message|typing|read|reaction",
+  "thread_id": 123,
+  "content": "message text",  // for message type
+  "is_typing": true,          // for typing type
+  "message_id": 456,          // for reaction type
+  "reaction": "👍"            // for reaction type
+}
+
+Server to Client:
+{
+  "type": "message|typing|read|reaction|presence",
+  "thread_id": 123,
+  "user_id": 789,
+  "timestamp": "2024-01-01T12:00:00Z",
+  "content": "message text",  // for message type
+  "is_typing": true,          // for typing type
+  "message_id": 456,          // for reaction type
+  "reaction": "👍",           // for reaction type
+  "online": true              // for presence type
+}
+
+================================================================================
+ENVIRONMENT VARIABLES
+================================================================================
+
+Required environment variables:
+- APP_DATABASE_URL: PostgreSQL connection string
+- APP_SECRET_KEY: JWT secret key
+- APP_DEBUG: Debug mode (true/false)
+
+Optional environment variables:
+- APP_METRICS_TOKEN: Token for metrics endpoint protection
+- APP_USE_POSTGIS: Enable PostGIS for geospatial features
+- APP_CHECKIN_ENFORCE_PROXIMITY: Enforce proximity for check-ins
+- APP_CHECKIN_MAX_DISTANCE_METERS: Maximum distance for check-ins
+
+================================================================================
+NOTES
+================================================================================
+
+1. All timestamps are in ISO 8601 format (UTC)
+2. Coordinates use decimal degrees (latitude, longitude)
+3. File uploads support: JPEG, PNG, GIF (max 10MB)
+4. JWT tokens expire after 24 hours
+5. WebSocket connections require valid JWT token
+6. Privacy settings affect data visibility across endpoints
+7. Rate limiting applies per user/IP address
+8. Admin endpoints require special admin privileges
+9. Metrics endpoint is open in development, protected in production
+10. All endpoints return JSON responses except file uploads

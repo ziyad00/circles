@@ -33,7 +33,96 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Circles", lifespan=lifespan)
+app = FastAPI(
+    title="Circles - Social Location App",
+    description="""
+# Circles API Documentation
+
+Circles is a social location-based application that allows users to discover places, check-in, share experiences, and connect with friends.
+
+## 🚀 Quick Start
+
+1. **Authentication**: Use OTP-based authentication with email or phone
+2. **Places**: Discover and explore places around you
+3. **Check-ins**: Share your location and experiences
+4. **Social Features**: Follow users, send DMs, and view activity feeds
+5. **Collections**: Organize your check-ins into themed collections
+
+## 🔐 Authentication
+
+All authenticated endpoints require a Bearer token obtained from:
+- `POST /auth/verify-otp` (email-based)
+- `POST /onboarding/verify-otp` (phone-based)
+
+Include the token in the Authorization header: `Authorization: Bearer <your_token>`
+
+## 📍 Core Features
+
+### Places & Check-ins
+- **Discover Places**: Search, filter, and explore places
+- **Check-in**: Share your location with photos and notes
+- **Trending**: See what's popular in your area
+- **Recommendations**: Personalized place suggestions
+
+### Social Features
+- **Follow System**: Follow users to see their activity
+- **Direct Messages**: Private conversations with typing indicators
+- **Activity Feed**: Real-time updates from followed users
+- **Collections**: Organize check-ins into themed groups
+
+### Privacy & Settings
+- **Visibility Controls**: Public, followers-only, or private content
+- **DM Privacy**: Control who can message you
+- **Notification Preferences**: Customize your notification settings
+
+## 🛠️ Development
+
+### Rate Limits
+- OTP Requests: 3 per minute per IP
+- OTP Verification: 5 per minute per IP
+- DM Requests: 5 per minute per user
+- DM Messages: 20 per minute per user
+
+### File Uploads
+- Photos: JPEG, PNG, WebP (max 10MB)
+- Avatars: JPEG, PNG (max 5MB)
+- Local storage used for development
+
+### Proximity Enforcement
+- Check-ins require user to be within 500m of place (configurable)
+- Can be disabled for development with `APP_CHECKIN_ENFORCE_PROXIMITY=false`
+
+## 📱 Client Integration
+
+### Real-time Features
+- WebSocket connections for live DMs and notifications
+- Typing indicators and presence updates
+- Real-time activity feed updates
+
+### Pagination
+Most list endpoints support pagination with `limit` and `offset` parameters.
+
+### Error Handling
+All endpoints return consistent error responses with descriptive messages.
+
+## 🔗 External Resources
+
+- **API Documentation**: This Swagger UI
+- **WebSocket Documentation**: See `/dms/ws` endpoint
+- **Health Check**: `/health` for service status
+- **Metrics**: `/metrics` for monitoring (protected in production)
+""",
+    version="1.0.0",
+    contact={
+        "name": "Circles API Support",
+        "email": "support@circles.app",
+    },
+    license_info={
+        "name": "MIT",
+        "url": "https://opensource.org/licenses/MIT",
+    },
+    lifespan=lifespan
+)
 
 # Include routers
 app.include_router(health_router)

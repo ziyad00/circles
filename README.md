@@ -61,6 +61,123 @@ A FastAPI application with OTP (One-Time Password) authentication and core Place
 
 The API will be available at `http://localhost:8000`
 
+## How to Run
+
+### Quick Start with Docker (Recommended)
+
+The fastest way to get the Circles application running:
+
+1. **Clone and navigate to the project**
+
+   ```bash
+   git clone <repository-url>
+   cd circles
+   ```
+
+2. **Start everything with Docker Compose**
+
+   ```bash
+   docker-compose up --build
+   ```
+
+   This will:
+
+   - Start PostgreSQL database
+   - Build and start the FastAPI application
+   - Run database migrations automatically
+   - Make the API available at `http://localhost:8000`
+
+3. **Populate with sample data**
+
+   ```bash
+   docker exec circles_app uv run python scripts/populate_sample_data.py
+   ```
+
+4. **Access the application**
+   - **API Documentation**: http://localhost:8000/docs (Swagger UI)
+   - **Health Check**: http://localhost:8000/health
+   - **Metrics**: http://localhost:8000/metrics (dev mode only)
+
+### Local Development Setup
+
+For local development without Docker:
+
+1. **Prerequisites**
+
+   - Python 3.12+
+   - PostgreSQL 15+
+   - uv package manager
+
+2. **Install dependencies**
+
+   ```bash
+   uv sync
+   ```
+
+3. **Set up environment variables**
+
+   ```bash
+   cp .env.example .env
+   # Edit .env with your PostgreSQL connection details
+   ```
+
+4. **Start PostgreSQL** (if not using Docker)
+
+   ```bash
+   # macOS with Homebrew
+   brew services start postgresql@15
+
+   # Or with Docker
+   docker-compose up -d postgres
+   ```
+
+5. **Run migrations**
+
+   ```bash
+   uv run alembic upgrade head
+   ```
+
+6. **Start the application**
+   ```bash
+   uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   ```
+
+### Testing the API
+
+Once the application is running, you can:
+
+1. **View API Documentation**
+
+   - Open http://localhost:8000/docs in your browser
+   - Interactive Swagger UI with all endpoints
+   - **Complete API Documentation**: See `docs/swagger_api_documentation.txt` for comprehensive endpoint documentation
+
+2. **Test endpoints with curl**
+
+   ```bash
+   # Health check
+   curl http://localhost:8000/health
+
+   # Request OTP
+   curl -X POST "http://localhost:8000/auth/request-otp" \
+        -H "Content-Type: application/json" \
+        -d '{"email": "test@example.com"}'
+   ```
+
+3. **Use sample data**
+   - Run the population script to get realistic test data
+   - 20 users, 8 places, check-ins, messages, and more
+
+### Stopping the Application
+
+```bash
+# Stop Docker containers
+docker-compose down
+
+# Stop local development server
+# Press Ctrl+C in the terminal running uvicorn
+```
+
 ## API Endpoints
 
 ### Authentication
@@ -1911,6 +2028,58 @@ Run tests:
 ```bash
 uv run pytest
 ```
+
+## Sample Data
+
+The application includes scripts to populate the database with sample data for testing and development:
+
+### Populate Sample Data
+
+```bash
+# Using Docker (recommended)
+docker exec circles_app uv run python scripts/populate_sample_data.py
+
+# Using local environment
+uv run python scripts/populate_sample_data.py
+```
+
+This script creates:
+
+- 20 sample users with various privacy settings
+- 8 sample places in New York City
+- Follow relationships between users
+- Collections with check-ins
+- DM threads and messages
+- Activities and support tickets
+- Comments and likes on check-ins
+
+### Clear Database
+
+To clear all data and start fresh:
+
+```bash
+# Using Docker
+docker exec circles_app uv run python scripts/clear_database.py
+
+# Using local environment
+uv run python scripts/clear_database.py
+```
+
+⚠️ **Warning**: This will delete ALL data from the database. Use with caution.
+
+### Sample Data Summary
+
+After running the populate script, you'll have:
+
+- **Users**: 20 sample users with realistic profiles
+- **Places**: 8 popular locations in NYC
+- **Check-ins**: 5-15 check-ins per user
+- **Collections**: 2-4 collections per user
+- **DMs**: Threads and messages between users
+- **Activities**: Feed entries for social interactions
+- **Support Tickets**: Sample support requests
+
+The sample data includes various privacy settings and visibility options to test all application features.
 
 ## Notes
 

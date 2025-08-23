@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_, func, desc
+from typing import Optional
 
 from ..database import get_db
 from ..models import User, DMThread, DMMessage, DMParticipantState, DMMessageLike, Follow
@@ -27,7 +28,17 @@ from ..schemas import (
 from ..services.jwt_service import JWTService
 
 
-router = APIRouter(prefix="/dms", tags=["dms"])
+router = APIRouter(
+    prefix="/dms",
+    tags=["direct messages"],
+    responses={
+        404: {"description": "Thread or message not found"},
+        400: {"description": "Invalid request data"},
+        403: {"description": "Access denied or privacy restriction"},
+        429: {"description": "Rate limit exceeded"},
+        500: {"description": "Internal server error"}
+    }
+)
 
 # Rate limiting storage
 # user_id -> list of timestamps
@@ -70,6 +81,33 @@ async def send_dm_request(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Send a DM request to start a conversation.
+
+    **Authentication Required:** Yes
+
+    **Privacy Controls:**
+    - Respects recipient's DM privacy settings
+    - `everyone`: Anyone can send requests
+    - `followers`: Only followers can send requests
+    - `no_one`: No one can send requests
+
+    **Rate Limiting:**
+    - 5 requests per minute per user
+    - Prevents spam and harassment
+
+    **Request Flow:**
+    1. Request is sent to recipient
+    2. Recipient can accept/reject via `/dms/requests`
+    3. If accepted, thread becomes active
+    4. Messages can then be sent normally
+
+    **Use Cases:**
+    - Start conversations with new users
+    - Respect privacy boundaries
+    - Prevent unwanted messages
+    - Social networking features
+    """
     # Rate limiting
     if not _check_rate_limit(current_user.id, _dm_request_log, DM_REQUEST_LIMIT):
         raise HTTPException(
@@ -168,10 +206,41 @@ async def inbox(
     db: AsyncSession = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    q: str | None = Query(None, description="Search text"),
-    include_archived: bool = Query(False),
-    only_pinned: bool = Query(False),
+    q: Optional[str] = Query(
+        None, description="Search query for messages or participant names"),
+    include_archived: bool = Query(
+        False, description="Include archived threads"),
+    only_pinned: bool = Query(False, description="Only show pinned threads"),
 ):
+    """
+    Get user's DM inbox with advanced filtering.
+
+    **Authentication Required:** Yes
+
+    **Features:**
+    - Shows all active DM threads
+    - Advanced search and filtering
+    - Pin and archive support
+    - Unread message counts
+
+    **Search & Filtering:**
+    - `q`: Search in messages and participant names
+    - `include_archived`: Show/hide archived threads
+    - `only_pinned`: Show only pinned threads
+    - `limit`/`offset`: Standard pagination
+
+    **Thread Organization:**
+    - Pinned threads appear first
+    - Ordered by most recent activity
+    - Unread counts included
+    - Participant information
+
+    **Use Cases:**
+    - DM inbox interface
+    - Thread management
+    - Search conversations
+    - Organize important threads
+    """
     # Join participant state for current user to filter by pinned/archived and enable search ordering
     base = (
         select(DMThread)
@@ -305,6 +374,38 @@ async def send_message(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Send a message in a DM thread.
+
+    **Authentication Required:** Yes
+
+    **Features:**
+    - Send text messages in active threads
+    - Rate limiting (20 messages per minute)
+    - Automatic unread count updates
+    - Real-time delivery via WebSocket
+
+    **Rate Limiting:**
+    - 20 messages per minute per user
+    - Prevents spam and abuse
+
+    **Message Lifecycle:**
+    1. Message is saved to database
+    2. Unread counts updated for other participants
+    3. Real-time notification sent via WebSocket
+    4. Message appears in thread history
+
+    **Privacy:**
+    - Only thread participants can send messages
+    - Blocked users cannot send messages
+    - Muted threads still allow sending
+
+    **Use Cases:**
+    - Private conversations
+    - Real-time messaging
+    - Social interactions
+    - Privacy-controlled communication
+    """
     # Rate limiting
     if not _check_rate_limit(current_user.id, _dm_message_log, DM_MESSAGE_LIMIT):
         raise HTTPException(
