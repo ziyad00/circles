@@ -26,6 +26,9 @@ class PlaceMetricsService:
             'quality_scores': [],
             'search_performance': []
         }
+        # Limit in-memory storage to prevent unbounded growth
+        self.max_quality_scores = 1000
+        self.max_search_performance = 1000
 
     async def track_enrichment_attempt(self, place_id: int, success: bool, error: Optional[str] = None):
         """Track enrichment attempt"""
@@ -43,6 +46,9 @@ class PlaceMetricsService:
             'score': quality_score,
             'timestamp': datetime.now(timezone.utc)
         })
+        # Limit list size to prevent unbounded growth
+        if len(self.metrics['quality_scores']) > self.max_quality_scores:
+            self.metrics['quality_scores'] = self.metrics['quality_scores'][-self.max_quality_scores:]
 
     async def track_search_performance(self, query_time_ms: float, results_count: int):
         """Track search performance metrics"""
@@ -51,6 +57,9 @@ class PlaceMetricsService:
             'results_count': results_count,
             'timestamp': datetime.now(timezone.utc)
         })
+        # Limit list size to prevent unbounded growth
+        if len(self.metrics['search_performance']) > self.max_search_performance:
+            self.metrics['search_performance'] = self.metrics['search_performance'][-self.max_search_performance:]
 
     async def get_enrichment_stats(self, db: AsyncSession) -> Dict:
         """Get comprehensive enrichment statistics"""
@@ -66,17 +75,13 @@ class PlaceMetricsService:
             )
             enriched_places = enriched_result.scalar_one()
 
-            # Calculate average quality score
-            quality_scores = []
-            places_result = await db.execute(select(Place))
-            places = places_result.scalars().all()
-
-            for place in places:
-                quality_score = self._calculate_quality_score(place)
-                quality_scores.append(quality_score)
-
-            avg_quality_score = sum(quality_scores) / \
-                len(quality_scores) if quality_scores else 0
+            # Calculate average quality score using aggregate query
+            quality_result = await db.execute(
+                select(
+                    func.avg(Place.place_metadata['quality_score'].astext.cast(float)))
+                .where(Place.place_metadata.isnot(None))
+            )
+            avg_quality_score = quality_result.scalar_one() or 0
 
             # Data source distribution
             source_result = await db.execute(
@@ -85,16 +90,35 @@ class PlaceMetricsService:
             )
             source_distribution = dict(source_result.all())
 
-            # TTL compliance
+            # TTL compliance using aggregate queries
             now = datetime.now(timezone.utc)
-            ttl_compliant = 0
-            for place in places:
-                if place.last_enriched_at:
-                    # Hot places: 14 days, Cold places: 60 days
-                    ttl_days = 14 if self._is_hot_place(place) else 60
-                    cutoff_date = now - timedelta(days=ttl_days)
-                    if place.last_enriched_at >= cutoff_date:
-                        ttl_compliant += 1
+
+            # Count places with recent enrichment (14 days for hot places, 60 for others)
+            hot_cutoff = now - timedelta(days=14)
+            cold_cutoff = now - timedelta(days=60)
+
+            ttl_compliant_result = await db.execute(
+                select(func.count(Place.id))
+                .where(
+                    Place.last_enriched_at.isnot(None),
+                    or_(
+                        and_(
+                            Place.place_metadata['is_hot'].astext.cast(
+                                bool) == True,
+                            Place.last_enriched_at >= hot_cutoff
+                        ),
+                        and_(
+                            or_(
+                                Place.place_metadata['is_hot'].astext.cast(
+                                    bool) == False,
+                                Place.place_metadata['is_hot'].is_(None)
+                            ),
+                            Place.last_enriched_at >= cold_cutoff
+                        )
+                    )
+                )
+            )
+            ttl_compliant = ttl_compliant_result.scalar_one() or 0
 
             ttl_compliance_rate = (
                 ttl_compliant / total_places * 100) if total_places > 0 else 0

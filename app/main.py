@@ -59,6 +59,13 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Shutdown WebSocket connection manager
+    try:
+        from .routers.dms_ws import manager
+        await manager.shutdown()
+    except Exception as e:
+        logger.error(f"Error shutting down WebSocket manager: {e}")
+
 
 app = FastAPI(
     title="Circles - Social Location App",
