@@ -83,42 +83,54 @@ class EnhancedPlaceDataService:
         Returns:
             True if enriched, False if not needed
         """
-        if not self.foursquare_api_key:
-            logger.warning("Foursquare API key not configured")
+        if not self.foursquare_api_key or self.foursquare_api_key == "demo_key_for_testing":
+            logger.warning(
+                "Foursquare API key not configured or using demo key")
             return False
 
         # Check if enrichment is needed
         if not self._needs_enrichment(place):
             return False
 
-        try:
-            # Search for matching Foursquare venue
-            fsq_venue = await self._find_foursquare_venue(place)
-            if not fsq_venue:
-                logger.info(f"No Foursquare venue found for place {place.id}")
-                return False
+        # Retry logic with exponential backoff
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Search for matching Foursquare venue
+                fsq_venue = await self._find_foursquare_venue(place)
+                if not fsq_venue:
+                    logger.info(
+                        f"No Foursquare venue found for place {place.id}")
+                    return False
 
-            # Get detailed venue information
-            venue_details = await self._get_foursquare_venue_details(fsq_venue['fsq_id'])
-            if not venue_details:
-                return False
+                # Get detailed venue information
+                venue_details = await self._get_foursquare_venue_details(fsq_venue['fsq_id'])
+                if not venue_details:
+                    return False
 
-            # Get venue photos
-            photos = await self._get_foursquare_venue_photos(fsq_venue['fsq_id'])
+                # Get venue photos
+                photos = await self._get_foursquare_venue_photos(fsq_venue['fsq_id'])
 
-            # Update place with enriched data
-            await self._update_place_with_foursquare_data(
-                place, venue_details, photos, fsq_venue, db
-            )
+                # Update place with enriched data
+                await self._update_place_with_foursquare_data(
+                    place, venue_details, photos, fsq_venue, db
+                )
 
-            await db.commit()
-            logger.info(f"Enriched place {place.id} with Foursquare data")
-            return True
+                await db.commit()
+                logger.info(f"Enriched place {place.id} with Foursquare data")
+                return True
 
-        except Exception as e:
-            logger.error(f"Failed to enrich place {place.id}: {e}")
-            await db.rollback()
-            return False
+            except Exception as e:
+                logger.warning(
+                    f"Attempt {attempt + 1} failed to enrich place {place.id}: {e}")
+                if attempt == max_retries - 1:
+                    logger.error(
+                        f"Failed to enrich place {place.id} after {max_retries} attempts")
+                    await db.rollback()
+                    return False
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+
+        return False
 
     async def search_places_with_enrichment(
         self,
@@ -146,6 +158,8 @@ class EnhancedPlaceDataService:
         if not db:
             raise ValueError("Database session required")
 
+        start_time = datetime.now()
+
         try:
             # Search places in database
             places = await self._search_places_in_db(lat, lon, radius, query, limit, db)
@@ -168,8 +182,14 @@ class EnhancedPlaceDataService:
             result.sort(key=lambda x: self._calculate_ranking_score(
                 x, lat, lon, query), reverse=True)
 
+            # Track performance metrics
+            query_time_ms = (datetime.now() -
+                             start_time).total_seconds() * 1000
+            from ..services.place_metrics_service import place_metrics_service
+            await place_metrics_service.track_search_performance(query_time_ms, len(result))
+
             logger.info(
-                f"Found {len(result)} places, enriched {enriched_count}")
+                f"Found {len(result)} places, enriched {enriched_count} in {query_time_ms:.2f}ms")
             return result
 
         except Exception as e:
@@ -273,8 +293,43 @@ class EnhancedPlaceDataService:
         else:
             return "unknown"
 
+    def _validate_place_data(self, place_data: Dict[str, Any]) -> bool:
+        """Validate place data quality"""
+        # Required fields
+        required_fields = ['name', 'latitude', 'longitude', 'external_id']
+        for field in required_fields:
+            if not place_data.get(field):
+                logger.warning(f"Missing required field: {field}")
+                return False
+
+        # Validate coordinates
+        try:
+            lat, lon = float(place_data['latitude']), float(
+                place_data['longitude'])
+            if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+                logger.warning(f"Invalid coordinates: {lat}, {lon}")
+                return False
+        except (ValueError, TypeError):
+            logger.warning(
+                f"Invalid coordinate format: {place_data.get('latitude')}, {place_data.get('longitude')}")
+            return False
+
+        # Validate name (not empty and reasonable length)
+        name = place_data['name'].strip()
+        if not name or len(name) > 200:
+            logger.warning(f"Invalid name: '{name}'")
+            return False
+
+        return True
+
     async def _create_place_from_osm(self, db: AsyncSession, place_data: Dict[str, Any]) -> Optional[Place]:
         """Create place from OSM data"""
+        # Validate place data
+        if not self._validate_place_data(place_data):
+            logger.warning(
+                f"Invalid place data: {place_data.get('name', 'Unknown')}")
+            return None
+
         # Check if place already exists
         existing = await db.execute(
             select(Place).where(
@@ -533,10 +588,87 @@ class EnhancedPlaceDataService:
         limit: int = 20,
         db: AsyncSession = None
     ) -> List[Place]:
-        """Search places in database within radius"""
+        """Search places in database within radius using PostGIS for better performance"""
         if not db:
             raise ValueError("Database session required")
 
+        # Use PostGIS spatial query if available
+        from ..config import settings
+        if settings.use_postgis:
+            return await self._search_places_with_postgis(lat, lon, radius, query, limit, db)
+        else:
+            return await self._search_places_with_bounding_box(lat, lon, radius, query, limit, db)
+
+    async def _search_places_with_postgis(
+        self,
+        lat: float,
+        lon: float,
+        radius: int,
+        query: Optional[str] = None,
+        limit: int = 20,
+        db: AsyncSession = None
+    ) -> List[Place]:
+        """Search places using PostGIS spatial queries"""
+        from sqlalchemy import text
+
+        # Build the query with spatial distance calculation
+        sql = """
+        SELECT p.*, ST_Distance(p.location, ST_Point(:lon, :lat)::geography) as distance
+        FROM places p
+        WHERE p.location IS NOT NULL
+        AND ST_DWithin(p.location, ST_Point(:lon, :lat)::geography, :radius)
+        """
+
+        params = {
+            'lat': lat,
+            'lon': lon,
+            'radius': radius
+        }
+
+        # Add text search if provided
+        if query:
+            sql += " AND (p.name ILIKE :query OR p.categories ILIKE :query OR p.address ILIKE :query)"
+            params['query'] = f"%{query}%"
+
+        sql += " ORDER BY distance LIMIT :limit"
+        params['limit'] = limit
+
+        result = await db.execute(text(sql), params)
+        rows = result.fetchall()
+
+        # Convert to Place objects
+        places = []
+        for row in rows:
+            place = Place(
+                id=row.id,
+                name=row.name,
+                latitude=row.latitude,
+                longitude=row.longitude,
+                categories=row.categories,
+                rating=row.rating,
+                phone=row.phone,
+                website=row.website,
+                address=row.address,
+                city=row.city,
+                external_id=row.external_id,
+                data_source=row.data_source,
+                place_metadata=row.place_metadata,
+                last_enriched_at=row.last_enriched_at
+            )
+            places.append(place)
+
+        return places
+
+    async def _search_places_with_bounding_box(
+        self,
+        lat: float,
+        lon: float,
+        radius: int,
+        query: Optional[str] = None,
+        limit: int = 20,
+        db: AsyncSession = None
+    ) -> List[Place]:
+        """Fallback search using bounding box (original method)"""
         # Calculate bounding box for efficient querying
         # Approximate: 1 degree ≈ 111km
         lat_radius = radius / 111000.0

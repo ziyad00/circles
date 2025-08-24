@@ -2756,62 +2756,8 @@ async def get_enrichment_stats(
     - Performance optimization
     """
     try:
-        # Get total places count
-        total_result = await db.execute(select(func.count(Place.id)))
-        total_places = total_result.scalar_one()
-
-        # Get enriched places count
-        enriched_result = await db.execute(
-            select(func.count(Place.id)).where(
-                Place.last_enriched_at.isnot(None))
-        )
-        enriched_places = enriched_result.scalar_one()
-
-        # Get data source distribution
-        source_result = await db.execute(
-            select(Place.data_source, func.count(Place.id))
-            .group_by(Place.data_source)
-        )
-        source_distribution = dict(source_result.all())
-
-        # Calculate average quality scores
-        quality_scores = []
-        places_result = await db.execute(select(Place))
-        places = places_result.scalars().all()
-
-        for place in places:
-            quality_scores.append(
-                enhanced_place_data_service._calculate_quality_score(place))
-
-        avg_quality_score = sum(quality_scores) / \
-            len(quality_scores) if quality_scores else 0
-
-        # Calculate TTL compliance
-        now = datetime.now()
-        ttl_compliant = 0
-        for place in places:
-            if place.last_enriched_at:
-                ttl_days = enhanced_place_data_service.enrichment_ttl_hot if enhanced_place_data_service._is_hot_place(
-                    place) else enhanced_place_data_service.enrichment_ttl_cold
-                cutoff_date = now - timedelta(days=ttl_days)
-                if place.last_enriched_at >= cutoff_date:
-                    ttl_compliant += 1
-
-        ttl_compliance_rate = (
-            ttl_compliant / total_places * 100) if total_places > 0 else 0
-
-        return {
-            "total_places": total_places,
-            "enriched_places": enriched_places,
-            "enrichment_rate": (enriched_places / total_places * 100) if total_places > 0 else 0,
-            "average_quality_score": round(avg_quality_score, 3),
-            "source_distribution": source_distribution,
-            "ttl_compliance_rate": round(ttl_compliance_rate, 2),
-            "enrichment_ttl_hot": enhanced_place_data_service.enrichment_ttl_hot,
-            "enrichment_ttl_cold": enhanced_place_data_service.enrichment_ttl_cold,
-            "max_enrichment_distance": enhanced_place_data_service.max_enrichment_distance,
-            "min_name_similarity": enhanced_place_data_service.min_name_similarity
-        }
+        from ..services.place_metrics_service import place_metrics_service
+        return await place_metrics_service.get_enrichment_stats(db)
 
     except Exception as e:
         raise HTTPException(
