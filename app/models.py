@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, Float, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, Float, UniqueConstraint, JSON
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -72,6 +72,17 @@ class Place(Base):
     categories = Column(String, nullable=True)  # comma-separated categories
     rating = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # External data source fields
+    # ID from external API
+    external_id = Column(String, nullable=True, index=True)
+    # "google", "foursquare", "osm", "osm_overpass"
+    data_source = Column(String, nullable=True)
+    website = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    place_metadata = Column(JSON, nullable=True)  # Store additional data as JSON
+    last_enriched_at = Column(DateTime(timezone=True),
+                              nullable=True)  # When last enriched
 
     # Relationships
     check_ins = relationship("CheckIn", back_populates="place")

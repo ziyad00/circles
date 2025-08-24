@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     checkin_max_distance_meters: int = Field(
         default=500, env="CHECKIN_MAX_DISTANCE_METERS")
 
+    # Place Data API Keys
+    google_places_api_key: Optional[str] = Field(
+        default=None, env="GOOGLE_PLACES_API_KEY"
+    )
+    foursquare_api_key: Optional[str] = Field(
+        default=None, env="FOURSQUARE_API_KEY"
+    )
+    use_openstreetmap: bool = Field(
+        default=True, env="USE_OPENSTREETMAP"
+    )
+
     class Config:
         env_file = ".env"
         env_prefix = "APP_"

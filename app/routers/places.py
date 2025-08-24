@@ -2,8 +2,10 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, text, or_, and_
+import httpx
 
 from ..database import get_db
+from ..dependencies import get_current_admin_user
 from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto, CheckInCollection, CheckInCollectionItem
 from ..schemas import (
     PlaceCreate,
@@ -36,6 +38,8 @@ from ..schemas import (
 )
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
+from ..services.place_data_service import place_data_service
+from ..services.place_data_service_v2 import enhanced_place_data_service
 from ..utils import can_view_checkin, haversine_distance
 from ..routers.activity import create_checkin_activity
 from ..models import Follow
@@ -2222,3 +2226,595 @@ async def my_reviews(
     )
     items = res.scalars().all()
     return PaginatedReviews(items=items, total=total, limit=limit, offset=offset)
+
+
+# ============================================================================
+# PLACE DATA INTEGRATION ENDPOINTS
+# ============================================================================
+
+@router.get("/external/test")
+async def test_external_endpoint():
+    """Test endpoint to verify external routes are working"""
+    return {"message": "External endpoints are working!"}
+
+
+@router.get("/external/search", response_model=list[dict])
+async def search_external_places(
+    lat: float = Query(..., description="Latitude"),
+    lon: float = Query(..., description="Longitude"),
+    radius: int = Query(5000, ge=100, le=50000,
+                        description="Search radius in meters"),
+    query: str = Query(None, description="Optional search query"),
+    types: str = Query(
+        None, description="Comma-separated place types (e.g., restaurant,cafe)"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Search for places using external data sources (Google Places, OpenStreetMap).
+
+    **Authentication Required:** No (public endpoint)
+
+    **Features:**
+    - Searches multiple external data sources
+    - Google Places API (if configured)
+    - OpenStreetMap fallback (free)
+    - Automatic deduplication
+    - Database synchronization
+
+    **Parameters:**
+    - `lat`/`lon`: Search center coordinates
+    - `radius`: Search radius in meters (100-50000)
+    - `query`: Optional search term
+    - `types`: Optional place type filters
+
+    **Data Sources:**
+    - Google Places API (rich data, requires API key)
+    - OpenStreetMap (free, basic data)
+    - Automatic fallback if primary source fails
+
+    **Response:**
+    - List of places with external data
+    - Places automatically synced to database
+    - Includes ratings, categories, contact info
+
+    **Use Cases:**
+    - Discover new places near user location
+    - Enrich place database with external data
+    - Provide comprehensive place search
+    """
+    try:
+        # Parse types parameter
+        type_list = None
+        if types:
+            type_list = [t.strip() for t in types.split(",")]
+
+        # Search external sources
+        places = await place_data_service.search_nearby_places(
+            lat=lat,
+            lon=lon,
+            radius=radius,
+            query=query,
+            types=type_list
+        )
+
+        # Sync places to database
+        synced_places = []
+        for place_data in places:
+            synced_place = await place_data_service.sync_place_to_database(db, place_data)
+            synced_places.append({
+                "id": synced_place.id,
+                "name": synced_place.name,
+                "address": synced_place.address,
+                "latitude": synced_place.latitude,
+                "longitude": synced_place.longitude,
+                "rating": synced_place.rating,
+                "categories": synced_place.categories,
+                "external_id": synced_place.external_id,
+                "data_source": synced_place.data_source,
+                "website": synced_place.website,
+                "phone": synced_place.phone
+            })
+
+        return synced_places
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to search external places: {str(e)}"
+        )
+
+
+@router.get("/{place_id}/enrich", response_model=dict)
+async def enrich_place_data(
+    place_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Enrich place data with information from external sources.
+
+    **Authentication Required:** No (public endpoint)
+
+    **Features:**
+    - Fetches additional data from external APIs
+    - Updates place with ratings, photos, hours, etc.
+    - Supports multiple data sources
+    - Caches enriched data in metadata field
+
+    **Data Enrichment:**
+    - Ratings and review counts
+    - Opening hours
+    - Contact information
+    - Photos and media
+    - Price levels
+    - Additional categories
+
+    **Response:**
+    - Updated place information
+    - Enriched metadata
+    - Data source information
+
+    **Use Cases:**
+    - Enhance place profiles with external data
+    - Keep place information up-to-date
+    - Provide richer place details
+    """
+    try:
+        # Get place from database
+        place_result = await db.execute(select(Place).where(Place.id == place_id))
+        place = place_result.scalar_one_or_none()
+
+        if not place:
+            raise HTTPException(status_code=404, detail="Place not found")
+
+        # Enrich place data
+        enriched_place = await place_data_service.enrich_place_data(place)
+
+        # Save enriched data
+        await db.commit()
+        await db.refresh(enriched_place)
+
+        return {
+            "id": enriched_place.id,
+            "name": enriched_place.name,
+            "rating": enriched_place.rating,
+            "categories": enriched_place.categories,
+            "website": enriched_place.website,
+            "phone": enriched_place.phone,
+            "metadata": enriched_place.metadata,
+            "data_source": enriched_place.data_source,
+            "enriched": True
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to enrich place data: {str(e)}"
+        )
+
+
+@router.get("/external/suggestions", response_model=list[dict])
+async def get_external_place_suggestions(
+    query: str = Query(..., min_length=2, description="Search query"),
+    lat: float = Query(
+        None, description="Optional latitude for location-based suggestions"),
+    lon: float = Query(
+        None, description="Optional longitude for location-based suggestions"),
+    limit: int = Query(10, ge=1, le=20, description="Number of suggestions")
+):
+    """
+    Get place suggestions from external data sources.
+
+    **Authentication Required:** No (public endpoint)
+
+    **Features:**
+    - Real-time place suggestions
+    - Location-aware results (if coordinates provided)
+    - Multiple data source integration
+    - Fast autocomplete functionality
+
+    **Parameters:**
+    - `query`: Search term (minimum 2 characters)
+    - `lat`/`lon`: Optional location for better results
+    - `limit`: Number of suggestions to return
+
+    **Response:**
+    - List of place suggestions
+    - Includes basic place information
+    - Ready for autocomplete UI
+
+    **Use Cases:**
+    - Place search autocomplete
+    - Quick place discovery
+    - Location-based suggestions
+    """
+    try:
+        if lat and lon:
+            # Location-based search
+            places = await place_data_service.search_nearby_places(
+                lat=lat,
+                lon=lon,
+                radius=10000,  # 10km radius
+                query=query,
+                types=None
+            )
+        else:
+            # General search (OpenStreetMap only for now)
+            async with httpx.AsyncClient() as client:
+                url = "https://nominatim.openstreetmap.org/search"
+                params = {
+                    'q': query,
+                    'format': 'json',
+                    'limit': limit,
+                    'addressdetails': 1
+                }
+                response = await client.get(url, params=params)
+                data = response.json()
+
+                places = [
+                    {
+                        'name': place['display_name'].split(',')[0],
+                        'address': place['display_name'],
+                        'latitude': float(place['lat']),
+                        'longitude': float(place['lon']),
+                        'place_id': place['place_id'],
+                        'data_source': 'osm',
+                        'external_id': place['place_id'],
+                        'types': [place.get('type', 'unknown')]
+                    }
+                    for place in data
+                    if place.get('type') in ['restaurant', 'cafe', 'bar', 'shop', 'amenity']
+                ]
+
+        # Return suggestions (limit results)
+                return places[:limit]
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get place suggestions: {str(e)}"
+        )
+
+
+# ============================================================================
+# ENHANCED PLACE DATA ENDPOINTS (OSM Overpass + Foursquare Enrichment)
+# ============================================================================
+
+@router.post("/seed/from-osm", response_model=dict)
+async def seed_places_from_osm(
+    min_lat: float = Query(..., description="Minimum latitude"),
+    min_lon: float = Query(..., description="Minimum longitude"),
+    max_lat: float = Query(..., description="Maximum latitude"),
+    max_lon: float = Query(..., description="Maximum longitude"),
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Seed places from OpenStreetMap Overpass API.
+
+    **Authentication Required:** Yes (Admin only)
+
+    **Features:**
+    - Fetches places from OSM Overpass API
+    - Covers amenities, shops, and leisure facilities
+    - Automatic deduplication
+    - Batch processing for large areas
+
+    **Parameters:**
+    - `min_lat`/`min_lon`: Southwest corner of bounding box
+    - `max_lat`/`max_lon`: Northeast corner of bounding box
+
+    **OSM Tags Included:**
+    - Amenities: cafe, restaurant, fast_food, bank, atm, pharmacy, hospital, school, university, fuel
+    - Shops: supermarket, mall
+    - Leisure: park, fitness_centre
+
+    **Response:**
+    - Number of places seeded
+    - Processing time
+    - Success status
+
+    **Use Cases:**
+    - Initial data population for new regions
+    - Bulk place data import
+    - Geographic area coverage
+    """
+    try:
+        start_time = datetime.now()
+        bbox = (min_lat, min_lon, max_lat, max_lon)
+
+        seeded_count = await enhanced_place_data_service.seed_from_osm_overpass(db, bbox)
+
+        processing_time = (datetime.now() - start_time).total_seconds()
+
+        return {
+            "success": True,
+            "seeded_count": seeded_count,
+            "processing_time_seconds": processing_time,
+            "bbox": bbox,
+            "message": f"Successfully seeded {seeded_count} places from OSM Overpass"
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to seed places from OSM: {str(e)}"
+        )
+
+
+@router.get("/search/enhanced", response_model=list[dict])
+async def search_places_enhanced(
+    lat: float = Query(..., description="Latitude"),
+    lon: float = Query(..., description="Longitude"),
+    radius: int = Query(5000, ge=100, le=50000,
+                        description="Search radius in meters"),
+    query: str = Query(None, description="Optional search query"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum results"),
+    enable_enrichment: bool = Query(
+        True, description="Enable Foursquare enrichment"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Enhanced place search with automatic enrichment.
+
+    **Authentication Required:** No (public endpoint)
+
+    **Features:**
+    - Searches pre-seeded places in database
+    - Automatic Foursquare enrichment for stale/missing data
+    - Quality scoring and intelligent ranking
+    - Distance-based filtering and sorting
+
+    **Enrichment Logic:**
+    - Only enriches places that need it (missing data or stale)
+    - Hot places: 14-day TTL, Cold places: 60-day TTL
+    - Name similarity ≥ 0.65 + distance ≤ 150m matching
+    - Quality scoring: phone (+0.3), hours (+0.3), photos (+0.2), recent (+0.2)
+
+    **Ranking Algorithm:**
+    - 45% distance score
+    - 25% text match score
+    - 15% category boost
+    - 15% quality score
+
+    **Parameters:**
+    - `lat`/`lon`: Search center coordinates
+    - `radius`: Search radius in meters (100-50000)
+    - `query`: Optional search term
+    - `limit`: Maximum results (1-100)
+    - `enable_enrichment`: Enable/disable Foursquare enrichment
+
+    **Response:**
+    - List of places with quality scores
+    - Enrichment status for each place
+    - Distance and ranking information
+
+    **Use Cases:**
+    - Primary place discovery
+    - Location-based search
+    - High-quality place recommendations
+    """
+    try:
+        if enable_enrichment:
+            # Use enhanced search with enrichment
+            places = await enhanced_place_data_service.search_places_with_enrichment(
+                lat=lat,
+                lon=lon,
+                radius=radius,
+                query=query,
+                limit=limit,
+                db=db
+            )
+        else:
+            # Use basic search without enrichment
+            places = await enhanced_place_data_service._search_places_in_db(
+                lat=lat,
+                lon=lon,
+                radius=radius,
+                query=query,
+                limit=limit,
+                db=db
+            )
+            # Convert to response format
+            places = [
+                {
+                    **enhanced_place_data_service._place_to_dict(place),
+                    'quality_score': enhanced_place_data_service._calculate_quality_score(place)
+                }
+                for place in places
+            ]
+
+        return places
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to search places: {str(e)}"
+        )
+
+
+@router.post("/enrich/{place_id}", response_model=dict)
+async def enrich_place_manually(
+    place_id: int,
+    force: bool = Query(
+        False, description="Force enrichment even if not needed"),
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Manually enrich a specific place with Foursquare data.
+
+    **Authentication Required:** Yes (Admin only)
+
+    **Features:**
+    - Enriches place with Foursquare venue data
+    - Updates phone, website, hours, photos, rating
+    - Intelligent venue matching
+    - Quality score recalculation
+
+    **Enrichment Process:**
+    1. Search for matching Foursquare venues
+    2. Find best match (name similarity + distance)
+    3. Fetch detailed venue information
+    4. Update place with enriched data
+    5. Store enrichment metadata
+
+    **Parameters:**
+    - `place_id`: ID of place to enrich
+    - `force`: Force enrichment even if not needed
+
+    **Response:**
+    - Enrichment status
+    - Updated place data
+    - Quality score
+    - Match information
+
+    **Use Cases:**
+    - Manual data quality improvement
+    - Testing enrichment functionality
+    - Force refresh of stale data
+    """
+    try:
+        # Get place from database
+        place_result = await db.execute(select(Place).where(Place.id == place_id))
+        place = place_result.scalar_one_or_none()
+
+        if not place:
+            raise HTTPException(status_code=404, detail="Place not found")
+
+        # Check if enrichment is needed (unless forced)
+        if not force and not enhanced_place_data_service._needs_enrichment(place):
+            return {
+                "enriched": False,
+                "message": "Place does not need enrichment",
+                "quality_score": enhanced_place_data_service._calculate_quality_score(place),
+                "last_enriched_at": place.last_enriched_at.isoformat() if place.last_enriched_at else None
+            }
+
+        # Perform enrichment
+        enriched = await enhanced_place_data_service.enrich_place_if_needed(place, db)
+
+        if enriched:
+            await db.refresh(place)
+            return {
+                "enriched": True,
+                "message": "Place successfully enriched",
+                "quality_score": enhanced_place_data_service._calculate_quality_score(place),
+                "last_enriched_at": place.last_enriched_at.isoformat() if place.last_enriched_at else None,
+                "place_data": enhanced_place_data_service._place_to_dict(place)
+            }
+        else:
+            return {
+                "enriched": False,
+                "message": "No matching Foursquare venue found",
+                "quality_score": enhanced_place_data_service._calculate_quality_score(place),
+                "last_enriched_at": place.last_enriched_at.isoformat() if place.last_enriched_at else None
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to enrich place: {str(e)}"
+        )
+
+
+@router.get("/stats/enrichment", response_model=dict)
+async def get_enrichment_stats(
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get enrichment statistics and data quality metrics.
+
+    **Authentication Required:** Yes (Admin only)
+
+    **Features:**
+    - Overall enrichment statistics
+    - Data quality metrics
+    - Source distribution
+    - TTL compliance
+
+    **Metrics:**
+    - Total places count
+    - Enriched places count
+    - Average quality score
+    - Data source distribution
+    - TTL compliance rate
+
+    **Response:**
+    - Statistical overview
+    - Quality metrics
+    - Source breakdown
+    - Recommendations
+
+    **Use Cases:**
+    - System monitoring
+    - Data quality assessment
+    - Performance optimization
+    """
+    try:
+        # Get total places count
+        total_result = await db.execute(select(func.count(Place.id)))
+        total_places = total_result.scalar_one()
+
+        # Get enriched places count
+        enriched_result = await db.execute(
+            select(func.count(Place.id)).where(
+                Place.last_enriched_at.isnot(None))
+        )
+        enriched_places = enriched_result.scalar_one()
+
+        # Get data source distribution
+        source_result = await db.execute(
+            select(Place.data_source, func.count(Place.id))
+            .group_by(Place.data_source)
+        )
+        source_distribution = dict(source_result.all())
+
+        # Calculate average quality scores
+        quality_scores = []
+        places_result = await db.execute(select(Place))
+        places = places_result.scalars().all()
+
+        for place in places:
+            quality_scores.append(
+                enhanced_place_data_service._calculate_quality_score(place))
+
+        avg_quality_score = sum(quality_scores) / \
+            len(quality_scores) if quality_scores else 0
+
+        # Calculate TTL compliance
+        now = datetime.now()
+        ttl_compliant = 0
+        for place in places:
+            if place.last_enriched_at:
+                ttl_days = enhanced_place_data_service.enrichment_ttl_hot if enhanced_place_data_service._is_hot_place(
+                    place) else enhanced_place_data_service.enrichment_ttl_cold
+                cutoff_date = now - timedelta(days=ttl_days)
+                if place.last_enriched_at >= cutoff_date:
+                    ttl_compliant += 1
+
+        ttl_compliance_rate = (
+            ttl_compliant / total_places * 100) if total_places > 0 else 0
+
+        return {
+            "total_places": total_places,
+            "enriched_places": enriched_places,
+            "enrichment_rate": (enriched_places / total_places * 100) if total_places > 0 else 0,
+            "average_quality_score": round(avg_quality_score, 3),
+            "source_distribution": source_distribution,
+            "ttl_compliance_rate": round(ttl_compliance_rate, 2),
+            "enrichment_ttl_hot": enhanced_place_data_service.enrichment_ttl_hot,
+            "enrichment_ttl_cold": enhanced_place_data_service.enrichment_ttl_cold,
+            "max_enrichment_distance": enhanced_place_data_service.max_enrichment_distance,
+            "min_name_similarity": enhanced_place_data_service.min_name_similarity
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get enrichment stats: {str(e)}"
+        )
