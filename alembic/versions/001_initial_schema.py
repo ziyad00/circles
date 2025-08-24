@@ -59,9 +59,15 @@ def upgrade() -> None:
                     sa.Column('rating', sa.Float(), nullable=True),
                     sa.Column('created_at', sa.DateTime(timezone=True),
                               server_default=sa.text('now()'), nullable=True),
+                    sa.Column('external_id', sa.String(), nullable=True),
+                    sa.Column('data_source', sa.String(), nullable=True),
+                    sa.Column('seed_source', sa.String(),
+                              nullable=True, server_default='osm'),
+                    sa.Column('website', sa.String(), nullable=True),
+                    sa.Column('phone', sa.String(), nullable=True),
                     sa.Column('place_metadata', postgresql.JSONB(
                         astext_type=sa.Text()), nullable=True),
-                    sa.Column('foursquare_id', sa.String(), nullable=True),
+                    sa.Column('fsq_id', sa.String(), nullable=True),
                     sa.Column('osm_id', sa.String(), nullable=True),
                     sa.Column('quality_score', sa.Float(), nullable=True),
                     sa.Column('last_enriched_at', sa.DateTime(
@@ -90,8 +96,10 @@ def upgrade() -> None:
     op.create_index(op.f('ix_places_name'), 'places', ['name'], unique=False)
     op.create_index(op.f('ix_places_neighborhood'),
                     'places', ['neighborhood'], unique=False)
-    op.create_index(op.f('ix_places_foursquare_id'),
-                    'places', ['foursquare_id'], unique=True)
+    op.create_index(op.f('ix_places_external_id'),
+                    'places', ['external_id'], unique=False)
+    op.create_index(op.f('ix_places_fsq_id'),
+                    'places', ['fsq_id'], unique=True)
     op.create_index(op.f('ix_places_osm_id'),
                     'places', ['osm_id'], unique=True)
 
