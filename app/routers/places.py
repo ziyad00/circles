@@ -1681,12 +1681,39 @@ async def create_check_in_full(
     db.add(check_in)
     await db.flush()  # get check_in.id before committing
 
-    # Save photos if provided
+    # Save photos if provided (streaming to avoid memory issues)
     if files:
         for file in files:
             if not file:
                 continue
-            content = await file.read()
+
+            # Validate file type and size during streaming
+            if not file.content_type or not file.content_type.startswith('image/'):
+                raise HTTPException(
+                    status_code=400,
+                    detail="File must be an image (JPEG, PNG, WebP)"
+                )
+
+            # Stream file content in chunks to avoid memory issues
+            max_size = 10 * 1024 * 1024  # 10MB per photo
+            content = b""
+            chunk_size = 64 * 1024  # 64KB chunks
+            total_size = 0
+
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                content += chunk
+                total_size += len(chunk)
+
+                # Check size during streaming
+                if total_size > max_size:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Photo file size must be less than 10MB"
+                    )
+
             try:
                 url_path = await StorageService.save_checkin_photo(check_in.id, file.filename or "upload.jpg", content)
             except ValueError as e:

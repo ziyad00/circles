@@ -64,21 +64,28 @@ class StorageService:
     async def _save_s3(review_id: int, filename: str, content: bytes) -> str:
         import boto3
         from botocore.config import Config as BotoConfig
+        import asyncio
 
-        session = boto3.session.Session(
-            aws_access_key_id=settings.s3_access_key_id,
-            aws_secret_access_key=settings.s3_secret_access_key,
-            region_name=settings.s3_region,
-        )
-        s3 = session.client(
-            "s3",
-            endpoint_url=settings.s3_endpoint_url,
-            config=BotoConfig(
-                s3={"addressing_style": "path" if settings.s3_use_path_style else "auto"}),
-        )
-        key = f"reviews/{review_id}/{filename}"
-        s3.put_object(Bucket=settings.s3_bucket, Key=key,
-                      Body=content, ContentType=_guess_content_type(filename))
+        def _upload_to_s3():
+            session = boto3.session.Session(
+                aws_access_key_id=settings.s3_access_key_id,
+                aws_secret_access_key=settings.s3_secret_access_key,
+                region_name=settings.s3_region,
+            )
+            s3 = session.client(
+                "s3",
+                endpoint_url=settings.s3_endpoint_url,
+                config=BotoConfig(
+                    s3={"addressing_style": "path" if settings.s3_use_path_style else "auto"}),
+            )
+            key = f"reviews/{review_id}/{filename}"
+            s3.put_object(Bucket=settings.s3_bucket, Key=key,
+                          Body=content, ContentType=_guess_content_type(filename))
+            return key
+
+        # Run S3 upload in thread pool to avoid blocking event loop
+        key = await asyncio.to_thread(_upload_to_s3)
+
         if settings.s3_public_base_url:
             return f"{settings.s3_public_base_url.rstrip('/')}/{key}"
         # fallback to virtual-hosted style if possible
@@ -127,21 +134,28 @@ class StorageService:
     async def _save_checkin_s3(check_in_id: int, filename: str, content: bytes) -> str:
         import boto3
         from botocore.config import Config as BotoConfig
+        import asyncio
 
-        session = boto3.session.Session(
-            aws_access_key_id=settings.s3_access_key_id,
-            aws_secret_access_key=settings.s3_secret_access_key,
-            region_name=settings.s3_region,
-        )
-        s3 = session.client(
-            "s3",
-            endpoint_url=settings.s3_endpoint_url,
-            config=BotoConfig(
-                s3={"addressing_style": "path" if settings.s3_use_path_style else "auto"}),
-        )
-        key = f"checkins/{check_in_id}/{filename}"
-        s3.put_object(Bucket=settings.s3_bucket, Key=key,
-                      Body=content, ContentType=_guess_content_type(filename))
+        def _upload_checkin_to_s3():
+            session = boto3.session.Session(
+                aws_access_key_id=settings.s3_access_key_id,
+                aws_secret_access_key=settings.s3_secret_access_key,
+                region_name=settings.s3_region,
+            )
+            s3 = session.client(
+                "s3",
+                endpoint_url=settings.s3_endpoint_url,
+                config=BotoConfig(
+                    s3={"addressing_style": "path" if settings.s3_use_path_style else "auto"}),
+            )
+            key = f"checkins/{check_in_id}/{filename}"
+            s3.put_object(Bucket=settings.s3_bucket, Key=key,
+                          Body=content, ContentType=_guess_content_type(filename))
+            return key
+
+        # Run S3 upload in thread pool to avoid blocking event loop
+        key = await asyncio.to_thread(_upload_checkin_to_s3)
+
         if settings.s3_public_base_url:
             return f"{settings.s3_public_base_url.rstrip('/')}/{key}"
         host = settings.s3_endpoint_url.rstrip(

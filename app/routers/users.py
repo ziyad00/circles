@@ -165,22 +165,28 @@ async def list_user_checkins(
 ):
     # visibility enforcement: reuse can_view_checkin-like logic
     from ..utils import can_view_checkin
-    total_res = await db.execute(select(func.count(CheckIn.id)).where(CheckIn.user_id == user_id))
-    total = total_res.scalar_one()
-    res = await db.execute(
+
+    # Get all check-ins for this user to check visibility
+    all_checkins_res = await db.execute(
         select(CheckIn)
         .where(CheckIn.user_id == user_id)
         .order_by(CheckIn.created_at.desc())
-        .offset(offset)
-        .limit(limit * 2)
     )
-    rows = res.scalars().all()
-    visible = []
-    for ci in rows:
+    all_checkins = all_checkins_res.scalars().all()
+
+    # Filter by visibility and count visible ones
+    visible_checkins = []
+    for ci in all_checkins:
         if await can_view_checkin(db, ci.user_id, current_user.id, ci.visibility):
-            visible.append(ci)
-            if len(visible) >= limit:
-                break
+            visible_checkins.append(ci)
+
+    # Calculate total visible count
+    total_visible = len(visible_checkins)
+
+    # Apply pagination to visible check-ins
+    start_idx = offset
+    end_idx = offset + limit
+    visible = visible_checkins[start_idx:end_idx]
     # hydrate photo_urls
     result: list[CheckInResponse] = []
     for ci in visible:
@@ -199,7 +205,7 @@ async def list_user_checkins(
                 photo_urls=urls,
             )
         )
-    return PaginatedCheckIns(items=result, total=total, limit=limit, offset=offset)
+    return PaginatedCheckIns(items=result, total=total_visible, limit=limit, offset=offset)
 
 
 @router.get("/{user_id}/media", response_model=PaginatedMedia)
