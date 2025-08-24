@@ -238,26 +238,52 @@ class PlaceDataService:
 
     async def _get_foursquare_place_details(self, venue_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed place information from Foursquare"""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             url = f"https://api.foursquare.com/v3/places/{venue_id}"
             headers = {
-                "Authorization": f"fsq3_{self.foursquare_api_key}",
+                "Authorization": self.foursquare_api_key,
                 "Accept": "application/json"
             }
+            params = {
+                "fields": "fsq_id,name,tel,website,hours,rating,price,stats,categories,location"
+            }
 
-            response = await client.get(url, headers=headers)
-            if response.status_code == 200:
-                data = response.json()
-                return {
-                    'rating': data.get('rating'),
-                    'types': [cat['name'] for cat in data.get('categories', [])],
-                    'website': data.get('website'),
-                    'formatted_phone_number': data.get('tel'),
-                    'photos': data.get('photos', []),
-                    'last_updated': 'foursquare'
-                }
+            try:
+                response = await client.get(url, headers=headers, params=params)
 
-            return None
+                # Handle different status codes
+                if response.status_code == 200:
+                    data = response.json()
+                    return {
+                        'rating': data.get('rating'),
+                        'types': [cat['name'] for cat in data.get('categories', [])],
+                        'website': data.get('website'),
+                        'formatted_phone_number': data.get('tel'),
+                        'photos': data.get('photos', []),
+                        'last_updated': 'foursquare'
+                    }
+                elif response.status_code == 401:
+                    logger.error(
+                        "Foursquare API authentication failed - check API key")
+                    return None
+                elif response.status_code == 429:
+                    logger.warning("Foursquare API rate limit exceeded")
+                    return None
+                elif response.status_code >= 500:
+                    logger.error(
+                        f"Foursquare API server error: {response.status_code}")
+                    return None
+                else:
+                    logger.error(
+                        f"Foursquare API request failed: {response.status_code}")
+                    return None
+
+            except httpx.TimeoutException:
+                logger.error("Foursquare API request timed out")
+                return None
+            except httpx.RequestError as e:
+                logger.error(f"Foursquare API request error: {e}")
+                return None
 
     async def _get_osm_place_details(self, place_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed place information from OpenStreetMap"""
