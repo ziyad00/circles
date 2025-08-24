@@ -46,7 +46,8 @@ async def lifespan(app: FastAPI):
                 logger.info(
                     f"Auto-seeding completed! Added {seeding_result['total_places_added']} places")
             elif seeding_result["status"] == "skipped":
-                logger.info(f"Auto-seeding skipped: {seeding_result['reason']}")
+                logger.info(
+                    f"Auto-seeding skipped: {seeding_result['reason']}")
             else:
                 logger.warning(
                     f"Auto-seeding failed: {seeding_result.get('error', 'Unknown error')}")
