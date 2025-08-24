@@ -374,7 +374,7 @@ async def dm_ws(websocket: WebSocket, thread_id: int, db: AsyncSession = Depends
         pass
     except Exception as e:
         # Log error and close connection
-        print(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error: {e}")
     finally:
         manager.disconnect(thread_id, user_id, websocket)
         await manager.broadcast_presence(thread_id, user_id, False)

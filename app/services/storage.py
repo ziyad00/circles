@@ -1,7 +1,11 @@
 import os
+import logging
 from typing import Optional
 
 from ..config import settings
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 class StorageService:
@@ -42,8 +46,8 @@ class StorageService:
             key = f"reviews/{review_id}/{filename}"
             try:
                 s3.delete_object(Bucket=settings.s3_bucket, Key=key)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Failed to delete S3 review photo {key}: {e}")
         else:
             media_root = os.path.abspath(os.path.join(os.getcwd(), "media"))
             path = os.path.join(media_root, "reviews",
@@ -51,7 +55,10 @@ class StorageService:
             try:
                 os.remove(path)
             except FileNotFoundError:
-                pass
+                logger.warning(f"Review photo file not found: {path}")
+            except Exception as e:
+                logger.error(
+                    f"Failed to delete local review photo {path}: {e}")
 
     @staticmethod
     async def _save_s3(review_id: int, filename: str, content: bytes) -> str:
@@ -102,8 +109,8 @@ class StorageService:
             key = f"checkins/{check_in_id}/{filename}"
             try:
                 s3.delete_object(Bucket=settings.s3_bucket, Key=key)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Failed to delete S3 checkin photo {key}: {e}")
         else:
             media_root = os.path.abspath(os.path.join(os.getcwd(), "media"))
             path = os.path.join(media_root, "checkins",
@@ -111,7 +118,10 @@ class StorageService:
             try:
                 os.remove(path)
             except FileNotFoundError:
-                pass
+                logger.warning(f"Checkin photo file not found: {path}")
+            except Exception as e:
+                logger.error(
+                    f"Failed to delete local checkin photo {path}: {e}")
 
     @staticmethod
     async def _save_checkin_s3(check_in_id: int, filename: str, content: bytes) -> str:
