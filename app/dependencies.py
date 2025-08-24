@@ -1,7 +1,8 @@
 
 from fastapi import Depends, HTTPException, status
-from ..models import User
-from ..services.jwt_service import JWTService
+from .models import User
+from .services.jwt_service import JWTService
+
 
 async def get_current_admin_user(current_user: User = Depends(JWTService.get_current_user)) -> User:
     """
