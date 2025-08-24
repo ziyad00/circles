@@ -2380,7 +2380,7 @@ async def enrich_place_data(
             "categories": enriched_place.categories,
             "website": enriched_place.website,
             "phone": enriched_place.phone,
-            "metadata": enriched_place.metadata,
+            "metadata": enriched_place.place_metadata,
             "data_source": enriched_place.data_source,
             "enriched": True
         }

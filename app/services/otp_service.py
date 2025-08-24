@@ -2,7 +2,7 @@ import random
 import string
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_
 from ..models import User, OTPCode
 from ..config import settings
 
@@ -16,8 +16,12 @@ class OTPService:
     @staticmethod
     async def create_user_if_not_exists(db: AsyncSession, email: str, phone: str = None) -> User:
         """Create a new user if they don't exist"""
-        # Check if user exists
-        stmt = select(User).where(User.email == email)
+        # Check if user exists by email OR phone (if provided)
+        conditions = [User.email == email]
+        if phone:
+            conditions.append(User.phone == phone)
+
+        stmt = select(User).where(or_(*conditions))
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -27,6 +31,12 @@ class OTPService:
             db.add(user)
             await db.commit()
             await db.refresh(user)
+        else:
+            # Update phone if user exists but phone is different
+            if phone and user.phone != phone:
+                user.phone = phone
+                await db.commit()
+                await db.refresh(user)
 
         return user
 

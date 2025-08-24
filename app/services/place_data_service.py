@@ -18,7 +18,6 @@ class PlaceDataService:
     """Service for fetching and managing place data from multiple sources"""
 
     def __init__(self):
-        self.google_api_key = getattr(settings, 'google_places_api_key', None)
         self.foursquare_api_key = getattr(settings, 'foursquare_api_key', None)
         self.openstreetmap_enabled = getattr(
             settings, 'use_openstreetmap', True)
@@ -46,15 +45,7 @@ class PlaceDataService:
         """
         places = []
 
-        # Try Google Places first (if API key available)
-        if self.google_api_key:
-            try:
-                google_places = await self._search_google_places(lat, lon, radius, query, types)
-                places.extend(google_places)
-            except Exception as e:
-                logger.warning(f"Google Places search failed: {e}")
-
-        # Fallback to OpenStreetMap
+        # Search OpenStreetMap
         if self.openstreetmap_enabled:
             try:
                 osm_places = await self._search_openstreetmap(lat, lon, radius, query)
@@ -65,20 +56,18 @@ class PlaceDataService:
         # Remove duplicates and return
         return self._deduplicate_places(places)
 
-    async def get_place_details(self, place_id: str, source: str = "google") -> Optional[Dict[str, Any]]:
+    async def get_place_details(self, place_id: str, source: str = "foursquare") -> Optional[Dict[str, Any]]:
         """
         Get detailed information about a specific place
 
         Args:
             place_id: Place identifier
-            source: Data source ("google", "foursquare", "osm")
+            source: Data source ("foursquare", "osm")
 
         Returns:
             Detailed place information
         """
-        if source == "google" and self.google_api_key:
-            return await self._get_google_place_details(place_id)
-        elif source == "foursquare" and self.foursquare_api_key:
+        if source == "foursquare" and self.foursquare_api_key:
             return await self._get_foursquare_place_details(place_id)
         elif source == "osm":
             return await self._get_osm_place_details(place_id)
@@ -107,7 +96,7 @@ class PlaceDataService:
                     'formatted_phone_number', place.phone)
 
                 # Store additional data in JSON field
-                place.metadata = {
+                place.place_metadata = {
                     'opening_hours': details.get('opening_hours'),
                     'price_level': details.get('price_level'),
                     'user_ratings_total': details.get('user_ratings_total'),
@@ -118,48 +107,6 @@ class PlaceDataService:
 
         return place
 
-    async def _search_google_places(
-        self,
-        lat: float,
-        lon: float,
-        radius: int,
-        query: Optional[str] = None,
-        types: Optional[List[str]] = None
-    ) -> List[Dict[str, Any]]:
-        """Search places using Google Places API"""
-        async with httpx.AsyncClient() as client:
-            url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-            params = {
-                'location': f"{lat},{lon}",
-                'radius': radius,
-                'key': self.google_api_key,
-                'type': types[0] if types else None
-            }
-
-            if query:
-                params['keyword'] = query
-
-            response = await client.get(url, params=params)
-            data = response.json()
-
-            if data['status'] == 'OK':
-                return [
-                    {
-                        'name': place['name'],
-                        'address': place.get('vicinity'),
-                        'latitude': place['geometry']['location']['lat'],
-                        'longitude': place['geometry']['location']['lng'],
-                        'rating': place.get('rating'),
-                        'types': place.get('types', []),
-                        'place_id': place['place_id'],
-                        'data_source': 'google',
-                        'external_id': place['place_id']
-                    }
-                    for place in data['results']
-                ]
-
-            return []
-
     async def _search_openstreetmap(
         self,
         lat: float,
@@ -168,73 +115,55 @@ class PlaceDataService:
         query: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Search places using OpenStreetMap Nominatim"""
-        async with httpx.AsyncClient() as client:
-            url = "https://nominatim.openstreetmap.org/search"
-            params = {
-                'format': 'json',
-                'limit': 20,
-                'lat': lat,
-                'lon': lon,
-                'radius': radius // 1000,  # Convert to km
-                'addressdetails': 1
-            }
-
-            if query:
-                params['q'] = query
-
-            response = await client.get(url, params=params)
-            data = response.json()
-
-            return [
-                {
-                    'name': place['display_name'].split(',')[0],
-                    'address': place['display_name'],
-                    'latitude': float(place['lat']),
-                    'longitude': float(place['lon']),
-                    'place_id': place['place_id'],
-                    'data_source': 'osm',
-                    'external_id': place['place_id'],
-                    'types': [place.get('type', 'unknown')]
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                url = "https://nominatim.openstreetmap.org/search"
+                params = {
+                    'format': 'json',
+                    'limit': 20,
+                    'lat': lat,
+                    'lon': lon,
+                    'radius': radius // 1000,  # Convert to km
+                    'addressdetails': 1
                 }
-                for place in data
-                if place.get('type') in ['restaurant', 'cafe', 'bar', 'shop', 'amenity']
-            ]
 
-    async def _get_google_place_details(self, place_id: str) -> Optional[Dict[str, Any]]:
-        """Get detailed place information from Google Places"""
-        async with httpx.AsyncClient() as client:
-            url = "https://maps.googleapis.com/maps/api/place/details/json"
-            params = {
-                'place_id': place_id,
-                'fields': 'name,formatted_address,geometry,types,rating,user_ratings_total,photos,opening_hours,price_level,website,formatted_phone_number',
-                'key': self.google_api_key
-            }
+                if query:
+                    params['q'] = query
 
-            response = await client.get(url, params=params)
-            data = response.json()
+                response = await client.get(url, params=params)
 
-            if data['status'] == 'OK':
-                place = data['result']
-                return {
-                    'rating': place.get('rating'),
-                    'user_ratings_total': place.get('user_ratings_total'),
-                    'types': place.get('types', []),
-                    'website': place.get('website'),
-                    'formatted_phone_number': place.get('formatted_phone_number'),
-                    'opening_hours': place.get('opening_hours', {}).get('weekday_text', []),
-                    'price_level': place.get('price_level'),
-                    'photos': [
+                # Handle different status codes
+                if response.status_code == 200:
+                    data = response.json()
+
+                    return [
                         {
-                            'photo_reference': photo['photo_reference'],
-                            'width': photo['width'],
-                            'height': photo['height']
+                            'name': place['display_name'].split(',')[0],
+                            'address': place['display_name'],
+                            'latitude': float(place['lat']),
+                            'longitude': float(place['lon']),
+                            'place_id': place['place_id'],
+                            'data_source': 'osm',
+                            'external_id': place['place_id'],
+                            'types': [place.get('type', 'unknown')]
                         }
-                        for photo in place.get('photos', [])[:5]
-                    ],
-                    'last_updated': 'google'
-                }
+                        for place in data
+                        if place.get('type') in ['restaurant', 'cafe', 'bar', 'shop', 'amenity']
+                    ]
+                else:
+                    logger.error(
+                        f"OpenStreetMap API HTTP error: {response.status_code}")
+                    return []
 
-            return None
+        except httpx.TimeoutException:
+            logger.error("OpenStreetMap API request timed out")
+            return []
+        except httpx.RequestError as e:
+            logger.error(f"OpenStreetMap API request error: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error in OpenStreetMap API: {e}")
+            return []
 
     async def _get_foursquare_place_details(self, venue_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed place information from Foursquare"""
@@ -287,24 +216,44 @@ class PlaceDataService:
 
     async def _get_osm_place_details(self, place_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed place information from OpenStreetMap"""
-        async with httpx.AsyncClient() as client:
-            url = f"https://nominatim.openstreetmap.org/lookup"
-            params = {
-                'osm_ids': place_id,
-                'format': 'json',
-                'addressdetails': 1
-            }
-
-            response = await client.get(url, params=params)
-            data = response.json()
-
-            if data:
-                place = data[0]
-                return {
-                    'types': [place.get('type', 'unknown')],
-                    'last_updated': 'osm'
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                url = f"https://nominatim.openstreetmap.org/lookup"
+                params = {
+                    'osm_ids': place_id,
+                    'format': 'json',
+                    'addressdetails': 1
                 }
 
+                response = await client.get(url, params=params)
+
+                # Handle different status codes
+                if response.status_code == 200:
+                    data = response.json()
+
+                    if data:
+                        place = data[0]
+                        return {
+                            'types': [place.get('type', 'unknown')],
+                            'last_updated': 'osm'
+                        }
+                    else:
+                        logger.warning(
+                            f"OpenStreetMap place not found: {place_id}")
+                        return None
+                else:
+                    logger.error(
+                        f"OpenStreetMap API HTTP error: {response.status_code}")
+                    return None
+
+        except httpx.TimeoutException:
+            logger.error("OpenStreetMap API request timed out")
+            return None
+        except httpx.RequestError as e:
+            logger.error(f"OpenStreetMap API request error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in OpenStreetMap API: {e}")
             return None
 
     def _deduplicate_places(self, places: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -357,6 +306,10 @@ class PlaceDataService:
                 'external_id', existing_place.external_id)
             existing_place.data_source = place_data.get(
                 'data_source', existing_place.data_source)
+
+            # Fix: Commit and refresh the updated place
+            await db.commit()
+            await db.refresh(existing_place)
             return existing_place
         else:
             # Create new place
