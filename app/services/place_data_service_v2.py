@@ -227,23 +227,49 @@ class EnhancedPlaceDataService:
 
     async def _fetch_overpass_data(self, query: str) -> List[Dict[str, Any]]:
         """Fetch data from Overpass API"""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://overpass-api.de/api/interpreter",
-                data=query,
-                timeout=30.0
-            )
-            response.raise_for_status()
-            data = response.json()
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                response = await client.post(
+                    "https://overpass-api.de/api/interpreter",
+                    data=query,
+                    timeout=30.0
+                )
 
-            places = []
-            for element in data.get('elements', []):
-                if element['type'] in ['node', 'way']:
-                    place_data = self._parse_overpass_element(element)
-                    if place_data:
-                        places.append(place_data)
+                # Handle different status codes
+                if response.status_code == 200:
+                    data = response.json()
 
-            return places
+                    places = []
+                    for element in data.get('elements', []):
+                        if element['type'] in ['node', 'way']:
+                            place_data = self._parse_overpass_element(element)
+                            if place_data:
+                                places.append(place_data)
+
+                    logger.info(
+                        f"Fetched {len(places)} places from Overpass API")
+                    return places
+                elif response.status_code == 429:
+                    logger.warning("Overpass API rate limit exceeded")
+                    return []
+                elif response.status_code >= 500:
+                    logger.error(
+                        f"Overpass API server error: {response.status_code}")
+                    return []
+                else:
+                    logger.error(
+                        f"Overpass API HTTP error: {response.status_code}")
+                    return []
+
+        except httpx.TimeoutException:
+            logger.error("Overpass API request timed out")
+            return []
+        except httpx.RequestError as e:
+            logger.error(f"Overpass API request error: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error in Overpass API: {e}")
+            return []
 
     def _parse_overpass_element(self, element: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Parse Overpass element into place data"""
@@ -926,7 +952,18 @@ class EnhancedPlaceDataService:
         # Calculate bounding box for efficient querying
         # Approximate: 1 degree ≈ 111km
         lat_radius = radius / 111000.0
-        lon_radius = radius / (111000.0 * abs(lat))
+
+        # Fix: Use cosine of latitude for longitude radius to prevent divide by zero
+        # and handle equator and low latitudes correctly
+        import math
+        lat_radians = math.radians(abs(lat))
+        cos_lat = math.cos(lat_radians)
+
+        # Prevent division by zero and handle edge cases
+        if cos_lat < 0.001:  # Very close to equator
+            cos_lat = 0.001  # Use minimum value
+
+        lon_radius = radius / (111000.0 * cos_lat)
 
         min_lat = lat - lat_radius
         max_lat = lat + lat_radius

@@ -16,8 +16,8 @@ router = APIRouter()
 
 class ConnectionManager:
     def __init__(self) -> None:
-        # (thread_id) -> set of (user_id, websocket, last_ping)
-        self.active: Dict[int, Set[Tuple[int, WebSocket, datetime]]] = {}
+        # (thread_id) -> dict of {user_id: (websocket, last_ping)}
+        self.active: Dict[int, Dict[int, Tuple[WebSocket, datetime]]] = {}
         # (user_id) -> set of (thread_id, websocket)
         self.user_connections: Dict[int, Set[Tuple[int, WebSocket]]] = {}
         # Background task for cleanup
@@ -28,7 +28,9 @@ class ConnectionManager:
         now = datetime.now(timezone.utc)
 
         # Add to thread connections
-        self.active.setdefault(thread_id, set()).add((user_id, websocket, now))
+        if thread_id not in self.active:
+            self.active[thread_id] = {}
+        self.active[thread_id][user_id] = (websocket, now)
 
         # Add to user connections
         self.user_connections.setdefault(
@@ -41,11 +43,10 @@ class ConnectionManager:
 
     def disconnect(self, thread_id: int, user_id: int, websocket: WebSocket) -> None:
         # Remove from thread connections
-        conns = self.active.get(thread_id)
-        if conns:
-            conns.discard((user_id, websocket, datetime.now(timezone.utc)))
-            if not conns:
-                self.active.pop(thread_id, None)
+        if thread_id in self.active and user_id in self.active[thread_id]:
+            del self.active[thread_id][user_id]
+            if not self.active[thread_id]:
+                del self.active[thread_id]
 
         # Remove from user connections
         user_conns = self.user_connections.get(user_id)
@@ -56,7 +57,8 @@ class ConnectionManager:
 
     async def broadcast(self, thread_id: int, sender_id: int, payload: dict) -> None:
         """Broadcast message to all participants in a thread except sender"""
-        for uid, ws, _ in list(self.active.get(thread_id, set())):
+        thread_connections = self.active.get(thread_id, {})
+        for uid, (ws, _) in list(thread_connections.items()):
             if uid == sender_id:
                 continue
             try:
@@ -103,7 +105,8 @@ class ConnectionManager:
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
         # Send to all participants including sender (for echo)
-        for uid, ws, _ in list(self.active.get(thread_id, set())):
+        thread_connections = self.active.get(thread_id, {})
+        for uid, (ws, _) in list(thread_connections.items()):
             try:
                 await ws.send_json(payload)
             except Exception:
@@ -139,7 +142,7 @@ class ConnectionManager:
                 stale_connections = []
 
                 for thread_id, connections in self.active.items():
-                    for user_id, ws, last_ping in connections:
+                    for user_id, (ws, last_ping) in connections.items():
                         # Consider connection stale if no ping for 2 minutes
                         if (now - last_ping) > timedelta(minutes=2):
                             stale_connections.append((thread_id, user_id, ws))
@@ -157,11 +160,9 @@ class ConnectionManager:
 
     def update_ping(self, thread_id: int, user_id: int, websocket: WebSocket) -> None:
         """Update last ping time for a connection"""
-        conns = self.active.get(thread_id)
-        if conns:
-            # Remove old entry and add new one with updated timestamp
-            conns.discard((user_id, websocket, datetime.now(timezone.utc)))
-            conns.add((user_id, websocket, datetime.now(timezone.utc)))
+        if thread_id in self.active and user_id in self.active[thread_id]:
+            # Update the timestamp for the existing connection
+            self.active[thread_id][user_id] = (websocket, datetime.now(timezone.utc))
 
 
 manager = ConnectionManager()
@@ -172,7 +173,7 @@ async def _authenticate(websocket: WebSocket) -> int | None:
     if not token:
         return None
     try:
-        payload = JWTService.decode_token(token)
+        payload = JWTService.verify_token(token)
         user_id = int(payload.get("sub"))
         return user_id
     except Exception:

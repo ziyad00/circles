@@ -62,9 +62,6 @@ class Settings(BaseSettings):
         default=500, env="CHECKIN_MAX_DISTANCE_METERS")
 
     # Place Data API Keys
-    google_places_api_key: Optional[str] = Field(
-        default=None, env="GOOGLE_PLACES_API_KEY"
-    )
     foursquare_api_key: Optional[str] = Field(
         default="demo_key_for_testing", env="FOURSQUARE_API_KEY"
     )

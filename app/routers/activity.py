@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, and_, or_
 from sqlalchemy.orm import selectinload
@@ -49,6 +50,9 @@ async def get_activity_feed(
     db: AsyncSession = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    activity_types: Optional[str] = Query(None, description="Comma-separated list of activity types to filter by"),
+    since: Optional[datetime] = Query(None, description="Filter activities created after this timestamp"),
+    until: Optional[datetime] = Query(None, description="Filter activities created before this timestamp"),
 ):
     """
     Get activity feed from followed users.
