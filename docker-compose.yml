@@ -33,9 +33,9 @@ services:
       - APP_STORAGE_BACKEND=local
       - APP_CHECKIN_ENFORCE_PROXIMITY=false
       - APP_USE_POSTGIS=false
+      - APP_METRICS_TOKEN=dev-metrics-token
     volumes:
       - ./media:/app/media
-      - .:/app
     depends_on:
       postgres:
         condition: service_healthy
