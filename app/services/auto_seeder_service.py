@@ -20,56 +20,267 @@ class AutoSeederService:
 
     def __init__(self):
         self.saudi_cities = [
-            # Major Saudi cities with their bounding boxes
+            # Major Cities - Riyadh Region
             {
                 "name": "Riyadh",
-                "bbox": (24.7136, 46.6753, 24.7336, 46.6953),
+                "bbox": (24.6136, 46.5753, 24.8336, 46.7953),
                 "description": "Capital city of Saudi Arabia"
             },
             {
+                "name": "Al-Kharj",
+                "bbox": (24.1553, 47.3053, 24.1753, 47.3253),
+                "description": "Agricultural city in Riyadh Province"
+            },
+            {
+                "name": "Al-Diriyah",
+                "bbox": (24.7336, 46.5753, 24.7536, 46.5953),
+                "description": "Historic city and UNESCO World Heritage site"
+            },
+            {
+                "name": "Al-Uyaynah",
+                "bbox": (24.9083, 46.4083, 24.9283, 46.4283),
+                "description": "Historic city near Riyadh"
+            },
+            {
+                "name": "Al-Majma'ah",
+                "bbox": (25.8583, 45.3583, 25.8783, 45.3783),
+                "description": "City in Riyadh Province"
+            },
+            {
+                "name": "Al-Zulfi",
+                "bbox": (26.3083, 44.8083, 26.3283, 44.8283),
+                "description": "City in Riyadh Province"
+            },
+            {
+                "name": "Al-Ghat",
+                "bbox": (26.1583, 44.9583, 26.1783, 44.9783),
+                "description": "City in Riyadh Province"
+            },
+            {
+                "name": "Al-Dawadmi",
+                "bbox": (24.5083, 44.4083, 24.5283, 44.4283),
+                "description": "City in Riyadh Province"
+            },
+            {
+                "name": "Al-Aflaj",
+                "bbox": (22.3083, 46.7083, 22.3283, 46.7283),
+                "description": "City in Riyadh Province"
+            },
+            {
+                "name": "Al-Hareeq",
+                "bbox": (24.8083, 46.8083, 24.8283, 46.8283),
+                "description": "City in Riyadh Province"
+            },
+            {
+                "name": "Al-Hotat Bani Tamim",
+                "bbox": (23.6583, 46.7583, 23.6783, 46.7783),
+                "description": "City in Riyadh Province"
+            },
+
+            # Western Region - Makkah Province
+            {
                 "name": "Jeddah",
-                "bbox": (21.4858, 39.1925, 21.5058, 39.2125),
+                "bbox": (21.3858, 39.0925, 21.6058, 39.3125),
                 "description": "Major port city on the Red Sea"
             },
             {
-                "name": "Dammam",
-                "bbox": (26.4207, 50.0888, 26.4407, 50.1088),
-                "description": "Capital of Eastern Province"
-            },
-            {
                 "name": "Mecca",
-                "bbox": (21.4225, 39.8262, 21.4425, 39.8462),
+                "bbox": (21.3225, 39.7262, 21.5225, 39.9262),
                 "description": "Holy city and religious capital"
             },
             {
-                "name": "Medina",
-                "bbox": (24.5247, 39.5692, 24.5447, 39.5892),
-                "description": "Second holiest city in Islam"
-            },
-            {
                 "name": "Taif",
-                "bbox": (21.2703, 40.4158, 21.2903, 40.4358),
+                "bbox": (21.1703, 40.3158, 21.3903, 40.5358),
                 "description": "Mountain resort city"
             },
             {
-                "name": "Abha",
-                "bbox": (18.2164, 42.5053, 18.2364, 42.5253),
-                "description": "Capital of Asir Province"
+                "name": "Rabigh",
+                "bbox": (22.7986, 38.9986, 22.8186, 39.0186),
+                "description": "Coastal city in Makkah Province"
             },
             {
-                "name": "Tabuk",
-                "bbox": (28.3835, 36.5664, 28.4035, 36.5864),
-                "description": "Capital of Tabuk Province"
+                "name": "Al-Qunfudhah",
+                "bbox": (19.1083, 41.0583, 19.1283, 41.0783),
+                "description": "Coastal city in Makkah Province"
+            },
+            {
+                "name": "Al-Lith",
+                "bbox": (20.1583, 40.2583, 20.1783, 40.2783),
+                "description": "Coastal city in Makkah Province"
+            },
+
+            # Western Region - Madinah Province
+            {
+                "name": "Medina",
+                "bbox": (24.4247, 39.4692, 24.6447, 39.6892),
+                "description": "Second holiest city in Islam"
+            },
+            {
+                "name": "Yanbu",
+                "bbox": (24.0883, 38.0583, 24.1083, 38.0783),
+                "description": "Industrial port city"
+            },
+            {
+                "name": "Al-Ula",
+                "bbox": (26.6083, 37.9083, 26.6283, 37.9283),
+                "description": "Historic city and tourist destination"
+            },
+
+            # Eastern Province
+            {
+                "name": "Dammam",
+                "bbox": (26.3207, 49.9888, 26.5207, 50.1888),
+                "description": "Capital of Eastern Province"
             },
             {
                 "name": "Al-Khobar",
-                "bbox": (26.2795, 50.2084, 26.2995, 50.2284),
+                "bbox": (26.1795, 50.1084, 26.3995, 50.3284),
                 "description": "Major city in Eastern Province"
             },
             {
                 "name": "Dhahran",
-                "bbox": (26.2885, 50.1139, 26.3085, 50.1339),
+                "bbox": (26.1885, 50.0139, 26.4085, 50.2339),
                 "description": "Oil industry hub"
+            },
+            {
+                "name": "Al-Ahsa",
+                "bbox": (25.3833, 49.5833, 25.4033, 49.6033),
+                "description": "Oasis city and UNESCO World Heritage site"
+            },
+            {
+                "name": "Al-Jubail",
+                "bbox": (27.0083, 49.6583, 27.0283, 49.6783),
+                "description": "Industrial city and port"
+            },
+            {
+                "name": "Ras Tanura",
+                "bbox": (26.7083, 50.1583, 26.7283, 50.1783),
+                "description": "Oil port city"
+            },
+            {
+                "name": "Al-Qatif",
+                "bbox": (26.5583, 49.9983, 26.5783, 50.0183),
+                "description": "Historic coastal city"
+            },
+
+            # Southern Region - Asir Province
+            {
+                "name": "Abha",
+                "bbox": (18.1164, 42.4053, 18.3364, 42.6253),
+                "description": "Capital of Asir Province"
+            },
+            {
+                "name": "Khamis Mushait",
+                "bbox": (18.3083, 42.7083, 18.3283, 42.7283),
+                "description": "Military and commercial city"
+            },
+            {
+                "name": "Al-Baha",
+                "bbox": (20.0083, 41.4583, 20.0283, 41.4783),
+                "description": "Capital of Al-Baha Province"
+            },
+            {
+                "name": "Jizan",
+                "bbox": (16.9083, 42.5583, 16.9283, 42.5783),
+                "description": "Capital of Jizan Province"
+            },
+            {
+                "name": "Najran",
+                "bbox": (17.5083, 44.1583, 17.5283, 44.1783),
+                "description": "Capital of Najran Province"
+            },
+            {
+                "name": "Al-Ranyah",
+                "bbox": (21.2083, 42.7083, 21.2283, 42.7283),
+                "description": "City in Asir Province"
+            },
+            {
+                "name": "Al-Namas",
+                "bbox": (19.1583, 42.1083, 19.1783, 42.1283),
+                "description": "City in Asir Province"
+            },
+
+            # Northern Region - Tabuk Province
+            {
+                "name": "Tabuk",
+                "bbox": (28.2835, 36.4664, 28.5035, 36.6864),
+                "description": "Capital of Tabuk Province"
+            },
+            {
+                "name": "Al-Wajh",
+                "bbox": (26.2083, 36.4583, 26.2283, 36.4783),
+                "description": "Coastal city in Tabuk Province"
+            },
+            {
+                "name": "Duba",
+                "bbox": (27.3583, 35.7083, 27.3783, 35.7283),
+                "description": "Port city in Tabuk Province"
+            },
+            {
+                "name": "Haql",
+                "bbox": (29.2583, 34.9083, 29.2783, 34.9283),
+                "description": "Border city near Jordan"
+            },
+
+            # Central Region - Qassim Province
+            {
+                "name": "Buraydah",
+                "bbox": (26.3583, 43.9583, 26.3783, 43.9783),
+                "description": "Capital of Qassim Province"
+            },
+            {
+                "name": "Unaizah",
+                "bbox": (26.1083, 43.9083, 26.1283, 43.9283),
+                "description": "Major city in Qassim Province"
+            },
+            {
+                "name": "Al-Rass",
+                "bbox": (25.8583, 43.5083, 25.8783, 43.5283),
+                "description": "Agricultural city in Qassim"
+            },
+
+            # Central Region - Ha'il Province
+            {
+                "name": "Ha'il",
+                "bbox": (27.5083, 41.7083, 27.5283, 41.7283),
+                "description": "Capital of Ha'il Province"
+            },
+            {
+                "name": "Al-Jouf",
+                "bbox": (29.9583, 40.2083, 29.9783, 40.2283),
+                "description": "Capital of Al-Jouf Province"
+            },
+
+            # Additional Major Cities (Alternative Names)
+            {
+                "name": "Al-Khamis Mushait",
+                "bbox": (18.3083, 42.7083, 18.3283, 42.7283),
+                "description": "Alternative spelling for Khamis Mushait"
+            },
+            {
+                "name": "Al-Bahah",
+                "bbox": (20.0083, 41.4583, 20.0283, 41.4783),
+                "description": "Alternative spelling for Al-Baha"
+            },
+            {
+                "name": "Sakaka",
+                "bbox": (29.9583, 40.2083, 29.9783, 40.2283),
+                "description": "Alternative name for Al-Jouf"
+            },
+            {
+                "name": "Al-Taif",
+                "bbox": (21.2703, 40.4158, 21.2903, 40.4358),
+                "description": "Alternative spelling for Taif"
+            },
+            {
+                "name": "Al-Hariq",
+                "bbox": (24.8083, 46.8083, 24.8283, 46.8283),
+                "description": "Alternative spelling for Al-Hareeq"
+            },
+            {
+                "name": "Al-Hotah",
+                "bbox": (23.6583, 46.7583, 23.6783, 46.7783),
+                "description": "Alternative spelling for Al-Hotat Bani Tamim"
             }
         ]
 
@@ -84,8 +295,8 @@ class AutoSeederService:
             )
             osm_places_count = result.scalar_one()
 
-            # If we have less than 100 OSM places, we should seed
-            should_seed = osm_places_count < 100
+            # If we have less than 500 OSM places, we should seed (increased for more cities)
+            should_seed = osm_places_count < 500
 
             logger.info(
                 f"OSM places count: {osm_places_count}, should seed: {should_seed}")
