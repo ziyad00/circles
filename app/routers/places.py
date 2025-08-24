@@ -1,12 +1,10 @@
-from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, text, or_, and_
-import httpx
-
-from ..database import get_db
-from ..dependencies import get_current_admin_user
-from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto, CheckInCollection, CheckInCollectionItem
+from ..models import Follow
+from ..routers.activity import create_checkin_activity
+from ..utils import can_view_checkin, haversine_distance
+from ..services.place_data_service_v2 import enhanced_place_data_service
+from ..services.place_data_service import place_data_service
+from ..services.storage import StorageService
+from ..services.jwt_service import JWTService
 from ..schemas import (
     PlaceCreate,
     PlaceResponse,
@@ -36,13 +34,18 @@ from ..schemas import (
     PlaceHourlyStats,
     PlaceCrowdLevel,
 )
-from ..services.jwt_service import JWTService
-from ..services.storage import StorageService
-from ..services.place_data_service import place_data_service
-from ..services.place_data_service_v2 import enhanced_place_data_service
-from ..utils import can_view_checkin, haversine_distance
-from ..routers.activity import create_checkin_activity
-from ..models import Follow
+from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto, CheckInCollection, CheckInCollectionItem
+from ..dependencies import get_current_admin_user
+from ..database import get_db
+from datetime import datetime, timedelta, timezone
+from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, desc, text, or_, and_
+import httpx
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(
@@ -1575,7 +1578,8 @@ async def create_check_in(
         )
     except Exception as e:
         # Log error but don't fail the check-in creation
-        print(f"Failed to create activity for check-in {check_in.id}: {e}")
+        logger.error(
+            f"Failed to create activity for check-in {check_in.id}: {e}")
 
     return check_in
 
@@ -1737,7 +1741,8 @@ async def create_check_in_full(
             note=note,
         )
     except Exception as e:
-        print(f"Failed to create activity for check-in {check_in.id}: {e}")
+        logger.error(
+            f"Failed to create activity for check-in {check_in.id}: {e}")
 
     return CheckInResponse(
         id=check_in.id,

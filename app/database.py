@@ -17,7 +17,7 @@ database_url = URL.create(
 
 engine = create_async_engine(
     database_url,
-    echo=True,  # Set to False in production
+    echo=settings.debug,  # Only echo SQL in debug mode
     future=True,
 )
 
