@@ -63,9 +63,35 @@ The API will be available at `http://localhost:8000`
 
 ## How to Run
 
-### Quick Start with Docker (Recommended)
+### 🚀 Quick Setup (Recommended)
+
+For the fastest setup with automatic issue resolution:
+
+```bash
+# Run the automated setup script
+python3 scripts/setup_project.py
+```
+
+This script will:
+
+- ✅ Check all prerequisites
+- ✅ Set up environment variables
+- ✅ Install dependencies
+- ✅ Handle migration issues automatically
+- ✅ Start the application
+- ✅ Test the setup
+- ✅ Populate sample data
+
+### Method 1: Quick Start with Docker (Recommended)
 
 The fastest way to get the Circles application running:
+
+#### Prerequisites
+
+- Docker and Docker Compose installed
+- Git
+
+#### Steps
 
 1. **Clone and navigate to the project**
 
@@ -87,26 +113,65 @@ The fastest way to get the Circles application running:
    - Run database migrations automatically
    - Make the API available at `http://localhost:8000`
 
-3. **Populate with sample data**
+3. **Wait for startup** (about 30-60 seconds)
+
+   ```bash
+   # Check if the app is ready
+   curl --max-time 10 http://localhost:8000/health
+   ```
+
+4. **Populate with sample data** (optional)
 
    ```bash
    docker exec circles_app uv run python scripts/populate_sample_data.py
    ```
 
-4. **Access the application**
+5. **Access the application**
    - **API Documentation**: http://localhost:8000/docs (Swagger UI)
    - **Health Check**: http://localhost:8000/health
    - **Metrics**: http://localhost:8000/metrics (dev mode only)
 
-### Local Development Setup
+#### Troubleshooting Docker
+
+```bash
+# Check container status
+docker-compose ps
+
+# View logs
+docker-compose logs app
+
+# Restart if needed
+docker-compose restart app
+
+# Clean restart (removes data)
+docker-compose down -v
+docker-compose up --build
+```
+
+### Method 2: Local Development Setup
 
 For local development without Docker:
 
-1. **Prerequisites**
+#### Prerequisites
 
-   - Python 3.12+
-   - PostgreSQL 15+
-   - uv package manager
+- Python 3.12+
+- PostgreSQL 15+
+- uv package manager
+
+#### Steps
+
+1. **Install uv** (if not installed)
+
+   ```bash
+   # macOS
+   brew install uv
+
+   # Linux
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+
+   # Windows
+   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
 
 2. **Install dependencies**
 
@@ -118,29 +183,226 @@ For local development without Docker:
 
    ```bash
    cp .env.example .env
-   # Edit .env with your PostgreSQL connection details
    ```
 
-4. **Start PostgreSQL** (if not using Docker)
+4. **Configure database connection**
+
+   Edit `.env` file:
+
+   ```bash
+   # For local PostgreSQL
+   APP_DATABASE_URL=postgresql+asyncpg://username:password@localhost:5432/circles
+
+   # Or use Docker for database only
+   APP_DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/circles
+   ```
+
+5. **Start PostgreSQL**
+
+   **Option A: Local PostgreSQL**
 
    ```bash
    # macOS with Homebrew
+   brew install postgresql@15
    brew services start postgresql@15
 
-   # Or with Docker
+   # Create database
+   createdb circles
+   ```
+
+   **Option B: Docker PostgreSQL only**
+
+   ```bash
    docker-compose up -d postgres
    ```
 
-5. **Run migrations**
+6. **Run migrations**
 
    ```bash
-   uv run alembic upgrade head
+   uv run alembic upgrade heads
    ```
 
-6. **Start the application**
+7. **Start the application**
+
    ```bash
    uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
    ```
+
+8. **Test the application**
+   ```bash
+   curl --max-time 10 http://localhost:8000/health
+   ```
+
+### Method 3: Production Setup
+
+For production deployment:
+
+#### Prerequisites
+
+- Python 3.12+
+- PostgreSQL 15+ with PostGIS extension
+- uv package manager
+- Reverse proxy (nginx, etc.)
+
+#### Steps
+
+1. **Install dependencies**
+
+   ```bash
+   uv sync --frozen
+   ```
+
+2. **Set up environment variables**
+
+   ```bash
+   cp .env.example .env
+   # Edit with production values
+   ```
+
+3. **Configure production settings**
+
+   ```bash
+   # In .env file
+   APP_DEBUG=false
+   APP_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
+   APP_OTP_SECRET_KEY=your-secure-secret-key
+   APP_JWT_SECRET_KEY=your-secure-jwt-secret
+   APP_STORAGE_BACKEND=s3  # or local
+   APP_USE_POSTGIS=true
+   ```
+
+4. **Run migrations**
+
+   ```bash
+   uv run alembic upgrade heads
+   ```
+
+5. **Start with production server**
+   ```bash
+   uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+   ```
+
+### Testing Your Setup
+
+Once the application is running, test it:
+
+```bash
+# Health check (with timeout)
+curl --max-time 10 http://localhost:8000/health
+
+# Request OTP (with timeout)
+curl --max-time 10 -X POST "http://localhost:8000/auth/request-otp" \
+     -H "Content-Type: application/json" \
+     -d '{"email": "test@example.com"}'
+
+# Check API docs
+open http://localhost:8000/docs
+```
+
+### Common Issues and Solutions
+
+#### Migration Issues (Most Common)
+
+The project has some migration dependency issues. Here's how to fix them:
+
+**Option 1: Fresh Start (Recommended)**
+
+```bash
+# Stop everything
+docker-compose down -v
+
+# Start fresh
+docker-compose up --build
+```
+
+**Option 2: Manual Migration Fix**
+
+```bash
+# If you get "relation 'users' does not exist" error
+# This means the migration order is wrong
+
+# Reset the database
+docker-compose down -v
+docker volume rm circles_postgres_data
+
+# Start PostgreSQL only
+docker-compose up -d postgres
+
+# Wait for PostgreSQL to be ready
+sleep 10
+
+# Run migrations with proper order
+uv run alembic upgrade heads
+```
+
+#### Docker Issues
+
+```bash
+# Port already in use
+docker-compose down
+docker-compose up --build
+
+# Migration errors
+docker-compose down -v
+docker-compose up --build
+
+# Container not starting
+docker-compose logs app
+
+# Health check failing
+# Wait 30-60 seconds for startup, then check:
+curl --max-time 10 http://localhost:8000/health
+```
+
+#### Local Development Issues
+
+```bash
+# Database connection failed
+# Check if PostgreSQL is running
+brew services list | grep postgresql
+
+# Migration errors
+uv run alembic upgrade heads
+
+# Port already in use
+lsof -ti:8000 | xargs kill -9
+
+# Environment variables not loaded
+# Make sure .env file exists and has correct values
+cat .env
+```
+
+#### Environment Variables
+
+Make sure your `.env` file has the correct database URL:
+
+```bash
+# For Docker PostgreSQL
+APP_DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/circles
+
+# For local PostgreSQL
+APP_DATABASE_URL=postgresql+asyncpg://youruser:yourpass@localhost:5432/circles
+
+# Required environment variables
+APP_DEBUG=true
+APP_OTP_SECRET_KEY=dev-secret-key-change-in-production
+APP_JWT_SECRET_KEY=dev-jwt-secret-key-change-in-production
+```
+
+#### Testing Your Setup
+
+```bash
+# Test with timeouts to avoid hanging
+curl --max-time 10 http://localhost:8000/health
+
+# Test OTP request
+curl --max-time 10 -X POST "http://localhost:8000/auth/request-otp" \
+     -H "Content-Type: application/json" \
+     -d '{"email": "test@example.com"}'
+
+# Check API docs
+open http://localhost:8000/docs
+```
 
 ### Testing the API
 
