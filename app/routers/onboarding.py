@@ -15,6 +15,7 @@ from ..schemas import (
     UsernameCheckResponse,
 )
 from ..services.jwt_service import JWTService
+from ..config import settings
 
 router = APIRouter(
     prefix="/onboarding",
@@ -122,12 +123,16 @@ async def request_phone_otp(
     await db.commit()
 
     # In production, send SMS here
-    # For development, return the OTP
-    return {
+    # Only return OTP in response for development/debug mode
+    response_data = {
         "message": "OTP sent successfully",
-        "otp": otp_code,  # Remove this in production
         "is_new_user": user is None
     }
+
+    if settings.debug:
+        response_data["otp"] = otp_code  # Only include in debug mode
+
+    return response_data
 
 
 @router.post("/verify-otp")

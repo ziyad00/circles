@@ -2441,7 +2441,10 @@ async def get_external_place_suggestions(
             )
         else:
             # General search (OpenStreetMap only for now)
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0),
+                headers={"User-Agent": "Circles-App/1.0"}
+            ) as client:
                 url = "https://nominatim.openstreetmap.org/search"
                 params = {
                     'q': query,
@@ -2468,7 +2471,7 @@ async def get_external_place_suggestions(
                 ]
 
         # Return suggestions (limit results)
-                return places[:limit]
+        return places[:limit]
 
     except Exception as e:
         raise HTTPException(

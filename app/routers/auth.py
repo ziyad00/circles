@@ -80,9 +80,14 @@ async def request_otp(
         otp = await OTPService.create_otp(db, user.id)
 
         # In a real application, you would send this OTP via email/SMS
-        # For now, we'll return it in the response (for development only)
+        # Only return OTP in response for development/debug mode
+        if settings.debug:
+            message = f"OTP code sent to {request.email}. For development: {otp.code}"
+        else:
+            message = f"OTP code sent to {request.email}"
+
         return OTPResponse(
-            message=f"OTP code sent to {request.email}. For development: {otp.code}",
+            message=message,
             expires_in_minutes=settings.otp_expiry_minutes,
         )
 

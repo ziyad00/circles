@@ -26,6 +26,9 @@ import logging
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
+# Configure logging
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,18 +43,18 @@ async def lifespan(app: FastAPI):
             seeding_result = await auto_seeder_service.auto_seed_if_needed(db)
 
             if seeding_result["status"] == "completed":
-                print(
-                    f"🎉 Auto-seeding completed! Added {seeding_result['total_places_added']} places")
+                logger.info(
+                    f"Auto-seeding completed! Added {seeding_result['total_places_added']} places")
             elif seeding_result["status"] == "skipped":
-                print(f"✅ Auto-seeding skipped: {seeding_result['reason']}")
+                logger.info(f"Auto-seeding skipped: {seeding_result['reason']}")
             else:
-                print(
-                    f"⚠️ Auto-seeding failed: {seeding_result.get('error', 'Unknown error')}")
+                logger.warning(
+                    f"Auto-seeding failed: {seeding_result.get('error', 'Unknown error')}")
 
             break  # Only run once
 
     except Exception as e:
-        print(f"❌ Auto-seeding error: {e}")
+        logger.error(f"Auto-seeding error: {e}")
 
     yield
 

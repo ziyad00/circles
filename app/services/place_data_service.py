@@ -116,7 +116,10 @@ class PlaceDataService:
     ) -> List[Dict[str, Any]]:
         """Search places using OpenStreetMap Nominatim"""
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0),
+                headers={"User-Agent": "Circles-App/1.0"}
+            ) as client:
                 url = "https://nominatim.openstreetmap.org/search"
                 params = {
                     'format': 'json',
@@ -167,7 +170,10 @@ class PlaceDataService:
 
     async def _get_foursquare_place_details(self, venue_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed place information from Foursquare"""
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            headers={"User-Agent": "Circles-App/1.0"}
+        ) as client:
             url = f"https://api.foursquare.com/v3/places/{venue_id}"
             headers = {
                 "Authorization": self.foursquare_api_key,
@@ -217,7 +223,10 @@ class PlaceDataService:
     async def _get_osm_place_details(self, place_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed place information from OpenStreetMap"""
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0),
+                headers={"User-Agent": "Circles-App/1.0"}
+            ) as client:
                 url = f"https://nominatim.openstreetmap.org/lookup"
                 params = {
                     'osm_ids': place_id,
