@@ -142,7 +142,7 @@ class EnhancedPlaceDataService:
         db: AsyncSession = None
     ) -> List[Dict[str, Any]]:
         """
-        Search places with automatic enrichment
+        Search places with automatic enrichment and Foursquare discovery fallback
 
         Args:
             lat: Latitude
@@ -153,7 +153,7 @@ class EnhancedPlaceDataService:
             db: Database session
 
         Returns:
-            List of places with enrichment applied
+            List of places with enrichment applied, including Foursquare-only places
         """
         if not db:
             raise ValueError("Database session required")
@@ -178,6 +178,12 @@ class EnhancedPlaceDataService:
                     place)
                 result.append(place_dict)
 
+            # If we have fewer results than requested and have a query, try Foursquare discovery
+            if len(result) < limit and query and self.foursquare_api_key and self.foursquare_api_key != "demo_key_for_testing":
+                logger.info(f"Found {len(result)} places in DB, trying Foursquare discovery for '{query}'")
+                foursquare_places = await self._discover_foursquare_places(lat, lon, radius, query, limit - len(result), db)
+                result.extend(foursquare_places)
+
             # Sort by ranking score
             result.sort(key=lambda x: self._calculate_ranking_score(
                 x, lat, lon, query), reverse=True)
@@ -189,7 +195,7 @@ class EnhancedPlaceDataService:
             await place_metrics_service.track_search_performance(query_time_ms, len(result))
 
             logger.info(
-                f"Found {len(result)} places, enriched {enriched_count} in {query_time_ms:.2f}ms")
+                f"Found {len(result)} places (DB: {len(places)}, FSQ: {len(result) - len(places)}), enriched {enriched_count} in {query_time_ms:.2f}ms")
             return result
 
         except Exception as e:
@@ -387,11 +393,11 @@ class EnhancedPlaceDataService:
         if not self.foursquare_api_key:
             return None
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             # Search for venues near the place
             url = "https://api.foursquare.com/v3/places/search"
             headers = {
-                "Authorization": f"fsq3_{self.foursquare_api_key}",
+                "Authorization": self.foursquare_api_key,
                 "Accept": "application/json"
             }
             params = {
@@ -401,8 +407,33 @@ class EnhancedPlaceDataService:
                 "limit": 10
             }
 
-            response = await client.get(url, headers=headers, params=params)
-            if response.status_code != 200:
+            try:
+                response = await client.get(url, headers=headers, params=params)
+
+                # Handle different status codes
+                if response.status_code == 200:
+                    pass  # Success
+                elif response.status_code == 401:
+                    logger.error(
+                        "Foursquare API authentication failed - check API key")
+                    return None
+                elif response.status_code == 429:
+                    logger.warning("Foursquare API rate limit exceeded")
+                    return None
+                elif response.status_code >= 500:
+                    logger.error(
+                        f"Foursquare API server error: {response.status_code}")
+                    return None
+                else:
+                    logger.error(
+                        f"Foursquare API request failed: {response.status_code}")
+                    return None
+
+            except httpx.TimeoutException:
+                logger.error("Foursquare API request timed out")
+                return None
+            except httpx.RequestError as e:
+                logger.error(f"Foursquare API request error: {e}")
                 return None
 
             data = response.json()
@@ -456,35 +487,250 @@ class EnhancedPlaceDataService:
 
     async def _get_foursquare_venue_details(self, fsq_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed venue information from Foursquare"""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             url = f"https://api.foursquare.com/v3/places/{fsq_id}"
             headers = {
-                "Authorization": f"fsq3_{self.foursquare_api_key}",
+                "Authorization": self.foursquare_api_key,
                 "Accept": "application/json"
             }
+            params = {
+                "fields": "fsq_id,name,tel,website,hours,rating,price,stats,categories,location"
+            }
 
-            response = await client.get(url, headers=headers)
-            if response.status_code != 200:
+            try:
+                response = await client.get(url, headers=headers, params=params)
+
+                # Handle different status codes
+                if response.status_code == 200:
+                    return response.json()
+                elif response.status_code == 401:
+                    logger.error(
+                        "Foursquare API authentication failed - check API key")
+                    return None
+                elif response.status_code == 429:
+                    logger.warning("Foursquare API rate limit exceeded")
+                    return None
+                elif response.status_code >= 500:
+                    logger.error(
+                        f"Foursquare API server error: {response.status_code}")
+                    return None
+                else:
+                    logger.error(
+                        f"Foursquare API request failed: {response.status_code}")
+                    return None
+
+            except httpx.TimeoutException:
+                logger.error("Foursquare API request timed out")
                 return None
-
-            return response.json()
+            except httpx.RequestError as e:
+                logger.error(f"Foursquare API request error: {e}")
+                return None
 
     async def _get_foursquare_venue_photos(self, fsq_id: str) -> List[Dict[str, Any]]:
         """Get venue photos from Foursquare"""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             url = f"https://api.foursquare.com/v3/places/{fsq_id}/photos"
             headers = {
-                "Authorization": f"fsq3_{self.foursquare_api_key}",
+                "Authorization": self.foursquare_api_key,
                 "Accept": "application/json"
             }
             params = {"limit": 5}
 
-            response = await client.get(url, headers=headers, params=params)
-            if response.status_code != 200:
+            try:
+                response = await client.get(url, headers=headers, params=params)
+
+                # Handle different status codes
+                if response.status_code == 200:
+                    data = response.json()
+                    # Foursquare photos endpoint returns a list directly, not a dict with 'results'
+                    if isinstance(data, list):
+                        return data
+                    elif isinstance(data, dict) and 'results' in data:
+                        return data.get('results', [])
+                    else:
+                        logger.warning(
+                            f"Unexpected photo response format: {type(data)}")
+                        return []
+                elif response.status_code == 401:
+                    logger.error(
+                        "Foursquare API authentication failed - check API key")
+                    return []
+                elif response.status_code == 429:
+                    logger.warning("Foursquare API rate limit exceeded")
+                    return []
+                elif response.status_code >= 500:
+                    logger.error(
+                        f"Foursquare API server error: {response.status_code}")
+                    return []
+                else:
+                    logger.error(
+                        f"Foursquare API request failed: {response.status_code}")
+                    return []
+
+            except httpx.TimeoutException:
+                logger.error("Foursquare API request timed out")
+                return []
+            except httpx.RequestError as e:
+                logger.error(f"Foursquare API request error: {e}")
                 return []
 
-            data = response.json()
-            return data.get('results', [])
+    async def _discover_foursquare_places(
+        self,
+        lat: float,
+        lon: float,
+        radius: int,
+        query: str,
+        limit: int,
+        db: AsyncSession
+    ) -> List[Dict[str, Any]]:
+        """Discover places from Foursquare that don't exist in our database"""
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                url = "https://api.foursquare.com/v3/places/search"
+                headers = {
+                    "Authorization": self.foursquare_api_key,
+                    "Accept": "application/json"
+                }
+                params = {
+                    "ll": f"{lat},{lon}",
+                    "radius": radius,
+                    "query": query,
+                    "limit": limit * 2,  # Get more to filter out existing places
+                    "fields": "fsq_id,name,tel,website,hours,rating,price,stats,categories,location"
+                }
+
+                try:
+                    response = await client.get(url, headers=headers, params=params)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        venues = data.get('results', [])
+                        
+                        # Filter out venues that already exist in our database
+                        new_venues = []
+                        for venue in venues:
+                            if not await self._venue_exists_in_db(venue, db):
+                                new_venues.append(venue)
+                        
+                        # Convert to place format
+                        result = []
+                        for venue in new_venues[:limit]:
+                            place_dict = self._foursquare_venue_to_place_dict(venue, lat, lon)
+                            result.append(place_dict)
+                        
+                        logger.info(f"Discovered {len(result)} new places from Foursquare")
+                        return result
+                    else:
+                        logger.warning(f"Foursquare discovery failed: {response.status_code}")
+                        return []
+                        
+                except httpx.TimeoutException:
+                    logger.error("Foursquare discovery request timed out")
+                    return []
+                except httpx.RequestError as e:
+                    logger.error(f"Foursquare discovery request error: {e}")
+                    return []
+                    
+        except Exception as e:
+            logger.error(f"Failed to discover Foursquare places: {e}")
+            return []
+
+    async def _venue_exists_in_db(self, venue: Dict[str, Any], db: AsyncSession) -> bool:
+        """Check if a Foursquare venue already exists in our database"""
+        try:
+            # Check by Foursquare ID first
+            if venue.get('fsq_id'):
+                existing = await db.execute(
+                    select(Place).where(Place.external_id == venue['fsq_id'])
+                )
+                if existing.scalar_one_or_none():
+                    return True
+            
+            # Check by name and location (within 150m)
+            venue_lat = venue.get('location', {}).get('latitude')
+            venue_lon = venue.get('location', {}).get('longitude')
+            venue_name = venue.get('name', '')
+            
+            if venue_lat and venue_lon and venue_name:
+                # Find places within 150m with similar names
+                places = await self._search_places_in_db(
+                    venue_lat, venue_lon, 150, venue_name, 10, db
+                )
+                
+                for place in places:
+                    name_similarity = SequenceMatcher(
+                        None, venue_name.lower(), place.name.lower()
+                    ).ratio()
+                    if name_similarity >= self.min_name_similarity:
+                        return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking if venue exists: {e}")
+            return False
+
+    def _foursquare_venue_to_place_dict(self, venue: Dict[str, Any], search_lat: float, search_lon: float) -> Dict[str, Any]:
+        """Convert Foursquare venue to place dictionary format"""
+        venue_lat = venue.get('location', {}).get('latitude', search_lat)
+        venue_lon = venue.get('location', {}).get('longitude', search_lon)
+        
+        # Calculate distance from search location
+        distance = haversine_distance(search_lat, search_lon, venue_lat, venue_lon)
+        
+        # Determine category
+        categories = venue.get('categories', [])
+        category_str = ','.join([cat.get('name', '') for cat in categories]) if categories else 'unknown'
+        
+        return {
+            'id': None,  # Not in database yet
+            'name': venue.get('name', 'Unknown'),
+            'latitude': venue_lat,
+            'longitude': venue_lon,
+            'categories': category_str,
+            'rating': venue.get('rating'),
+            'phone': venue.get('tel'),
+            'website': venue.get('website'),
+            'address': None,  # Foursquare doesn't provide detailed address
+            'city': None,
+            'external_id': venue.get('fsq_id'),
+            'data_source': 'foursquare',
+            'metadata': {
+                'foursquare_id': venue.get('fsq_id'),
+                'opening_hours': venue.get('hours', {}).get('display', ''),
+                'price_level': venue.get('price'),
+                'review_count': venue.get('stats', {}).get('total_ratings'),
+                'photo_count': venue.get('stats', {}).get('total_photos'),
+                'tip_count': venue.get('stats', {}).get('total_tips'),
+                'distance_from_search': distance,
+                'discovery_source': 'foursquare',
+                'needs_promotion': True  # Flag to indicate this needs to be saved to DB
+            },
+            'last_enriched_at': None,
+            'quality_score': self._calculate_quality_score_from_venue(venue)
+        }
+
+    def _calculate_quality_score_from_venue(self, venue: Dict[str, Any]) -> float:
+        """Calculate quality score for a Foursquare venue"""
+        score = 0.0
+        
+        # Phone (+0.3)
+        if venue.get('tel'):
+            score += 0.3
+        
+        # Hours (+0.3)
+        if venue.get('hours', {}).get('display'):
+            score += 0.3
+        
+        # Photos (+0.2)
+        if venue.get('stats', {}).get('total_photos', 0) > 0:
+            score += 0.2
+        
+        # Rating (+0.2)
+        if venue.get('rating'):
+            score += 0.2
+        
+        return min(score, 1.0)
 
     async def _update_place_with_foursquare_data(
         self,
@@ -505,7 +751,9 @@ class EnhancedPlaceDataService:
         metadata.update({
             'opening_hours': venue_details.get('hours', {}).get('display', ''),
             'price_level': venue_details.get('price'),
-            'review_count': venue_details.get('stats', {}).get('total_photos'),
+            'review_count': venue_details.get('stats', {}).get('total_ratings'),
+            'photo_count': venue_details.get('stats', {}).get('total_photos'),
+            'tip_count': venue_details.get('stats', {}).get('total_tips'),
             'foursquare_id': venue_details.get('fsq_id'),
             'match_score': match_info['match_score'],
             'match_distance': match_info['distance'],

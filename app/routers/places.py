@@ -2764,3 +2764,153 @@ async def get_enrichment_stats(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get enrichment stats: {str(e)}"
         )
+
+
+@router.get("/stats/seeding", response_model=dict)
+async def get_seeding_status(
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get seeding status and statistics.
+
+    **Authentication Required:** Yes (Admin only)
+
+    **Features:**
+    - Check if data has been seeded
+    - View seeding statistics
+    - Monitor data distribution
+
+    **Response:**
+    - Seeding status
+    - Total places count
+    - Source distribution
+    - Saudi cities coverage
+
+    **Use Cases:**
+    - System monitoring
+    - Data completeness check
+    - Deployment verification
+    """
+    try:
+        from ..services.auto_seeder_service import auto_seeder_service
+        return await auto_seeder_service.get_seeding_status(db)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get seeding status: {str(e)}"
+        )
+
+
+@router.post("/promote/foursquare", response_model=dict)
+async def promote_foursquare_place(
+    fsq_id: str,
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Promote a Foursquare-only place to the database.
+
+    **Authentication Required:** Yes (Admin only)
+
+    **Features:**
+    - Creates a new place record from Foursquare data
+    - Enriches the place with full details and photos
+    - Prevents duplicates by checking existing places
+
+    **Parameters:**
+    - fsq_id: Foursquare venue ID to promote
+
+    **Response:**
+    - Created place details
+    - Enrichment status
+    - Quality metrics
+
+    **Use Cases:**
+    - Promoting discovered Foursquare places
+    - Adding missing venues to database
+    - Manual place addition
+    """
+    try:
+        from ..services.place_data_service_v2 import enhanced_place_data_service
+        
+        # Check if place already exists
+        existing = await db.execute(
+            select(Place).where(Place.fsq_id == fsq_id)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Place already exists in database"
+            )
+        
+        # Get venue details from Foursquare
+        venue_details = await enhanced_place_data_service._get_foursquare_venue_details(fsq_id)
+        if not venue_details:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Foursquare venue not found"
+            )
+        
+        # Get venue photos
+        photos = await enhanced_place_data_service._get_foursquare_venue_photos(fsq_id)
+        
+        # Create new place
+        new_place = Place(
+            name=venue_details.get('name', 'Unknown'),
+            latitude=venue_details.get('location', {}).get('latitude'),
+            longitude=venue_details.get('location', {}).get('longitude'),
+            categories=','.join([cat.get('name', '') for cat in venue_details.get('categories', [])]),
+            rating=venue_details.get('rating'),
+            phone=venue_details.get('tel'),
+            website=venue_details.get('website'),
+            external_id=fsq_id,
+            data_source='foursquare',
+            fsq_id=fsq_id,
+            seed_source='fsq',
+            place_metadata={
+                'foursquare_id': fsq_id,
+                'opening_hours': venue_details.get('hours', {}).get('display', ''),
+                'price_level': venue_details.get('price'),
+                'review_count': venue_details.get('stats', {}).get('total_ratings'),
+                'photo_count': venue_details.get('stats', {}).get('total_photos'),
+                'tip_count': venue_details.get('stats', {}).get('total_tips'),
+                'photos': [
+                    {
+                        'url': photo.get('prefix') + 'original' + photo.get('suffix'),
+                        'width': photo.get('width'),
+                        'height': photo.get('height')
+                    }
+                    for photo in photos[:5]
+                ],
+                'promoted_at': datetime.now().isoformat(),
+                'promoted_by': current_user.id
+            },
+            last_enriched_at=datetime.now()
+        )
+        
+        db.add(new_place)
+        await db.commit()
+        await db.refresh(new_place)
+        
+        # Calculate quality score
+        quality_score = enhanced_place_data_service._calculate_quality_score(new_place)
+        
+        return {
+            "status": "success",
+            "place_id": new_place.id,
+            "name": new_place.name,
+            "fsq_id": fsq_id,
+            "quality_score": quality_score,
+            "photos_count": len(photos),
+            "promoted_at": datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to promote Foursquare place: {str(e)}"
+        )

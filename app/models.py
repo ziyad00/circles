@@ -78,6 +78,10 @@ class Place(Base):
     external_id = Column(String, nullable=True, index=True)
     # "google", "foursquare", "osm", "osm_overpass"
     data_source = Column(String, nullable=True)
+    # Foursquare-specific fields
+    fsq_id = Column(String, nullable=True, unique=True, index=True)
+    # "osm", "fsq" - where the place was originally discovered
+    seed_source = Column(String, nullable=True, default="osm")
     website = Column(String, nullable=True)
     phone = Column(String, nullable=True)
     place_metadata = Column(JSON, nullable=True)  # Store additional data as JSON
