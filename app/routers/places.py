@@ -411,11 +411,10 @@ async def advanced_search_places(
             stmt = stmt.where(distance_filter)
             count_stmt = count_stmt.where(distance_filter)
         else:
-            # Fallback to Haversine formula
-            from ..utils import haversine_distance
-            # This is a simplified approach - in production you'd want to optimize this
-            # For now, we'll filter after the query
-            pass
+            # Fallback to Haversine formula - distance filtering will be applied after query
+            # This ensures distance filtering works even without PostGIS
+            logger.info(
+                "Using fallback distance filtering (PostGIS not available)")
 
     # Sorting
     if filters.sort_by:
