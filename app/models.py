@@ -84,7 +84,8 @@ class Place(Base):
     seed_source = Column(String, nullable=True, default="osm")
     website = Column(String, nullable=True)
     phone = Column(String, nullable=True)
-    place_metadata = Column(JSON, nullable=True)  # Store additional data as JSON
+    # Store additional data as JSON
+    place_metadata = Column(JSON, nullable=True)
     last_enriched_at = Column(DateTime(timezone=True),
                               nullable=True)  # When last enriched
 
@@ -273,6 +274,12 @@ class DMMessageLike(Base):
     user_id = Column(Integer, ForeignKey("users.id"),
                      nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Unique constraint to prevent duplicate likes
+    __table_args__ = (
+        UniqueConstraint('message_id', 'user_id',
+                         name='uq_dm_message_like_user'),
+    )
 
 
 class DMParticipantState(Base):
