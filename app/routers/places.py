@@ -2528,12 +2528,13 @@ async def seed_places_from_osm(
     - Geographic area coverage
     """
     try:
-        start_time = datetime.now()
+        start_time = datetime.now(timezone.utc)
         bbox = (min_lat, min_lon, max_lat, max_lon)
 
         seeded_count = await enhanced_place_data_service.seed_from_osm_overpass(db, bbox)
 
-        processing_time = (datetime.now() - start_time).total_seconds()
+        processing_time = (datetime.now(timezone.utc) -
+                           start_time).total_seconds()
 
         return {
             "success": True,
@@ -2892,10 +2893,10 @@ async def promote_foursquare_place(
                     }
                     for photo in photos[:5]
                 ],
-                'promoted_at': datetime.now().isoformat(),
+                'promoted_at': datetime.now(timezone.utc).isoformat(),
                 'promoted_by': current_user.id
             },
-            last_enriched_at=datetime.now()
+            last_enriched_at=datetime.now(timezone.utc)
         )
 
         db.add(new_place)
@@ -2913,7 +2914,7 @@ async def promote_foursquare_place(
             "fsq_id": fsq_id,
             "quality_score": quality_score,
             "photos_count": len(photos),
-            "promoted_at": datetime.now().isoformat()
+            "promoted_at": datetime.now(timezone.utc).isoformat()
         }
 
     except HTTPException:

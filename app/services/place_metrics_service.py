@@ -151,7 +151,7 @@ class PlaceMetricsService:
                 "enrichment_ttl_cold": 60,
                 "max_enrichment_distance": 150,
                 "min_name_similarity": 0.65,
-                "metrics_timestamp": datetime.now().isoformat()
+                "metrics_timestamp": datetime.now(timezone.utc).isoformat()
             }
 
         except Exception as e:
@@ -183,7 +183,7 @@ class PlaceMetricsService:
         # Recently enriched (+0.2)
         if place.last_enriched_at:
             days_since_enrichment = (
-                datetime.now() - place.last_enriched_at).days
+                datetime.now(timezone.utc) - place.last_enriched_at).days
             if days_since_enrichment < 14:
                 score += 0.2
 
@@ -200,7 +200,7 @@ class PlaceMetricsService:
             "enrichment_success_rate": self._get_enrichment_success_rate(),
             "average_search_time_ms": self._get_average_search_time(),
             "total_metrics_recorded": len(self.metrics['quality_scores']),
-            "last_updated": datetime.now().isoformat()
+            "last_updated": datetime.now(timezone.utc).isoformat()
         }
 
     def _get_enrichment_success_rate(self) -> float:

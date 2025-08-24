@@ -158,7 +158,7 @@ class EnhancedPlaceDataService:
         if not db:
             raise ValueError("Database session required")
 
-        start_time = datetime.now()
+        start_time = datetime.now(timezone.utc)
 
         try:
             # Search places in database
@@ -190,7 +190,7 @@ class EnhancedPlaceDataService:
                 x, lat, lon, query), reverse=True)
 
             # Track performance metrics
-            query_time_ms = (datetime.now() -
+            query_time_ms = (datetime.now(timezone.utc) -
                              start_time).total_seconds() * 1000
             from ..services.place_metrics_service import place_metrics_service
             await place_metrics_service.track_search_performance(query_time_ms, len(result))
@@ -390,7 +390,7 @@ class EnhancedPlaceDataService:
             website=place_data.get('website'),
             external_id=place_data['external_id'],
             data_source='osm_overpass',
-            metadata={
+            place_metadata={
                 'opening_hours': place_data.get('opening_hours'),
                 'osm_tags': place_data.get('osm_tags', {})
             }
@@ -408,7 +408,7 @@ class EnhancedPlaceDataService:
         # Check TTL based on place activity
         ttl_days = self.enrichment_ttl_hot if self._is_hot_place(
             place) else self.enrichment_ttl_cold
-        cutoff_date = datetime.now() - timedelta(days=ttl_days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=ttl_days)
 
         return place.last_enriched_at < cutoff_date
 
@@ -803,12 +803,12 @@ class EnhancedPlaceDataService:
                 }
                 for photo in photos[:5]
             ],
-            'last_enriched_at': datetime.now().isoformat(),
+            'last_enriched_at': datetime.now(timezone.utc).isoformat(),
             'enrichment_source': 'foursquare'
         })
 
         place.place_metadata = metadata
-        place.last_enriched_at = datetime.now()
+        place.last_enriched_at = datetime.now(timezone.utc)
 
     def _calculate_quality_score(self, place: Place) -> float:
         """Calculate quality score for place"""
@@ -829,7 +829,7 @@ class EnhancedPlaceDataService:
         # Recently enriched (+0.2)
         if place.last_enriched_at:
             days_since_enrichment = (
-                datetime.now() - place.last_enriched_at).days
+                datetime.now(timezone.utc) - place.last_enriched_at).days
             if days_since_enrichment < 14:
                 score += 0.2
 

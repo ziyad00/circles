@@ -502,7 +502,6 @@ class UserUpdate(BaseModel):
 
 class PublicUserResponse(BaseModel):
     id: int
-    email: EmailStr
     name: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None

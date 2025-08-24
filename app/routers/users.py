@@ -23,7 +23,11 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 
 @router.post("/search", response_model=list[PublicUserResponse])
-async def search_users(filters: UserSearchFilters, db: AsyncSession = Depends(get_db)):
+async def search_users(
+    filters: UserSearchFilters,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     stmt = select(User)
     if filters.q:
         like = f"%{filters.q}%"
@@ -112,7 +116,7 @@ async def upload_avatar(
 
     # Validate image content
     try:
-        _validate_image_or_raise(content)
+        _validate_image_or_raise(file.filename or "avatar.jpg", content)
     except Exception as e:
         raise HTTPException(
             status_code=400,
@@ -125,8 +129,12 @@ async def upload_avatar(
         ext = ".jpg"
     filename = f"{uuid4().hex}{ext}"
 
-    # Store avatar
-    if hasattr(StorageService, "_save_checkin_local"):
+    # Store avatar using configured storage backend
+    from ..config import settings
+    if settings.storage_backend == "s3":
+        # S3 storage
+        url_path = await StorageService._save_checkin_s3(current_user.id, filename, content)
+    else:
         # Local storage
         media_root = os.path.abspath(os.path.join(os.getcwd(), "media"))
         target_dir = os.path.join(media_root, "avatars", str(current_user.id))
@@ -139,9 +147,6 @@ async def upload_avatar(
             await f.write(content)
 
         url_path = f"/media/avatars/{current_user.id}/{filename}"
-    else:
-        # S3 storage
-        url_path = await StorageService._save_checkin_s3(current_user.id, filename, content)
 
     # Update user avatar
     current_user.avatar_url = url_path

@@ -29,6 +29,18 @@ class ConnectionManager:
         await websocket.accept()
         now = datetime.now(timezone.utc)
 
+        # Clean up any existing connection for this user in this thread
+        if thread_id in self.active and user_id in self.active[thread_id]:
+            old_websocket, _ = self.active[thread_id][user_id]
+            try:
+                await old_websocket.close(code=1000, reason="New connection")
+            except Exception:
+                pass  # Old connection might already be closed
+            # Remove from user connections
+            user_conns = self.user_connections.get(user_id)
+            if user_conns:
+                user_conns.discard((thread_id, old_websocket))
+
         # Add to thread connections
         if thread_id not in self.active:
             self.active[thread_id] = {}
@@ -60,14 +72,28 @@ class ConnectionManager:
     async def broadcast(self, thread_id: int, sender_id: int, payload: dict) -> None:
         """Broadcast message to all participants in a thread except sender"""
         thread_connections = self.active.get(thread_id, {})
+        tasks = []
+
         for uid, (ws, _) in list(thread_connections.items()):
             if uid == sender_id:
                 continue
-            try:
-                await ws.send_json(payload)
-            except Exception:
-                # Remove stale connection
-                self.disconnect(thread_id, uid, ws)
+            tasks.append(self._send_with_timeout(ws, payload, thread_id, uid))
+
+        # Send to all clients concurrently with timeout
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _send_with_timeout(self, websocket: WebSocket, payload: dict, thread_id: int, user_id: int) -> None:
+        """Send message with timeout to prevent blocking"""
+        try:
+            await asyncio.wait_for(websocket.send_json(payload), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"WebSocket send timeout for user {user_id} in thread {thread_id}")
+            self.disconnect(thread_id, user_id, websocket)
+        except Exception:
+            # Remove stale connection
+            self.disconnect(thread_id, user_id, websocket)
 
     async def send_to_user(self, user_id: int, payload: dict) -> None:
         """Send message to all connections of a specific user"""
@@ -108,11 +134,14 @@ class ConnectionManager:
         }
         # Send to all participants including sender (for echo)
         thread_connections = self.active.get(thread_id, {})
+        tasks = []
+
         for uid, (ws, _) in list(thread_connections.items()):
-            try:
-                await ws.send_json(payload)
-            except Exception:
-                self.disconnect(thread_id, uid, ws)
+            tasks.append(self._send_with_timeout(ws, payload, thread_id, uid))
+
+        # Send to all clients concurrently with timeout
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def broadcast_reaction(self, thread_id: int, message_id: int, user_id: int, reaction: str) -> None:
         """Broadcast message reaction"""
