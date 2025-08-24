@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # Database settings
     database_url: str = Field(
-        default="postgresql+asyncpg://postgres:password@127.0.0.1:5432/circles",
+        default="postgresql+asyncpg://postgres:password@postgres:5432/circles",
         env="DATABASE_URL",
     )
     # OTP settings
