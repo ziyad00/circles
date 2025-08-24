@@ -148,8 +148,8 @@ class WebSocketService:
     @staticmethod
     def get_thread_participants(thread_id: int) -> list:
         """Get list of online participants in a thread"""
-        thread_conns = manager.active.get(thread_id, set())
-        return [uid for uid, _, _ in thread_conns]
+        thread_conns = manager.active.get(thread_id, {})
+        return list(thread_conns.keys())
     
     @staticmethod
     async def send_bulk_notification(user_ids: list[int], notification_type: str, data: Dict[str, Any]) -> None:

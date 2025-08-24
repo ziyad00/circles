@@ -115,10 +115,10 @@ async def send_dm_request(
             detail=f"Rate limit exceeded. Maximum {DM_REQUEST_LIMIT} DM requests per minute."
         )
 
-    if payload.recipient_email == current_user.email:
+    if payload.recipient_email.lower() == current_user.email.lower():
         raise HTTPException(status_code=400, detail="Cannot message yourself")
-    # find recipient
-    res = await db.execute(select(User).where(User.email == payload.recipient_email))
+    # find recipient (case-insensitive)
+    res = await db.execute(select(User).where(func.lower(User.email) == payload.recipient_email.lower()))
     recipient = res.scalars().first()
     if not recipient:
         raise HTTPException(status_code=404, detail="Recipient not found")

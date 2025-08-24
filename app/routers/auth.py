@@ -56,20 +56,26 @@ async def request_otp(
         ip = http_request.client.host if http_request and http_request.client else "unknown"
         key = (request.email.lower(), ip)
         now = datetime.now(timezone.utc)
-        window_start = now - timedelta(minutes=1)
+
+        # Get all entries for this key
         entries = _otp_request_log.get(key, [])
-        # keep only last minute
-        entries = [ts for ts in entries if ts >= window_start]
-        if len(entries) >= settings.otp_requests_per_minute:
+
+        # Check per-minute limit
+        window_start = now - timedelta(minutes=1)
+        recent_entries = [ts for ts in entries if ts >= window_start]
+        if len(recent_entries) >= settings.otp_requests_per_minute:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Too many OTP requests. Please try again later.")
-        # enforce simple burst cap over 5 minutes
+
+        # Check burst limit over 5 minutes (use full entries list)
         burst_window_start = now - timedelta(minutes=5)
         burst_entries = [ts for ts in entries if ts >= burst_window_start]
         if len(burst_entries) >= settings.otp_requests_burst:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Too many OTP requests. Please slow down.")
-        # record request
+
+        # Clean up old entries (older than 5 minutes) and record request
+        entries = [ts for ts in entries if ts >= burst_window_start]
         entries.append(now)
         _otp_request_log[key] = entries
 
@@ -134,17 +140,26 @@ async def verify_otp(
         ip = http_request.client.host if http_request and http_request.client else "unknown"
         key = (request.email.lower(), ip)
         now = datetime.now(timezone.utc)
-        window_start = now - timedelta(minutes=1)
+
+        # Get all entries for this key
         entries = _otp_verify_log.get(key, [])
-        entries = [ts for ts in entries if ts >= window_start]
-        if len(entries) >= settings.otp_requests_per_minute:
+
+        # Check per-minute limit
+        window_start = now - timedelta(minutes=1)
+        recent_entries = [ts for ts in entries if ts >= window_start]
+        if len(recent_entries) >= settings.otp_requests_per_minute:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Too many OTP verifications. Please try again later.")
+
+        # Check burst limit over 5 minutes (use full entries list)
         burst_window_start = now - timedelta(minutes=5)
         burst_entries = [ts for ts in entries if ts >= burst_window_start]
         if len(burst_entries) >= settings.otp_requests_burst:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Too many OTP verifications. Please slow down.")
+
+        # Clean up old entries (older than 5 minutes) and record request
+        entries = [ts for ts in entries if ts >= burst_window_start]
         entries.append(now)
         _otp_verify_log[key] = entries
 

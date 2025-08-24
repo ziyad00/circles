@@ -22,6 +22,8 @@ class ConnectionManager:
         self.user_connections: Dict[int, Set[Tuple[int, WebSocket]]] = {}
         # Background task for cleanup
         self.cleanup_task: Optional[asyncio.Task] = None
+        # Flag to stop cleanup task
+        self._shutdown = False
 
     async def connect(self, thread_id: int, user_id: int, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -135,7 +137,7 @@ class ConnectionManager:
 
     async def _cleanup_stale_connections(self) -> None:
         """Background task to clean up stale connections"""
-        while True:
+        while not self._shutdown:
             try:
                 await asyncio.sleep(30)  # Check every 30 seconds
                 now = datetime.now(timezone.utc)
@@ -158,11 +160,25 @@ class ConnectionManager:
                 # Continue cleanup even if there are errors
                 pass
 
+        logger.info("WebSocket cleanup task stopped")
+
+    async def shutdown(self) -> None:
+        """Shutdown the connection manager and stop cleanup task"""
+        self._shutdown = True
+        if self.cleanup_task and not self.cleanup_task.done():
+            self.cleanup_task.cancel()
+            try:
+                await self.cleanup_task
+            except asyncio.CancelledError:
+                pass
+        logger.info("Connection manager shutdown complete")
+
     def update_ping(self, thread_id: int, user_id: int, websocket: WebSocket) -> None:
         """Update last ping time for a connection"""
         if thread_id in self.active and user_id in self.active[thread_id]:
             # Update the timestamp for the existing connection
-            self.active[thread_id][user_id] = (websocket, datetime.now(timezone.utc))
+            self.active[thread_id][user_id] = (
+                websocket, datetime.now(timezone.utc))
 
 
 manager = ConnectionManager()
@@ -243,8 +259,8 @@ async def dm_ws(websocket: WebSocket, thread_id: int, db: AsyncSession = Depends
         other_user_info = await _get_user_info(db, other_user_id)
 
         # Check if other user is online
-        other_online = any(uid == other_user_id for uid, _,
-                           _ in manager.active.get(thread_id, set()))
+        thread_connections = manager.active.get(thread_id, {})
+        other_online = other_user_id in thread_connections
 
         await websocket.send_json({
             "type": "thread_info",

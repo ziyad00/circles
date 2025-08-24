@@ -88,13 +88,8 @@ async def upload_avatar(
             detail="File must be an image (JPEG, PNG, WebP)"
         )
 
-    # Check file size (max 5MB for avatars)
+    # Check file size (max 5MB for avatars) - will be validated during streaming
     max_size = 5 * 1024 * 1024  # 5MB
-    if file.size and file.size > max_size:
-        raise HTTPException(
-            status_code=400,
-            detail="Avatar file size must be less than 5MB"
-        )
 
     # Read file in chunks to avoid memory issues
     content = b""

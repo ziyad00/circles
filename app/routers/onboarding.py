@@ -125,8 +125,7 @@ async def request_phone_otp(
     # In production, send SMS here
     # Only return OTP in response for development/debug mode
     response_data = {
-        "message": "OTP sent successfully",
-        "is_new_user": user is None
+        "message": "OTP sent successfully"
     }
 
     if settings.debug:
