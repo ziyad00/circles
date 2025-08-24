@@ -2834,7 +2834,7 @@ async def promote_foursquare_place(
     """
     try:
         from ..services.place_data_service_v2 import enhanced_place_data_service
-        
+
         # Check if place already exists
         existing = await db.execute(
             select(Place).where(Place.fsq_id == fsq_id)
@@ -2844,7 +2844,7 @@ async def promote_foursquare_place(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Place already exists in database"
             )
-        
+
         # Get venue details from Foursquare
         venue_details = await enhanced_place_data_service._get_foursquare_venue_details(fsq_id)
         if not venue_details:
@@ -2852,16 +2852,17 @@ async def promote_foursquare_place(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Foursquare venue not found"
             )
-        
+
         # Get venue photos
         photos = await enhanced_place_data_service._get_foursquare_venue_photos(fsq_id)
-        
+
         # Create new place
         new_place = Place(
             name=venue_details.get('name', 'Unknown'),
             latitude=venue_details.get('location', {}).get('latitude'),
             longitude=venue_details.get('location', {}).get('longitude'),
-            categories=','.join([cat.get('name', '') for cat in venue_details.get('categories', [])]),
+            categories=','.join([cat.get('name', '')
+                                for cat in venue_details.get('categories', [])]),
             rating=venue_details.get('rating'),
             phone=venue_details.get('tel'),
             website=venue_details.get('website'),
@@ -2889,14 +2890,15 @@ async def promote_foursquare_place(
             },
             last_enriched_at=datetime.now()
         )
-        
+
         db.add(new_place)
         await db.commit()
         await db.refresh(new_place)
-        
+
         # Calculate quality score
-        quality_score = enhanced_place_data_service._calculate_quality_score(new_place)
-        
+        quality_score = enhanced_place_data_service._calculate_quality_score(
+            new_place)
+
         return {
             "status": "success",
             "place_id": new_place.id,
