@@ -41,7 +41,7 @@ class PlaceMetricsService:
         self.metrics['quality_scores'].append({
             'place_id': place_id,
             'score': quality_score,
-            'timestamp': datetime.now()
+            'timestamp': datetime.now(timezone.utc)
         })
 
     async def track_search_performance(self, query_time_ms: float, results_count: int):
@@ -49,7 +49,7 @@ class PlaceMetricsService:
         self.metrics['search_performance'].append({
             'query_time_ms': query_time_ms,
             'results_count': results_count,
-            'timestamp': datetime.now()
+            'timestamp': datetime.now(timezone.utc)
         })
 
     async def get_enrichment_stats(self, db: AsyncSession) -> Dict:
@@ -86,7 +86,7 @@ class PlaceMetricsService:
             source_distribution = dict(source_result.all())
 
             # TTL compliance
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             ttl_compliant = 0
             for place in places:
                 if place.last_enriched_at:

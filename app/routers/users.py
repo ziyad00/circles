@@ -79,24 +79,76 @@ async def upload_avatar(
 ):
     import os
     from uuid import uuid4
+    from ..utils import _validate_image_or_raise
+
+    # Validate file type and size
+    if not file.content_type or not file.content_type.startswith('image/'):
+        raise HTTPException(
+            status_code=400,
+            detail="File must be an image (JPEG, PNG, WebP)"
+        )
+
+    # Check file size (max 5MB for avatars)
+    max_size = 5 * 1024 * 1024  # 5MB
+    if file.size and file.size > max_size:
+        raise HTTPException(
+            status_code=400,
+            detail="Avatar file size must be less than 5MB"
+        )
+
+    # Read file in chunks to avoid memory issues
+    content = b""
+    chunk_size = 64 * 1024  # 64KB chunks
+    total_size = 0
+
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        content += chunk
+        total_size += len(chunk)
+
+        # Check size during streaming
+        if total_size > max_size:
+            raise HTTPException(
+                status_code=400,
+                detail="Avatar file size must be less than 5MB"
+            )
+
+    # Validate image content
+    try:
+        _validate_image_or_raise(content)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid image file: {str(e)}"
+        )
+
+    # Generate filename
     _, ext = os.path.splitext(file.filename or "")
     if not ext:
         ext = ".jpg"
     filename = f"{uuid4().hex}{ext}"
-    content = await file.read()
-    # reuse check-in storage pattern for avatars
-    # store under media/avatars/{user_id}/
+
+    # Store avatar
     if hasattr(StorageService, "_save_checkin_local"):
-        # quick local path
+        # Local storage
         media_root = os.path.abspath(os.path.join(os.getcwd(), "media"))
         target_dir = os.path.join(media_root, "avatars", str(current_user.id))
         os.makedirs(target_dir, exist_ok=True)
         target_path = os.path.join(target_dir, filename)
-        with open(target_path, "wb") as f:
-            f.write(content)
+
+        # Write file asynchronously
+        import aiofiles
+        async with aiofiles.open(target_path, "wb") as f:
+            await f.write(content)
+
         url_path = f"/media/avatars/{current_user.id}/{filename}"
     else:
+        # S3 storage
         url_path = await StorageService._save_checkin_s3(current_user.id, filename, content)
+
+    # Update user avatar
     current_user.avatar_url = url_path
     await db.commit()
     await db.refresh(current_user)

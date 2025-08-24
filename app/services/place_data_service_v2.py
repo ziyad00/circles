@@ -228,7 +228,10 @@ class EnhancedPlaceDataService:
     async def _fetch_overpass_data(self, query: str) -> List[Dict[str, Any]]:
         """Fetch data from Overpass API"""
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0),
+                headers={"User-Agent": "Circles-App/1.0"}
+            ) as client:
                 response = await client.post(
                     "https://overpass-api.de/api/interpreter",
                     data=query,
@@ -612,7 +615,10 @@ class EnhancedPlaceDataService:
     ) -> List[Dict[str, Any]]:
         """Discover places from Foursquare that don't exist in our database"""
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0),
+                headers={"User-Agent": "Circles-App/1.0"}
+            ) as client:
                 url = "https://api.foursquare.com/v3/places/search"
                 headers = {
                     "Authorization": self.foursquare_api_key,
