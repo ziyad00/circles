@@ -180,7 +180,8 @@ class EnhancedPlaceDataService:
 
             # If we have fewer results than requested and have a query, try Foursquare discovery
             if len(result) < limit and query and self.foursquare_api_key and self.foursquare_api_key != "demo_key_for_testing":
-                logger.info(f"Found {len(result)} places in DB, trying Foursquare discovery for '{query}'")
+                logger.info(
+                    f"Found {len(result)} places in DB, trying Foursquare discovery for '{query}'")
                 foursquare_places = await self._discover_foursquare_places(lat, lon, radius, query, limit - len(result), db)
                 result.extend(foursquare_places)
 
@@ -601,36 +602,39 @@ class EnhancedPlaceDataService:
 
                 try:
                     response = await client.get(url, headers=headers, params=params)
-                    
+
                     if response.status_code == 200:
                         data = response.json()
                         venues = data.get('results', [])
-                        
+
                         # Filter out venues that already exist in our database
                         new_venues = []
                         for venue in venues:
                             if not await self._venue_exists_in_db(venue, db):
                                 new_venues.append(venue)
-                        
+
                         # Convert to place format
                         result = []
                         for venue in new_venues[:limit]:
-                            place_dict = self._foursquare_venue_to_place_dict(venue, lat, lon)
+                            place_dict = self._foursquare_venue_to_place_dict(
+                                venue, lat, lon)
                             result.append(place_dict)
-                        
-                        logger.info(f"Discovered {len(result)} new places from Foursquare")
+
+                        logger.info(
+                            f"Discovered {len(result)} new places from Foursquare")
                         return result
                     else:
-                        logger.warning(f"Foursquare discovery failed: {response.status_code}")
+                        logger.warning(
+                            f"Foursquare discovery failed: {response.status_code}")
                         return []
-                        
+
                 except httpx.TimeoutException:
                     logger.error("Foursquare discovery request timed out")
                     return []
                 except httpx.RequestError as e:
                     logger.error(f"Foursquare discovery request error: {e}")
                     return []
-                    
+
         except Exception as e:
             logger.error(f"Failed to discover Foursquare places: {e}")
             return []
@@ -645,27 +649,27 @@ class EnhancedPlaceDataService:
                 )
                 if existing.scalar_one_or_none():
                     return True
-            
+
             # Check by name and location (within 150m)
             venue_lat = venue.get('location', {}).get('latitude')
             venue_lon = venue.get('location', {}).get('longitude')
             venue_name = venue.get('name', '')
-            
+
             if venue_lat and venue_lon and venue_name:
                 # Find places within 150m with similar names
                 places = await self._search_places_in_db(
                     venue_lat, venue_lon, 150, venue_name, 10, db
                 )
-                
+
                 for place in places:
                     name_similarity = SequenceMatcher(
                         None, venue_name.lower(), place.name.lower()
                     ).ratio()
                     if name_similarity >= self.min_name_similarity:
                         return True
-            
+
             return False
-            
+
         except Exception as e:
             logger.error(f"Error checking if venue exists: {e}")
             return False
@@ -674,14 +678,16 @@ class EnhancedPlaceDataService:
         """Convert Foursquare venue to place dictionary format"""
         venue_lat = venue.get('location', {}).get('latitude', search_lat)
         venue_lon = venue.get('location', {}).get('longitude', search_lon)
-        
+
         # Calculate distance from search location
-        distance = haversine_distance(search_lat, search_lon, venue_lat, venue_lon)
-        
+        distance = haversine_distance(
+            search_lat, search_lon, venue_lat, venue_lon)
+
         # Determine category
         categories = venue.get('categories', [])
-        category_str = ','.join([cat.get('name', '') for cat in categories]) if categories else 'unknown'
-        
+        category_str = ','.join([cat.get('name', '')
+                                for cat in categories]) if categories else 'unknown'
+
         return {
             'id': None,  # Not in database yet
             'name': venue.get('name', 'Unknown'),
@@ -713,23 +719,23 @@ class EnhancedPlaceDataService:
     def _calculate_quality_score_from_venue(self, venue: Dict[str, Any]) -> float:
         """Calculate quality score for a Foursquare venue"""
         score = 0.0
-        
+
         # Phone (+0.3)
         if venue.get('tel'):
             score += 0.3
-        
+
         # Hours (+0.3)
         if venue.get('hours', {}).get('display'):
             score += 0.3
-        
+
         # Photos (+0.2)
         if venue.get('stats', {}).get('total_photos', 0) > 0:
             score += 0.2
-        
+
         # Rating (+0.2)
         if venue.get('rating'):
             score += 0.2
-        
+
         return min(score, 1.0)
 
     async def _update_place_with_foursquare_data(
