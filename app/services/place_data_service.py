@@ -126,7 +126,8 @@ class PlaceDataService:
                     'limit': 20,
                     'lat': lat,
                     'lon': lon,
-                    'radius': radius // 1000,  # Convert to km
+                    # Convert to km, minimum 1km
+                    'radius': max(1, radius / 1000),
                     'addressdetails': 1
                 }
 

@@ -133,6 +133,28 @@ async def send_dm_request(
             raise HTTPException(
                 status_code=403, detail="Recipient accepts DMs from followers only")
 
+    # Check if recipient has blocked the sender
+    from ..models import DMParticipantState
+    block_check = await db.execute(
+        select(DMParticipantState).where(
+            DMParticipantState.user_id == recipient.id,
+            DMParticipantState.thread_id.in_(
+                select(DMThread.id).where(
+                    or_(
+                        and_(DMThread.user_a_id == current_user.id,
+                             DMThread.user_b_id == recipient.id),
+                        and_(DMThread.user_a_id == recipient.id,
+                             DMThread.user_b_id == current_user.id)
+                    )
+                )
+            ),
+            DMParticipantState.blocked == True
+        )
+    )
+    if block_check.scalar_one_or_none():
+        raise HTTPException(
+            status_code=403, detail="Cannot send DM request to user who has blocked you")
+
     a, b = _normalize_pair(current_user.id, recipient.id)
     # if sender follows recipient and recipient allows followers DMs, auto-accept; else pending
     res_follow = await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == recipient.id))
