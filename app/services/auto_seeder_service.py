@@ -5,9 +5,9 @@ Automatically seeds Saudi cities data when server starts (if not already seeded)
 
 import asyncio
 import logging
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 
 from ..models import Place
 from ..services.place_data_service_v2 import enhanced_place_data_service
@@ -320,8 +320,8 @@ class AutoSeederService:
                 # Extract bounding box
                 min_lat, min_lon, max_lat, max_lon = city['bbox']
 
-                # Seed from OSM Overpass
-                places_added = await enhanced_place_data_service.seed_from_osm_overpass(
+                # Seed from OSM Overpass (without transaction management)
+                places_added = await self._seed_city_from_osm(
                     db, (min_lat, min_lon, max_lat, max_lon)
                 )
 
@@ -353,6 +353,79 @@ class AutoSeederService:
             "cities_seeded": cities_seeded,
             "status": "completed"
         }
+
+    async def _seed_city_from_osm(self, db: AsyncSession, bbox: Tuple[float, float, float, float]) -> int:
+        """Seed a single city from OSM without transaction management"""
+        try:
+            # Build Overpass query
+            query = enhanced_place_data_service._build_overpass_query(bbox)
+
+            # Fetch data from Overpass
+            places_data = await enhanced_place_data_service._fetch_overpass_data(query)
+
+            # Process and save to database
+            seeded_count = 0
+            for place_data in places_data:
+                try:
+                    # Create place without flush to avoid transaction issues
+                    place = await self._create_place_safe(db, place_data)
+                    if place:
+                        seeded_count += 1
+                        # Commit after each successful place creation
+                        await db.commit()
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to create place from OSM data: {e}")
+                    # Rollback on error and continue
+                    await db.rollback()
+
+            logger.info(f"Seeded {seeded_count} places from OSM Overpass")
+            return seeded_count
+
+        except Exception as e:
+            logger.error(f"Failed to seed from OSM Overpass: {e}")
+            raise
+
+    async def _create_place_safe(self, db: AsyncSession, place_data: Dict[str, Any]) -> Optional[Place]:
+        """Create place from OSM data with safe transaction handling"""
+        # Validate place data
+        if not enhanced_place_data_service._validate_place_data(place_data):
+            logger.warning(
+                f"Invalid place data: {place_data.get('name', 'Unknown')}")
+            return None
+
+        # Check if place already exists
+        existing = await db.execute(
+            select(Place).where(
+                and_(
+                    Place.external_id == place_data['external_id'],
+                    Place.data_source == 'osm_overpass'
+                )
+            )
+        )
+        if existing.scalar_one_or_none():
+            return None
+
+        # Create new place
+        place = Place(
+            name=place_data['name'],
+            latitude=place_data['latitude'],
+            longitude=place_data['longitude'],
+            categories=place_data['categories'],
+            address=place_data.get('address'),
+            city=place_data.get('city'),
+            phone=place_data.get('phone'),
+            website=place_data.get('website'),
+            external_id=place_data['external_id'],
+            data_source='osm_overpass',
+            place_metadata={
+                'opening_hours': place_data.get('opening_hours'),
+                'osm_tags': place_data.get('osm_tags', {})
+            }
+        )
+
+        db.add(place)
+        return place
 
     async def auto_seed_if_needed(self, db: AsyncSession) -> dict:
         """Automatically seed data if needed"""
