@@ -79,6 +79,41 @@ class Settings(BaseSettings):
         env="OVERPASS_ENDPOINTS",
     )
 
+    # DM limits
+    dm_requests_per_min: int = Field(default=5, env="DM_REQUESTS_PER_MIN")
+    dm_messages_per_min: int = Field(default=20, env="DM_MESSAGES_PER_MIN")
+
+    # Timeouts
+    http_timeout_seconds: int = Field(default=30, env="HTTP_TIMEOUT_SECONDS")
+    overpass_timeout_seconds: int = Field(
+        default=25, env="OVERPASS_TIMEOUT_SECONDS")
+    ws_send_timeout_seconds: int = Field(
+        default=5, env="WS_SEND_TIMEOUT_SECONDS")
+
+    # Enrichment
+    enrich_ttl_hot_days: int = Field(default=14, env="ENRICH_TTL_HOT_DAYS")
+    enrich_ttl_cold_days: int = Field(default=60, env="ENRICH_TTL_COLD_DAYS")
+    enrich_max_distance_m: int = Field(
+        default=150, env="ENRICH_MAX_DISTANCE_M")
+    enrich_min_name_similarity: float = Field(
+        default=0.65, env="ENRICH_MIN_NAME_SIM")
+
+    # Auto-seeding
+    autoseed_enabled: bool = Field(default=True, env="AUTOSEED_ENABLED")
+    autoseed_min_osm_count: int = Field(
+        default=500, env="AUTOSEED_MIN_OSM_COUNT")
+
+    # Upload limits (MB)
+    avatar_max_mb: int = Field(default=5, env="AVATAR_MAX_MB")
+    photo_max_mb: int = Field(default=10, env="PHOTO_MAX_MB")
+
+    # External suggestions radius
+    external_suggestions_radius_m: int = Field(
+        default=10000, env="EXTERNAL_SUGGESTIONS_RADIUS_M")
+
+    # Logging
+    log_sample_rate: float = Field(default=0.1, env="LOG_SAMPLE_RATE")
+
     class Config:
         env_file = ".env"
         env_prefix = "APP_"

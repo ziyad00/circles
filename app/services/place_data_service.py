@@ -117,7 +117,7 @@ class PlaceDataService:
         """Search places using OpenStreetMap Nominatim (bounded viewbox)"""
         try:
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0),
+                timeout=httpx.Timeout(settings.http_timeout_seconds),
                 headers={"User-Agent": "Circles-App/1.0"}
             ) as client:
                 url = "https://nominatim.openstreetmap.org/search"
@@ -180,7 +180,7 @@ class PlaceDataService:
     async def _get_foursquare_place_details(self, venue_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed place information from Foursquare"""
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0),
+            timeout=httpx.Timeout(settings.http_timeout_seconds),
             headers={"User-Agent": "Circles-App/1.0"}
         ) as client:
             url = f"https://api.foursquare.com/v3/places/{venue_id}"
@@ -233,7 +233,7 @@ class PlaceDataService:
         """Get detailed place information from OpenStreetMap"""
         try:
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0),
+                timeout=httpx.Timeout(settings.http_timeout_seconds),
                 headers={"User-Agent": "Circles-App/1.0"}
             ) as client:
                 url = f"https://nominatim.openstreetmap.org/lookup"
