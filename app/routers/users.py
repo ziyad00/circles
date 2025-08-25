@@ -4,7 +4,7 @@ from sqlalchemy import select, func, case
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
-from ..services.storage import StorageService
+from ..services.storage import StorageService, _validate_image_or_raise
 from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, CheckInCollection, CheckInLike, CheckInComment, Review
 from ..schemas import (
     UserUpdate,
@@ -83,7 +83,7 @@ async def upload_avatar(
 ):
     import os
     from uuid import uuid4
-    from ..utils import _validate_image_or_raise
+    # image validation comes from storage service helpers
 
     # Validate file type and size
     if not file.content_type or not file.content_type.startswith('image/'):
