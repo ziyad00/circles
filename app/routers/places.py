@@ -40,7 +40,7 @@ from ..database import get_db
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, text, or_, and_
+from sqlalchemy import select, func, desc, text, or_, and_, literal
 import httpx
 import logging
 
@@ -245,37 +245,34 @@ async def get_recommendations(
     interests_rows = (await db.execute(select(UserInterest.name).where(UserInterest.user_id == current_user.id))).all()
     interest_terms = [row[0] for row in interests_rows]
 
-    # Base selectable with score
+    # Base score
     score_expr = (
         func.coalesce(checkins_subq.c.c, 0) * 5 +
         func.coalesce(reviews_subq.c.r, 0) * 3
     )
 
+    # Interest boost expression built inline to avoid alias issues
+    from sqlalchemy import literal
+    interest_boost_expr = literal(0)
+    for term in (interest_terms or []):
+        interest_boost_expr = interest_boost_expr + func.case(
+            (Place.categories.ilike(f"%{term}%"), 1), else_=0
+        )
+
+    total_score_expr = score_expr + interest_boost_expr
+
     stmt = (
-        select(Place, score_expr.label("score"))
+        select(Place)
         .join(checkins_subq, Place.id == checkins_subq.c.place_id, isouter=True)
         .join(reviews_subq, Place.id == reviews_subq.c.place_id, isouter=True)
+        .order_by(desc(total_score_expr))
+        .offset(offset)
+        .limit(limit)
     )
 
-    # Boost by interests (simple category match boosts)
-    if interest_terms:
-        like_boosts = []
-        for term in interest_terms:
-            like_boosts.append(
-                func.case((Place.categories.ilike(f"%{term}%"), 1), else_=0))
-        if like_boosts:
-            stmt = stmt.add_columns((sum(like_boosts)).label("interest_boost"))
-        else:
-            stmt = stmt.add_columns(func.literal(0).label("interest_boost"))
-    else:
-        stmt = stmt.add_columns(func.literal(0).label("interest_boost"))
-
-    # Order by combined score
-    total_score = (score_expr + text("interest_boost"))
-    stmt = stmt.order_by(desc(total_score)).offset(offset).limit(limit)
-
-    rows = (await db.execute(stmt)).all()
-    places = [row[0] for row in rows]
+    # Execute queries
+    total = (await db.execute(select(func.count()).select_from(checkins_subq))).scalar_one()
+    items = (await db.execute(stmt)).scalars().all()
 
     # Optional: re-rank by proximity if coordinates provided
     if lat is not None and lng is not None:
@@ -285,14 +282,9 @@ async def get_recommendations(
             if p.latitude is None or p.longitude is None:
                 return float("inf")
             return haversine_distance(lat, lng, p.latitude, p.longitude)
-        places = sorted(places, key=distance_or_inf)
+        items = sorted(items, key=distance_or_inf)
 
-    # Estimate total as number of places with any score in last 30 days
-    count_stmt = select(func.count(func.distinct(Place.id))).join(checkins_subq, Place.id == checkins_subq.c.place_id,
-                                                                  isouter=True).join(reviews_subq, Place.id == reviews_subq.c.place_id, isouter=True)
-    total = (await db.execute(count_stmt)).scalar_one()
-
-    return PaginatedPlaces(items=places, total=total, limit=limit, offset=offset)
+    return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("/search/advanced", response_model=PaginatedPlaces)
@@ -758,13 +750,12 @@ async def get_trending_places(
     offset: int = Query(0, ge=0),
     lat: float | None = Query(None),
     lng: float | None = Query(None),
-    current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Get trending places based on recent activity.
 
-    **Authentication Required:** Yes
+    **Authentication Required:** No
 
     **Trending Algorithm:**
     - Calculates activity score over specified time window
@@ -2427,7 +2418,7 @@ async def enrich_place_data(
 
 @router.get("/external/suggestions", response_model=list[dict])
 async def get_external_place_suggestions(
-    query: str = Query(..., min_length=2, description="Search query"),
+    query: str = Query(..., min_length=1, description="Search query"),
     lat: float = Query(
         None, description="Optional latitude for location-based suggestions"),
     lon: float = Query(
