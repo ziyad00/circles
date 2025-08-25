@@ -141,10 +141,9 @@ async def upload_avatar(
         os.makedirs(target_dir, exist_ok=True)
         target_path = os.path.join(target_dir, filename)
 
-        # Write file asynchronously
-        import aiofiles
-        async with aiofiles.open(target_path, "wb") as f:
-            await f.write(content)
+        # Write file synchronously to avoid external dependency issues
+        with open(target_path, "wb") as f:
+            f.write(content)
 
         url_path = f"/media/avatars/{current_user.id}/{filename}"
 

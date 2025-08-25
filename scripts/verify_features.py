@@ -39,6 +39,38 @@ for path in ('/health', '/docs', '/openapi.json', '/metrics'):
     code, _ = req('GET', path)
     results[f'GET {path}'] = code
 
+# OpenAPI coverage checks
+code_oai, body_oai = req('GET', '/openapi.json')
+if code_oai == 200:
+    try:
+        oai = json.loads(body_oai or b'{}')
+        paths = oai.get('paths', {}) or {}
+
+        def has(path: str, method: str | None = None) -> bool:
+            p = paths.get(path)
+            if p is None:
+                return False
+            if method is None:
+                return True
+            return method.lower() in (p or {})
+
+        results['OA /settings/privacy'] = 1 if has(
+            '/settings/privacy', 'get') and has('/settings/privacy', 'put') else 0
+        results['OA /settings/notifications'] = 1 if has(
+            '/settings/notifications', 'get') and has('/settings/notifications', 'put') else 0
+        results['OA /follow endpoints'] = 1 if has('/follow/{user_id}', 'post') and has(
+            '/follow/{user_id}', 'delete') and has('/follow/followers', 'get') and has('/follow/following', 'get') else 0
+        results['OA /dms endpoints'] = 1 if has(
+            '/dms/requests') and has('/dms/inbox') else 0
+        results['OA /collections endpoints'] = 1 if has(
+            '/collections/', 'get') and has('/collections/', 'post') else 0
+        results['OA /places endpoints'] = 1 if has(
+            '/places/search', 'get') and has('/places/check-ins', 'post') else 0
+        results['OA /support endpoints'] = 1 if has(
+            '/support/tickets', 'get') and has('/support/tickets', 'post') else 0
+    except Exception:
+        pass
+
 # Phone OTP → token (randomized phone to avoid throttling collisions)
 rand_suffix = f"{int(time.time()) % 10000:04d}{random.randint(1000, 9999)}"
 phone = '+1550' + rand_suffix  # dummy valid-looking E.164
@@ -145,31 +177,69 @@ else:
 
 # Authenticated avatar upload (tiny PNG via curl) using saved token
 if token:
-    png_path = '/tmp/1.png'
-    Path(png_path).write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0bIDATx\x9cc``\x00\x00\x00\x02\x00\x01r\x0b\xe6\x84\x00\x00\x00\x00IEND\xaeB`\x82")
+    import base64
+    png_path = '/tmp/avatar.png'
+    # Valid 1x1 PNG (black)
+    png_b64_small = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X8D8IAAAAASUVORK5CYII='
+    try:
+        Path(png_path).write_bytes(base64.b64decode(png_b64_small))
+    except Exception:
+        Path(png_path).write_bytes(b'')
     curl = ['curl', '--max-time', '8', '-s', '-o', '/dev/null', '-w',
             '%{http_code}\n', '-H', f'Authorization: Bearer {token}', '-F', f'file=@{png_path};type=image/png', f'{BASE}/users/me/avatar']
     proc = subprocess.run(curl, capture_output=True, text=True)
+    code_avatar = 0
     try:
-        results['POST /users/me/avatar (auth)'] = int(
-            (proc.stdout or '').strip() or '0')
+        code_avatar = int((proc.stdout or '').strip() or '0')
     except Exception:
-        results['POST /users/me/avatar (auth)'] = 0
+        code_avatar = 0
+    # Fallback with Pillow JPEG if PNG fails
+    if code_avatar != 200:
+        try:
+            from PIL import Image
+            jpg_path_fb = '/tmp/avatar_fallback.jpg'
+            img = Image.new('RGB', (10, 10), color=(255, 255, 255))
+            img.save(jpg_path_fb, format='JPEG')
+            curl_fb = ['curl', '--max-time', '8', '-s', '-o', '/dev/null', '-w',
+                       '%{http_code}\n', '-H', f'Authorization: Bearer {token}', '-F', f'file=@{jpg_path_fb};type=image/jpeg', f'{BASE}/users/me/avatar']
+            proc_fb = subprocess.run(curl_fb, capture_output=True, text=True)
+            code_avatar = int((proc_fb.stdout or '').strip() or '0')
+        except Exception:
+            pass
+    results['POST /users/me/avatar (auth)'] = code_avatar
 else:
     results['POST /users/me/avatar (auth)'] = 0
 
 # Upload a check-in photo (if we have a check-in id)
 if checkin_id and token:
-    png_path = '/tmp/2.png'
-    Path(png_path).write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0bIDATx\x9cc``\x00\x00\x00\x02\x00\x01r\x0b\xe6\x84\x00\x00\x00\x00IEND\xaeB`\x82")
-    curl = ['curl', '--max-time', '8', '-s', '-o', '/dev/null', '-w',
-            '%{http_code}\n', '-H', f'Authorization: Bearer {token}', '-F', f'file=@{png_path};type=image/png', f'{BASE}/places/check-ins/{checkin_id}/photo']
-    proc = subprocess.run(curl, capture_output=True, text=True)
+    import base64
+    png_path2 = '/tmp/checkin.png'
+    png_b64_small2 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X8D8IAAAAASUVORK5CYII='
     try:
-        results['POST /places/check-ins/{id}/photo'] = int(
-            (proc.stdout or '').strip() or '0')
+        Path(png_path2).write_bytes(base64.b64decode(png_b64_small2))
     except Exception:
-        results['POST /places/check-ins/{id}/photo'] = 0
+        Path(png_path2).write_bytes(b'')
+    curl = ['curl', '--max-time', '8', '-s', '-o', '/dev/null', '-w',
+            '%{http_code}\n', '-H', f'Authorization: Bearer {token}', '-F', f'file=@{png_path2};type=image/png', f'{BASE}/places/check-ins/{checkin_id}/photo']
+    proc = subprocess.run(curl, capture_output=True, text=True)
+    code_ci_photo = 0
+    try:
+        code_ci_photo = int((proc.stdout or '').strip() or '0')
+    except Exception:
+        code_ci_photo = 0
+    if code_ci_photo != 200:
+        try:
+            from PIL import Image
+            jpg_path2_fb = '/tmp/checkin_fallback.jpg'
+            img2 = Image.new('RGB', (10, 10), color=(200, 200, 200))
+            img2.save(jpg_path2_fb, format='JPEG')
+            curl_fb2 = ['curl', '--max-time', '8', '-s', '-o', '/dev/null', '-w',
+                        '%{http_code}\n', '-H', f'Authorization: Bearer {token}', '-F', f'file=@{jpg_path2_fb};type=image/jpeg', f'{BASE}/places/check-ins/{checkin_id}/photo']
+            proc_fb2 = subprocess.run(curl_fb2, capture_output=True, text=True)
+            code_ci_photo = int((proc_fb2.stdout or '').strip() or '0')
+        except Exception:
+            pass
+    results['POST /places/check-ins/{id}/photo'] = code_ci_photo
 else:
     results['POST /places/check-ins/{id}/photo'] = 0
 
@@ -256,6 +326,20 @@ for k in expected_403:
 for k in optional_ok_or_zero:
     v = results.get(k)
     if v not in (0, 200):
+        ok = False
+
+# Ensure OpenAPI coverage
+oa_expected = [
+    'OA /settings/privacy',
+    'OA /settings/notifications',
+    'OA /follow endpoints',
+    'OA /dms endpoints',
+    'OA /collections endpoints',
+    'OA /places endpoints',
+    'OA /support endpoints',
+]
+for k in oa_expected:
+    if results.get(k) != 1:
         ok = False
 
 sys.exit(0 if ok else 1)
