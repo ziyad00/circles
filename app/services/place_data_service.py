@@ -114,25 +114,33 @@ class PlaceDataService:
         radius: int,
         query: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Search places using OpenStreetMap Nominatim"""
+        """Search places using OpenStreetMap Nominatim (bounded viewbox)"""
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0),
                 headers={"User-Agent": "Circles-App/1.0"}
             ) as client:
                 url = "https://nominatim.openstreetmap.org/search"
+                # Build a small bounding box from radius
+                # 1 deg lat ~111km; lon scaled by cos(lat)
+                import math
+                lat_radius = radius / 111000.0
+                cos_lat = max(0.001, math.cos(math.radians(abs(lat))))
+                lon_radius = radius / (111000.0 * cos_lat)
+                viewbox = f"{lon - lon_radius},{lat + lat_radius},{lon + lon_radius},{lat - lat_radius}"
+
                 params = {
                     'format': 'json',
                     'limit': 20,
-                    'lat': lat,
-                    'lon': lon,
-                    # Convert to km, minimum 1km
-                    'radius': max(1, radius / 1000),
-                    'addressdetails': 1
+                    'addressdetails': 1,
+                    'bounded': 1,
+                    'viewbox': viewbox,
                 }
-
                 if query:
                     params['q'] = query
+                else:
+                    # If no query, use around parameter to bias results
+                    params['q'] = ''
 
                 response = await client.get(url, params=params)
 
