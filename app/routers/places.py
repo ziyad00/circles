@@ -2457,7 +2457,7 @@ async def get_external_place_suggestions(
             places = await place_data_service.search_nearby_places(
                 lat=lat,
                 lon=lon,
-                radius=10000,  # 10km radius
+                radius=settings.external_suggestions_radius_m,
                 query=query,
                 types=None
             )

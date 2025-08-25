@@ -92,8 +92,9 @@ async def upload_avatar(
             detail="File must be an image (JPEG, PNG, WebP)"
         )
 
-    # Check file size (max 5MB for avatars) - will be validated during streaming
-    max_size = 5 * 1024 * 1024  # 5MB
+    # Check file size (configurable max MB for avatars)
+    from ..config import settings
+    max_size = int(settings.avatar_max_mb) * 1024 * 1024
 
     # Read file in chunks to avoid memory issues
     content = b""
@@ -130,7 +131,6 @@ async def upload_avatar(
     filename = f"{uuid4().hex}{ext}"
 
     # Store avatar using configured storage backend
-    from ..config import settings
     if settings.storage_backend == "s3":
         # S3 storage
         url_path = await StorageService._save_checkin_s3(current_user.id, filename, content)

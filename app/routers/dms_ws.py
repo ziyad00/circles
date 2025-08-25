@@ -9,6 +9,7 @@ import json
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..models import DMThread, DMParticipantState, DMMessage, User
+from ..config import settings
 
 
 router = APIRouter()
@@ -86,7 +87,7 @@ class ConnectionManager:
     async def _send_with_timeout(self, websocket: WebSocket, payload: dict, thread_id: int, user_id: int) -> None:
         """Send message with timeout to prevent blocking"""
         try:
-            await asyncio.wait_for(websocket.send_json(payload), timeout=5.0)
+            await asyncio.wait_for(websocket.send_json(payload), timeout=float(settings.ws_send_timeout_seconds))
         except asyncio.TimeoutError:
             logger.warning(
                 f"WebSocket send timeout for user {user_id} in thread {thread_id}")

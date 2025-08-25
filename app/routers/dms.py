@@ -6,6 +6,7 @@ from typing import Optional
 
 from ..database import get_db
 from ..models import User, DMThread, DMMessage, DMParticipantState, DMMessageLike, Follow
+from ..config import settings
 from ..schemas import (
     DMThreadResponse,
     PaginatedDMThreads,
@@ -47,8 +48,8 @@ _dm_request_log: dict[int, list[datetime]] = {}
 _dm_message_log: dict[int, list[datetime]] = {}
 
 # Rate limits
-DM_REQUEST_LIMIT = 5  # requests per minute
-DM_MESSAGE_LIMIT = 20  # messages per minute
+DM_REQUEST_LIMIT = settings.dm_requests_per_min
+DM_MESSAGE_LIMIT = settings.dm_messages_per_min
 
 
 def _check_rate_limit(user_id: int, log_dict: dict, limit: int, window_minutes: int = 1):

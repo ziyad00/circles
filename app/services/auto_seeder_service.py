@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
 from ..models import Place
+from ..config import settings
 from ..services.place_data_service_v2 import enhanced_place_data_service
 
 logger = logging.getLogger(__name__)
@@ -295,8 +296,10 @@ class AutoSeederService:
             )
             osm_places_count = result.scalar_one()
 
-            # If we have less than 500 OSM places, we should seed (increased for more cities)
-            should_seed = osm_places_count < 500
+            if not settings.autoseed_enabled:
+                return False
+            # If we have less than configured OSM places, we should seed
+            should_seed = osm_places_count < settings.autoseed_min_osm_count
 
             logger.info(
                 f"OSM places count: {osm_places_count}, should seed: {should_seed}")

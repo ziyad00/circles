@@ -175,8 +175,9 @@ def _guess_content_type(filename: str) -> str:
 
 
 def _validate_image_or_raise(filename: str, content: bytes) -> None:
-    # Size cap 10 MB
-    max_bytes = 10 * 1024 * 1024
+    # Size cap from settings (photo_max_mb)
+    from ..config import settings
+    max_bytes = int(settings.photo_max_mb) * 1024 * 1024
     if len(content) > max_bytes:
         raise ValueError("File too large; max 10MB")
     # Content type by extension must be image

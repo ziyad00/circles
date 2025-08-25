@@ -24,10 +24,10 @@ class EnhancedPlaceDataService:
 
     def __init__(self):
         self.foursquare_api_key = getattr(settings, 'foursquare_api_key', None)
-        self.enrichment_ttl_hot = 14  # days for hot places
-        self.enrichment_ttl_cold = 60  # days for other places
-        self.max_enrichment_distance = 150  # meters
-        self.min_name_similarity = 0.65
+        self.enrichment_ttl_hot = settings.enrich_ttl_hot_days
+        self.enrichment_ttl_cold = settings.enrich_ttl_cold_days
+        self.max_enrichment_distance = settings.enrich_max_distance_m
+        self.min_name_similarity = settings.enrich_min_name_similarity
 
         # OSM tags to seed
         self.osm_seed_tags = {
@@ -259,7 +259,7 @@ class EnhancedPlaceDataService:
         for idx, ep in enumerate(endpoints):
             try:
                 async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(30.0),
+                    timeout=httpx.Timeout(settings.http_timeout_seconds),
                     headers={"User-Agent": "Circles-App/1.0"}
                 ) as client:
                     response = await client.post(ep, data=query, timeout=30.0)
@@ -452,7 +452,7 @@ class EnhancedPlaceDataService:
         if cached is not None:
             return cached
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.http_timeout_seconds)) as client:
             # Search for venues near the place
             url = "https://api.foursquare.com/v3/places/search"
             headers = {
@@ -553,7 +553,7 @@ class EnhancedPlaceDataService:
         if cached is not None:
             return cached
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.http_timeout_seconds)) as client:
             url = f"https://api.foursquare.com/v3/places/{fsq_id}"
             headers = {
                 "Authorization": self.foursquare_api_key,
@@ -601,7 +601,7 @@ class EnhancedPlaceDataService:
         if cached is not None:
             return cached
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.http_timeout_seconds)) as client:
             url = f"https://api.foursquare.com/v3/places/{fsq_id}/photos"
             headers = {
                 "Authorization": self.foursquare_api_key,
@@ -669,7 +669,7 @@ class EnhancedPlaceDataService:
         """Discover places from Foursquare that don't exist in our database"""
         try:
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0),
+                timeout=httpx.Timeout(settings.http_timeout_seconds),
                 headers={"User-Agent": "Circles-App/1.0"}
             ) as client:
                 url = "https://api.foursquare.com/v3/places/search"
