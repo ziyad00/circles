@@ -531,11 +531,12 @@ class SupportTicketResponse(BaseModel):
     id: int
     user_id: int
     subject: str
-    body: str
+    # Map model attribute 'message' to response field 'body'
+    body: str = Field(validation_alias='message', serialization_alias='body')
     status: str
     created_at: datetime
     updated_at: datetime
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class PaginatedMedia(BaseModel):

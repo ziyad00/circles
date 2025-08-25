@@ -11,14 +11,19 @@ from ..schemas import SupportTicketCreate, SupportTicketResponse
 router = APIRouter(prefix="/support", tags=["support"])
 
 
-@router.post("/tickets", response_model=SupportTicketResponse)
+@router.post("/tickets", response_model=SupportTicketResponse, status_code=status.HTTP_201_CREATED)
 async def create_ticket(
     payload: SupportTicketCreate,
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    t = SupportTicket(user_id=current_user.id,
-                      subject=payload.subject, body=payload.body)
+    # Map schema 'body' to model 'message', ensure default status
+    t = SupportTicket(
+        user_id=current_user.id,
+        subject=payload.subject,
+        message=payload.body,
+        status="open",
+    )
     db.add(t)
     await db.commit()
     await db.refresh(t)

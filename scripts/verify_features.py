@@ -204,6 +204,16 @@ if code_m == 200 and rec_otp and token:
 else:
     results['POST /dms/requests (send)'] = 0
 
+# Activity feed (requires following someone; expect 200 even if empty)
+code, _ = req('GET', '/activity/feed', headers=AH)
+results['GET /activity/feed'] = code
+# Support tickets: create then list
+code, body = req('POST', '/support/tickets', headers=AH,
+                 data={'subject': 'Test', 'body': 'From verifier'})
+results['POST /support/tickets'] = code
+code, _ = req('GET', '/support/tickets', headers=AH)
+results['GET /support/tickets'] = code
+
 print(json.dumps(results, indent=2))
 
 # Validation: expected codes
@@ -221,7 +231,10 @@ expected_200 = [
     'GET /dms/requests',
     'GET /dms/inbox',
     'GET /places/search',
-    'POST /users/me/avatar (auth)'
+    'POST /users/me/avatar (auth)',
+    'GET /activity/feed',
+    'POST /support/tickets',
+    'GET /support/tickets'
 ]
 # These are optional based on dynamic data; don't fail build if zero
 optional_ok_or_zero = [
