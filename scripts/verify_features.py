@@ -5,6 +5,8 @@ import time
 import random
 import urllib.request
 import urllib.error
+import subprocess
+from pathlib import Path
 
 BASE = 'http://localhost:8000'
 TIMEOUT = 6
@@ -60,7 +62,7 @@ if otp and code == 200:
         if token:
             # persist token for follow-up manual tests
             try:
-                open('/app/token_jwt', 'w').write(token)
+                Path('/app/token_jwt').write_text(token)
             except Exception:
                 pass
     except Exception:
@@ -78,25 +80,129 @@ code, _ = req('GET', '/places/me/check-ins', headers=AH)
 results['GET /places/me/check-ins'] = code
 
 # Collections
-code, _ = req('GET', '/collections/', headers=AH)
+code, body = req('GET', '/collections/', headers=AH)
 results['GET /collections/'] = code
-code, _ = req('POST', '/collections/', headers=AH,
-              data={'name': 'Test Collection', 'visibility': 'public'})
+# Create a collection and capture id
+code, body = req('POST', '/collections/', headers=AH,
+                 data={'name': 'Test Collection', 'visibility': 'public'})
 results['POST /collections/'] = code
+collection_id = None
+try:
+    if code == 200:
+        j = json.loads(body or b'{}')
+        collection_id = j.get('id')
+except Exception:
+    collection_id = None
+# Fallback: fetch first collection id
+if not collection_id:
+    code_c, body_c = req('GET', '/collections/', headers=AH)
+    try:
+        j = json.loads(body_c or b'{}')
+        items = j.get('items') or []
+        if items:
+            collection_id = items[0].get('id')
+    except Exception:
+        collection_id = None
 
-# DMs
-code, _ = req('GET', '/dms/requests', headers=AH)
-results['GET /dms/requests'] = code
-code, _ = req('GET', '/dms/inbox', headers=AH)
-results['GET /dms/inbox'] = code
+# DMs basic requests/inbox
+results['GET /dms/requests'], _ = req('GET', '/dms/requests', headers=AH)
+results['GET /dms/inbox'], _ = req('GET', '/dms/inbox', headers=AH)
 
 # Uploads unauthenticated
 code, _ = req('POST', '/users/me/avatar', headers={}, data={})
 results['POST /users/me/avatar (unauth)'] = code
 
-# Places search (public)
-code, _ = req('GET', '/places/search?limit=1&offset=0')
+# Places search (public) and capture first place id
+code, body = req('GET', '/places/search?limit=1&offset=0')
 results['GET /places/search'] = code
+place_id = None
+try:
+    j = json.loads(body or b'{}')
+    items = j.get('items') or []
+    if items:
+        place_id = items[0].get('id')
+except Exception:
+    place_id = None
+
+# Create a check-in (if place exists)
+checkin_id = None
+if place_id and token:
+    code, body = req('POST', '/places/check-ins', headers=AH, data={
+        'place_id': place_id,
+        'note': 'verifier',
+        'latitude': 24.7,
+        'longitude': 46.7,
+        'visibility': 'public'
+    })
+    results['POST /places/check-ins'] = code
+    try:
+        j = json.loads(body or b'{}')
+        checkin_id = j.get('id')
+    except Exception:
+        checkin_id = None
+else:
+    results['POST /places/check-ins'] = 0
+
+# Authenticated avatar upload (tiny PNG via curl) using saved token
+if token:
+    png_path = '/tmp/1.png'
+    Path(png_path).write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0bIDATx\x9cc``\x00\x00\x00\x02\x00\x01r\x0b\xe6\x84\x00\x00\x00\x00IEND\xaeB`\x82")
+    curl = ['curl', '--max-time', '8', '-s', '-o', '/dev/null', '-w',
+            '%{http_code}\n', '-H', f'Authorization: Bearer {token}', '-F', f'file=@{png_path};type=image/png', f'{BASE}/users/me/avatar']
+    proc = subprocess.run(curl, capture_output=True, text=True)
+    try:
+        results['POST /users/me/avatar (auth)'] = int(
+            (proc.stdout or '').strip() or '0')
+    except Exception:
+        results['POST /users/me/avatar (auth)'] = 0
+else:
+    results['POST /users/me/avatar (auth)'] = 0
+
+# Upload a check-in photo (if we have a check-in id)
+if checkin_id and token:
+    png_path = '/tmp/2.png'
+    Path(png_path).write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0bIDATx\x9cc``\x00\x00\x00\x02\x00\x01r\x0b\xe6\x84\x00\x00\x00\x00IEND\xaeB`\x82")
+    curl = ['curl', '--max-time', '8', '-s', '-o', '/dev/null', '-w',
+            '%{http_code}\n', '-H', f'Authorization: Bearer {token}', '-F', f'file=@{png_path};type=image/png', f'{BASE}/places/check-ins/{checkin_id}/photo']
+    proc = subprocess.run(curl, capture_output=True, text=True)
+    try:
+        results['POST /places/check-ins/{id}/photo'] = int(
+            (proc.stdout or '').strip() or '0')
+    except Exception:
+        results['POST /places/check-ins/{id}/photo'] = 0
+else:
+    results['POST /places/check-ins/{id}/photo'] = 0
+
+# Add check-in to collection (if ids available)
+if collection_id and checkin_id and token:
+    code, _ = req(
+        'POST', f'/collections/{collection_id}/items/{checkin_id}', headers=AH)
+    results['POST /collections/{id}/items/{checkin_id}'] = code
+else:
+    results['POST /collections/{id}/items/{checkin_id}'] = 0
+
+# Minimal DM request to a new email user (to exercise POST /dms/requests)
+# Create recipient via email OTP
+recipient = f'recipient{int(time.time()) % 100000}@test.com'
+code_m, body_m = req('POST', '/auth/request-otp', data={'email': recipient})
+# Extract OTP digits from message
+rec_otp = ''
+try:
+    msg = json.loads(body_m or b'{}').get('message', '')
+    import re
+    m = re.search(r'(\d{6})', msg)
+    rec_otp = m.group(1) if m else ''
+except Exception:
+    rec_otp = ''
+if code_m == 200 and rec_otp and token:
+    _code_v, _ = req('POST', '/auth/verify-otp',
+                     data={'email': recipient, 'otp_code': rec_otp})
+    # Send DM request from current token user to recipient
+    code_dm, _ = req('POST', '/dms/requests', headers=AH,
+                     data={'recipient_email': recipient, 'text': 'hi'})
+    results['POST /dms/requests (send)'] = code_dm
+else:
+    results['POST /dms/requests (send)'] = 0
 
 print(json.dumps(results, indent=2))
 
@@ -115,6 +221,14 @@ expected_200 = [
     'GET /dms/requests',
     'GET /dms/inbox',
     'GET /places/search',
+    'POST /users/me/avatar (auth)'
+]
+# These are optional based on dynamic data; don't fail build if zero
+optional_ok_or_zero = [
+    'POST /places/check-ins',
+    'POST /places/check-ins/{id}/photo',
+    'POST /collections/{id}/items/{checkin_id}',
+    'POST /dms/requests (send)'
 ]
 expected_403 = ['POST /users/me/avatar (unauth)']
 
@@ -124,6 +238,11 @@ for k in expected_200:
         ok = False
 for k in expected_403:
     if results.get(k) != 403:
+        ok = False
+# optional checks if present should be 200
+for k in optional_ok_or_zero:
+    v = results.get(k)
+    if v not in (0, 200):
         ok = False
 
 sys.exit(0 if ok else 1)
