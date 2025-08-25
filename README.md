@@ -63,24 +63,10 @@ The API will be available at `http://localhost:8000`
 
 ## How to Run
 
-### 🚀 Quick Setup (Recommended)
+### Notes
 
-For the fastest setup with automatic issue resolution:
-
-```bash
-# Run the automated setup script
-python3 scripts/setup_project.py
-```
-
-This script will:
-
-- ✅ Check all prerequisites
-- ✅ Set up environment variables
-- ✅ Install dependencies
-- ✅ Handle migration issues automatically
-- ✅ Start the application
-- ✅ Test the setup
-- ✅ Populate sample data
+- The API may take 30–60 seconds to become ready on first boot.
+- Auto-seeding for Saudi cities runs on startup (OSM Overpass). Configure failover endpoints via `APP_OVERPASS_ENDPOINTS` in `.env`.
 
 ### Method 1: Quick Start with Docker (Recommended)
 
@@ -752,6 +738,16 @@ curl 'http://localhost:8000/places/search/suggestions?query=san&limit=5'
 
 Returns autocomplete suggestions for cities, neighborhoods, and categories.
 
+#### External Suggestions (public)
+
+GET `/places/external/suggestions?query=&lat=&lon=&limit=10`
+
+```bash
+curl 'http://localhost:8000/places/external/suggestions?query=cafe&lat=24.7&lon=46.7&limit=5'
+```
+
+Returns lightweight suggestions sourced from OSM; when coordinates are passed, results are bounded to the area.
+
 #### Filter Options
 
 GET `/places/search/filter-options`
@@ -767,15 +763,15 @@ Returns available filter options with counts:
 - Categories with place counts
 - Rating range (min, max, average)
 
-#### Trending Places (paginated)
+#### Trending Places (public, paginated)
 
-GET `/places/trending?city=&category=&hours=24&limit=10&offset=0`
+GET `/places/trending?time_window=24h&limit=10&offset=0`
 
 ```bash
-curl 'http://localhost:8000/places/trending?city=San%20Francisco&hours=24&limit=10'
+curl 'http://localhost:8000/places/trending?time_window=24h&limit=10'
 ```
 
-Returns `{ items, total, limit, offset }` ranked by recent check-ins.
+Also available: global trending (no auth) – `GET /places/trending/global?limit=10&offset=0`.
 
 #### Create Check-in
 
