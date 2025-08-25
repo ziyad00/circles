@@ -325,6 +325,49 @@ def activity_and_support(results: dict, headers: dict) -> None:
     results['GET /support/tickets'] = code
 
 
+def screens_checks(results: dict, headers: dict, place_id: int | None, user_id: int | None) -> None:
+    # Recommendations (auth)
+    code, _ = req(
+        'GET', '/places/recommendations?limit=5&offset=0', headers=headers)
+    results['GET /places/recommendations'] = code
+    # Trending variants (public)
+    code, _ = req('GET', '/places/trending?limit=5&offset=0')
+    results['GET /places/trending'] = code
+    code, _ = req('GET', '/places/trending/global?limit=5&offset=0')
+    results['GET /places/trending/global'] = code
+    # Search suggestions
+    code, _ = req('GET', '/places/search/suggestions?q=caf')
+    results['GET /places/search/suggestions'] = code
+    # External suggestions (public)
+    code, _ = req(
+        'GET', '/places/external/suggestions?query=cafe&lat=24.7&lon=46.7')
+    results['GET /places/external/suggestions'] = code
+    # Who's here endpoints (auth; require a place)
+    if place_id:
+        code, _ = req('GET', f'/places/{place_id}/whos-here', headers=headers)
+        results['GET /places/{id}/whos-here'] = code
+        code, _ = req(
+            'GET', f'/places/{place_id}/whos-here-count', headers=headers)
+        results['GET /places/{id}/whos-here-count'] = code
+    else:
+        results['GET /places/{id}/whos-here'] = 0
+        results['GET /places/{id}/whos-here-count'] = 0
+    # User profile screens (auth)
+    if user_id:
+        code, _ = req(
+            'GET', f'/users/{user_id}/media?limit=10&offset=0', headers=headers)
+        results['GET /users/{id}/media'] = code
+        code, _ = req('GET', f'/users/{user_id}/collections', headers=headers)
+        results['GET /users/{id}/collections'] = code
+        code, _ = req(
+            'GET', f'/users/{user_id}/profile-stats', headers=headers)
+        results['GET /users/{id}/profile-stats'] = code
+    else:
+        results['GET /users/{id}/media'] = 0
+        results['GET /users/{id}/collections'] = 0
+        results['GET /users/{id}/profile-stats'] = 0
+
+
 def main() -> int:
     results: dict[str, int] = {}
     check_core(results)
@@ -332,6 +375,14 @@ def main() -> int:
     token = login_via_phone(results)
     headers = {'Authorization': f'Bearer {token}'} if token else {}
     protected_smoke(results, headers)
+    # Determine current user_id from /auth/me for profile checks
+    user_id = None
+    try:
+        code_me, body_me = req('GET', '/auth/me', headers=headers)
+        if code_me == 200:
+            user_id = (json.loads(body_me or b'{}') or {}).get('id')
+    except Exception:
+        user_id = None
     collection_id = ensure_collection(results, headers)
     dms_smoke(results, headers)
     check_unauth_upload(results)
@@ -343,6 +394,7 @@ def main() -> int:
     add_checkin_to_collection(results, headers, collection_id, checkin_id)
     dm_request(results, headers)
     activity_and_support(results, headers)
+    screens_checks(results, headers, place_id, user_id)
     print(json.dumps(results, indent=2))
 
     expected_200 = [
@@ -352,9 +404,25 @@ def main() -> int:
         'GET /dms/inbox', 'GET /places/search', 'POST /users/me/avatar (auth)', 'GET /activity/feed',
         'POST /support/tickets', 'GET /support/tickets'
     ]
+    # Screen endpoints expected 200 (auth if needed)
+    expected_200 += [
+        'GET /places/recommendations',
+        'GET /places/trending',
+        'GET /places/trending/global',
+        'GET /places/search/suggestions',
+        'GET /places/external/suggestions',
+    ]
+    # Auth + data dependent
     optional_ok_or_zero = [
         'POST /places/check-ins', 'POST /places/check-ins/{id}/photo',
         'POST /collections/{id}/items/{checkin_id}', 'POST /dms/requests (send)'
+    ]
+    optional_ok_or_zero += [
+        'GET /places/{id}/whos-here',
+        'GET /places/{id}/whos-here-count',
+        'GET /users/{id}/media',
+        'GET /users/{id}/collections',
+        'GET /users/{id}/profile-stats',
     ]
     expected_403 = ['POST /users/me/avatar (unauth)']
     ok = True
