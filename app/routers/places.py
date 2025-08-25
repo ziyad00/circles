@@ -2,7 +2,6 @@ from ..models import Follow
 from ..routers.activity import create_checkin_activity
 from ..utils import can_view_checkin, haversine_distance
 from ..services.place_data_service_v2 import enhanced_place_data_service
-from ..services.place_data_service import place_data_service
 from ..services.storage import StorageService
 from ..services.jwt_service import JWTService
 from ..schemas import (
@@ -2311,18 +2310,21 @@ async def search_external_places(
             type_list = [t.strip() for t in types.split(",")]
 
         # Search external sources
-        places = await place_data_service.search_nearby_places(
+        places = await enhanced_place_data_service._search_places_in_db(
             lat=lat,
             lon=lon,
             radius=radius,
             query=query,
-            types=type_list
+            limit=limit,
+            db=db
         )
 
         # Sync places to database
         synced_places = []
         for place_data in places:
-            synced_place = await place_data_service.sync_place_to_database(db, place_data)
+            synced_place = await enhanced_place_data_service._create_place_from_osm(db, place_data) or (
+                await db.execute(select(Place).where(Place.external_id == place_data.get('external_id')))
+            )
             synced_places.append({
                 "id": synced_place.id,
                 "name": synced_place.name,
@@ -2389,7 +2391,7 @@ async def enrich_place_data(
             raise HTTPException(status_code=404, detail="Place not found")
 
         # Enrich place data
-        enriched_place = await place_data_service.enrich_place_data(place)
+        enriched_place = await enhanced_place_data_service.enrich_place_data(place)
 
         # Save enriched data
         await db.commit()
@@ -2454,12 +2456,13 @@ async def get_external_place_suggestions(
     try:
         if lat and lon:
             # Location-based search
-            places = await place_data_service.search_nearby_places(
+            places = await enhanced_place_data_service._search_places_in_db(
                 lat=lat,
                 lon=lon,
                 radius=settings.external_suggestions_radius_m,
                 query=query,
-                types=None
+                limit=limit,
+                db=db
             )
         else:
             # General search (OpenStreetMap only for now)
