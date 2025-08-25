@@ -57,6 +57,12 @@ if otp and code == 200:
     try:
         v = json.loads(body2 or b'{}')
         token = v.get('access_token') or ''
+        if token:
+            # persist token for follow-up manual tests
+            try:
+                open('/app/token_jwt', 'w').write(token)
+            except Exception:
+                pass
     except Exception:
         token = ''
 else:
@@ -93,3 +99,31 @@ code, _ = req('GET', '/places/search?limit=1&offset=0')
 results['GET /places/search'] = code
 
 print(json.dumps(results, indent=2))
+
+# Validation: expected codes
+expected_200 = [
+    'GET /health',
+    'GET /docs',
+    'GET /openapi.json',
+    'GET /metrics',
+    'POST /onboarding/request-otp',
+    'POST /onboarding/verify-otp',
+    'GET /auth/me',
+    'GET /places/me/check-ins',
+    'GET /collections/',
+    'POST /collections/',
+    'GET /dms/requests',
+    'GET /dms/inbox',
+    'GET /places/search',
+]
+expected_403 = ['POST /users/me/avatar (unauth)']
+
+ok = True
+for k in expected_200:
+    if results.get(k) != 200:
+        ok = False
+for k in expected_403:
+    if results.get(k) != 403:
+        ok = False
+
+sys.exit(0 if ok else 1)
