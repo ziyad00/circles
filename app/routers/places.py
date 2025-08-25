@@ -1377,8 +1377,8 @@ async def whos_here(
 
     **Privacy Enforcement:**
     - Only shows check-ins user has permission to see
-    - Respects `public`, `friends`, `private` visibility
-    - Followers can see `friends` visibility check-ins
+    - Respects `public`, `friends` (followers-only), `private` visibility
+    - Followers can see followers-only (`friends`) check-ins
 
     **Response Data:**
     - User ID, name, and avatar
