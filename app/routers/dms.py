@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, and_, func, desc
+from sqlalchemy import select, or_, and_, func, desc, nullslast
 from typing import Optional
 
 from ..database import get_db
@@ -263,7 +263,6 @@ async def inbox(
     - Search conversations
     - Organize important threads
     """
-    # Join participant state for current user to filter by pinned/archived and enable search ordering
     base = (
         select(DMThread)
         .join(
@@ -278,13 +277,17 @@ async def inbox(
             DMThread.status == "accepted",
             or_(DMThread.user_a_id == current_user.id,
                 DMThread.user_b_id == current_user.id),
-            # archived filter
-            or_(include_archived, DMParticipantState.archived.is_(
-                False) | DMParticipantState.archived.is_(None)),
-            # pinned filter (optional)
-            or_(~only_pinned, DMParticipantState.pinned.is_(True)),
         )
     )
+    # archived filter
+    if not include_archived:
+        base = base.where(
+            or_(DMParticipantState.archived.is_(False),
+                DMParticipantState.archived.is_(None))
+        )
+    # pinned filter
+    if only_pinned:
+        base = base.where(DMParticipantState.pinned.is_(True))
     if q:
         # search by other participant name/email via subquery on last message text as well
         # filter where last message text ilike q OR other user's email/name ilike q
@@ -317,8 +320,9 @@ async def inbox(
             )
         )
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
-    # order: pinned first, then updated_at desc
-    stmt = base.order_by(desc(DMParticipantState.pinned.nullslast()), desc(
+    # order: pinned first (treat NULL as false), then updated_at desc
+    pinned_first = func.coalesce(DMParticipantState.pinned, False).desc()
+    stmt = base.order_by(pinned_first, desc(
         DMThread.updated_at)).offset(offset).limit(limit)
     items = (await db.execute(stmt)).scalars().all()
     return PaginatedDMThreads(items=items, total=total, limit=limit, offset=offset)
