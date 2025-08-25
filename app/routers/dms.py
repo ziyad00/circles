@@ -115,7 +115,8 @@ async def send_dm_request(
             detail=f"Rate limit exceeded. Maximum {DM_REQUEST_LIMIT} DM requests per minute."
         )
 
-    if payload.recipient_email.lower() == current_user.email.lower():
+    # Guard: current_user.email may be None (phone-only accounts)
+    if current_user.email and payload.recipient_email.lower() == (current_user.email or "").lower():
         raise HTTPException(status_code=400, detail="Cannot message yourself")
     # find recipient (case-insensitive)
     res = await db.execute(select(User).where(func.lower(User.email) == payload.recipient_email.lower()))
@@ -124,10 +125,11 @@ async def send_dm_request(
         raise HTTPException(status_code=404, detail="Recipient not found")
     # enforce recipient dm_privacy strictly
     # everyone | followers | no_one
-    if recipient.dm_privacy == "no_one":
+    dm_priv = recipient.dm_privacy or "everyone"
+    if dm_priv == "no_one":
         raise HTTPException(
             status_code=403, detail="Recipient does not accept DMs")
-    if recipient.dm_privacy == "followers":
+    if dm_priv == "followers":
         resf = await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == recipient.id))
         if resf.scalars().first() is None:
             raise HTTPException(
@@ -163,8 +165,7 @@ async def send_dm_request(
     res = await db.execute(select(DMThread).where(DMThread.user_a_id == a, DMThread.user_b_id == b))
     thread = res.scalars().first()
     if not thread:
-        auto = bool(follows) and recipient.dm_privacy in (
-            "everyone", "followers")
+        auto = bool(follows) and (dm_priv in ("everyone", "followers"))
         thread = DMThread(user_a_id=a, user_b_id=b,
                           initiator_id=current_user.id, status=("accepted" if auto else "pending"))
         db.add(thread)
