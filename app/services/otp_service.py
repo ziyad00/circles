@@ -2,7 +2,7 @@ import random
 import string
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, func
 from ..models import User, OTPCode
 from ..config import settings
 

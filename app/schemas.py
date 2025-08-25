@@ -14,6 +14,7 @@ class UserCreate(UserBase):
 
 
 class UserResponse(UserBase):
+    email: Optional[EmailStr] = None
     id: int
     is_verified: bool
     name: Optional[str] = None
