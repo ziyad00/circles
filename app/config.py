@@ -69,6 +69,16 @@ class Settings(BaseSettings):
         default=True, env="USE_OPENSTREETMAP"
     )
 
+    # Overpass API endpoints (comma-separated or JSON array in env)
+    overpass_endpoints: List[str] = Field(
+        default=[
+            "https://overpass-api.de/api/interpreter",
+            "https://overpass.kumi.systems/api/interpreter",
+            "https://lz4.overpass-api.de/api/interpreter",
+        ],
+        env="OVERPASS_ENDPOINTS",
+    )
+
     class Config:
         env_file = ".env"
         env_prefix = "APP_"

@@ -8,7 +8,7 @@ import json
 from typing import List, Dict, Optional, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 import logging
 
@@ -36,6 +36,32 @@ class EnhancedPlaceDataService:
             'shop': ['supermarket', 'mall'],
             'leisure': ['park', 'fitness_centre']
         }
+
+        # Simple in-memory TTL caches
+        # key -> (expires_at, value)
+        self._cache_discovery: Dict[str,
+                                    Tuple[datetime, List[Dict[str, Any]]]] = {}
+        self._cache_venue: Dict[str,
+                                Tuple[datetime, Optional[Dict[str, Any]]]] = {}
+        self._cache_photos: Dict[str,
+                                 Tuple[datetime, List[Dict[str, Any]]]] = {}
+        self.cache_ttl_seconds = 300  # 5 minutes
+
+    def _cache_get(self, cache: Dict, key: str):
+        now = datetime.now(timezone.utc)
+        item = cache.get(key)
+        if not item:
+            return None
+        expires_at, value = item
+        if expires_at <= now:
+            cache.pop(key, None)
+            return None
+        return value
+
+    def _cache_set(self, cache: Dict, key: str, value):
+        expires_at = datetime.now(timezone.utc) + \
+            timedelta(seconds=self.cache_ttl_seconds)
+        cache[key] = (expires_at, value)
 
     async def seed_from_osm_overpass(self, db: AsyncSession, bbox: Tuple[float, float, float, float]):
         """
@@ -227,52 +253,49 @@ class EnhancedPlaceDataService:
 
     async def _fetch_overpass_data(self, query: str) -> List[Dict[str, Any]]:
         """Fetch data from Overpass API"""
-        try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0),
-                headers={"User-Agent": "Circles-App/1.0"}
-            ) as client:
-                response = await client.post(
-                    "https://overpass-api.de/api/interpreter",
-                    data=query,
-                    timeout=30.0
-                )
-
-                # Handle different status codes
-                if response.status_code == 200:
-                    data = response.json()
-
-                    places = []
-                    for element in data.get('elements', []):
-                        if element['type'] in ['node', 'way']:
-                            place_data = self._parse_overpass_element(element)
-                            if place_data:
-                                places.append(place_data)
-
-                    logger.info(
-                        f"Fetched {len(places)} places from Overpass API")
-                    return places
-                elif response.status_code == 429:
-                    logger.warning("Overpass API rate limit exceeded")
-                    return []
-                elif response.status_code >= 500:
-                    logger.error(
-                        f"Overpass API server error: {response.status_code}")
-                    return []
-                else:
-                    logger.error(
-                        f"Overpass API HTTP error: {response.status_code}")
-                    return []
-
-        except httpx.TimeoutException:
-            logger.error("Overpass API request timed out")
-            return []
-        except httpx.RequestError as e:
-            logger.error(f"Overpass API request error: {e}")
-            return []
-        except Exception as e:
-            logger.error(f"Unexpected error in Overpass API: {e}")
-            return []
+        endpoints = settings.overpass_endpoints or [
+            "https://overpass-api.de/api/interpreter"]
+        last_error = None
+        for idx, ep in enumerate(endpoints):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(30.0),
+                    headers={"User-Agent": "Circles-App/1.0"}
+                ) as client:
+                    response = await client.post(ep, data=query, timeout=30.0)
+                    if response.status_code == 200:
+                        data = response.json()
+                        places = []
+                        for element in data.get('elements', []):
+                            if element['type'] in ['node', 'way']:
+                                place_data = self._parse_overpass_element(
+                                    element)
+                                if place_data:
+                                    places.append(place_data)
+                        logger.info(
+                            f"Fetched {len(places)} places from Overpass API endpoint {ep}")
+                        return places
+                    if response.status_code == 429:
+                        logger.warning(f"Overpass rate limited on {ep}")
+                    elif response.status_code >= 500:
+                        logger.error(
+                            f"Overpass server error {response.status_code} on {ep}")
+                    else:
+                        logger.error(
+                            f"Overpass HTTP {response.status_code} on {ep}")
+            except httpx.TimeoutException:
+                logger.error(f"Overpass timeout on {ep}")
+                last_error = "timeout"
+            except httpx.RequestError as e:
+                logger.error(f"Overpass request error on {ep}: {e}")
+                last_error = str(e)
+            except Exception as e:
+                logger.error(f"Overpass unexpected error on {ep}: {e}")
+                last_error = str(e)
+            # try next endpoint
+        logger.error(
+            f"All Overpass endpoints failed. Last error: {last_error}")
+        return []
 
     def _parse_overpass_element(self, element: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Parse Overpass element into place data"""
@@ -423,6 +446,12 @@ class EnhancedPlaceDataService:
         if not self.foursquare_api_key:
             return None
 
+        # Cache key based on name and coords
+        cache_key = f"fsq_find:{place.name.lower()}:{round(place.latitude or 0, 4)}:{round(place.longitude or 0, 4)}"
+        cached = self._cache_get(self._cache_venue, cache_key)
+        if cached is not None:
+            return cached
+
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             # Search for venues near the place
             url = "https://api.foursquare.com/v3/places/search"
@@ -480,12 +509,14 @@ class EnhancedPlaceDataService:
                     best_match = venue
 
             if best_match:
-                return {
+                result = {
                     'fsq_id': best_match['fsq_id'],
                     'name': best_match['name'],
                     'match_score': best_score,
                     'distance': best_match.get('distance', 0)
                 }
+                self._cache_set(self._cache_venue, cache_key, result)
+                return result
 
             return None
 
@@ -517,6 +548,11 @@ class EnhancedPlaceDataService:
 
     async def _get_foursquare_venue_details(self, fsq_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed venue information from Foursquare"""
+        cache_key = f"fsq_details:{fsq_id}"
+        cached = self._cache_get(self._cache_venue, cache_key)
+        if cached is not None:
+            return cached
+
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             url = f"https://api.foursquare.com/v3/places/{fsq_id}"
             headers = {
@@ -532,7 +568,9 @@ class EnhancedPlaceDataService:
 
                 # Handle different status codes
                 if response.status_code == 200:
-                    return response.json()
+                    data = response.json()
+                    self._cache_set(self._cache_venue, cache_key, data)
+                    return data
                 elif response.status_code == 401:
                     logger.error(
                         "Foursquare API authentication failed - check API key")
@@ -558,6 +596,11 @@ class EnhancedPlaceDataService:
 
     async def _get_foursquare_venue_photos(self, fsq_id: str) -> List[Dict[str, Any]]:
         """Get venue photos from Foursquare"""
+        cache_key = f"fsq_photos:{fsq_id}"
+        cached = self._cache_get(self._cache_photos, cache_key)
+        if cached is not None:
+            return cached
+
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             url = f"https://api.foursquare.com/v3/places/{fsq_id}/photos"
             headers = {
@@ -574,34 +617,44 @@ class EnhancedPlaceDataService:
                     data = response.json()
                     # Foursquare photos endpoint returns a list directly, not a dict with 'results'
                     if isinstance(data, list):
+                        self._cache_set(self._cache_photos, cache_key, data)
                         return data
                     elif isinstance(data, dict) and 'results' in data:
+                        self._cache_set(self._cache_photos,
+                                        cache_key, data.get('results', []))
                         return data.get('results', [])
                     else:
                         logger.warning(
                             f"Unexpected photo response format: {type(data)}")
+                        self._cache_set(self._cache_photos, cache_key, [])
                         return []
                 elif response.status_code == 401:
                     logger.error(
                         "Foursquare API authentication failed - check API key")
+                    self._cache_set(self._cache_photos, cache_key, [])
                     return []
                 elif response.status_code == 429:
                     logger.warning("Foursquare API rate limit exceeded")
+                    self._cache_set(self._cache_photos, cache_key, [])
                     return []
                 elif response.status_code >= 500:
                     logger.error(
                         f"Foursquare API server error: {response.status_code}")
+                    self._cache_set(self._cache_photos, cache_key, [])
                     return []
                 else:
                     logger.error(
                         f"Foursquare API request failed: {response.status_code}")
+                    self._cache_set(self._cache_photos, cache_key, [])
                     return []
 
             except httpx.TimeoutException:
                 logger.error("Foursquare API request timed out")
+                self._cache_set(self._cache_photos, cache_key, [])
                 return []
             except httpx.RequestError as e:
                 logger.error(f"Foursquare API request error: {e}")
+                self._cache_set(self._cache_photos, cache_key, [])
                 return []
 
     async def _discover_foursquare_places(
