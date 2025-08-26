@@ -431,6 +431,177 @@ Expected: 200/201 with ticket payload. If 500, confirm payload matches schema (u
 - S3 blocking loop: confirm thread offloading is enabled (it is by default via `asyncio.to_thread`).
 - DM request blocked: verify block rules and privacy settings; logs will show recipient checks.
 
+##### Manual installation debugging (without Docker)
+
+The following help diagnose a local setup using a Python virtual environment and a locally running PostgreSQL.
+
+```bash
+# 1) Verify Python and tools
+python3 --version
+uv --version || echo "uv not found (ok if using pip)"
+pip --version || true
+```
+
+Example output:
+
+```
+Python 3.11.9
+uv 0.4.21
+pip 24.2 from /usr/local/lib/python3.11/site-packages/pip (python 3.11)
+```
+
+```bash
+# 2) Create and activate a virtualenv
+python3 -m venv .venv
+source .venv/bin/activate
+which python
+```
+
+Example output:
+
+```
+/Users/you/circles/.venv/bin/python
+```
+
+```bash
+# 3A) Install deps with uv (recommended)
+uv sync
+
+# 3B) Or install with pip (using requirements.txt)
+pip install -r requirements.txt
+```
+
+Expected: packages installed without errors. If a build tool is missing (e.g., `psycopg`), install Xcode CLT on macOS: `xcode-select --install`.
+
+```bash
+# 4) Prepare environment
+cp -n .env.example .env || true
+grep -E "^APP_DATABASE_URL|^APP_ENV" .env || true
+```
+
+Ensure `APP_DATABASE_URL` uses localhost, e.g.: `postgresql+asyncpg://postgres:password@localhost:5432/circles`.
+
+```bash
+# 5) Verify PostgreSQL is running (macOS example)
+brew services list | grep -i postgres || true
+
+# Generic checks
+pg_isready -h localhost -p 5432 -U postgres || true
+psql -h localhost -p 5432 -U postgres -c "\l" | head -n 10 || true
+```
+
+Example output:
+
+```
+localhost:5432 - accepting connections
+                                     List of databases
+  Name   |  Owner   | Encoding |  Collate  |   Ctype   |   Access privileges
+---------+----------+----------+-----------+-----------+-----------------------
+ postgres| postgres | UTF8     | en_US.utf8| en_US.utf8|
+```
+
+```bash
+# 6) Create the app database if missing
+createdb circles || echo "circles DB may already exist"
+
+# Optional: enable PostGIS
+psql -h localhost -U postgres -d circles -c "CREATE EXTENSION IF NOT EXISTS postgis; SELECT PostGIS_Version();"
+```
+
+Example output:
+
+```
+ postgis_version
+-----------------
+ 3.4.0
+(1 row)
+```
+
+```bash
+# 7) Run migrations locally
+uv run alembic current | cat
+uv run alembic heads | cat
+uv run alembic upgrade heads
+```
+
+Expected: `current` matches one of `heads`. If you see "Multiple head revisions", ensure only valid migration files exist and use `upgrade heads` (plural). If you see `UndefinedTable` (e.g., users), ensure the initial migration is comprehensive and applied first.
+
+```bash
+# 8) Start the application locally
+uv run uvicorn app.main:app --reload --port 8000
+```
+
+Example output:
+
+```
+INFO:     Will watch for changes in these directories: ['/Users/you/circles']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Application startup complete
+```
+
+```bash
+# 9) Health check with timeout (host)
+curl --max-time 10 -sS http://localhost:8000/health
+```
+
+Expected output: `{"status":"ok"}`. If it hangs, try `--ipv4 --http1.1 --noproxy localhost`; check VPN/proxy and firewall.
+
+```bash
+# 10) Quick OpenAPI/docs check
+curl --max-time 10 -sS http://localhost:8000/openapi.json | jq '.info.title,.paths | length'
+```
+
+```bash
+# 11) Verify env is loaded by the app
+python - <<'PY'
+import os
+print(os.getenv('APP_DATABASE_URL'))
+PY
+```
+
+If `None`, ensure `.env` exists and the config loader reads it (see `app/config.py`).
+
+```bash
+# 12) Port conflicts
+lsof -iTCP:8000 -sTCP:LISTEN | cat
+```
+
+If another process uses port 8000, stop it or use `--port 8001`.
+
+```bash
+# 13) WebSockets (DMs) locally
+wscat -c ws://localhost:8000/ws/dms?thread_id=<ID>&token=<JWT>
+```
+
+If disconnects/timeouts occur, adjust `APP_WS_SEND_TIMEOUT_SECONDS` and check app logs.
+
+```bash
+# 14) Uploads locally (replace <JWT>)
+curl --max-time 10 -sS -H "Authorization: Bearer <JWT>" -F "file=@/path/to/image.jpg;type=image/jpeg" http://localhost:8000/users/me/avatar
+```
+
+Expected: 200 JSON with URL. If 400, verify content-type/size is within `APP_AVATAR_MAX_MB` and the image is valid.
+
+```bash
+# 15) Metrics locally (token may be required)
+curl --max-time 10 -sS -H "Authorization: Bearer ${APP_METRICS_TOKEN:-secret}" http://localhost:8000/metrics | head -n 5
+```
+
+```bash
+# 16) External APIs
+echo "$APP_OVERPASS_ENDPOINTS"
+curl --max-time 10 -sS https://nominatim.openstreetmap.org/status.php | head -n 5
+```
+
+If Overpass timeouts occur, reduce radius, add mirrors to `APP_OVERPASS_ENDPOINTS`, and increase `APP_OVERPASS_TIMEOUT_SECONDS`. For Foursquare discovery/enrichment, set `APP_FOURSQUARE_API_KEY` or expect reduced detail.
+
+Common local issues and fixes:
+
+- ModuleNotFoundError: run `uv sync` or `pip install -r requirements.txt` inside the venv, confirm `which python` resolves to `.venv`.
+- Psycopg build errors (macOS): `xcode-select --install` and ensure `openssl` via Homebrew is available if needed.
+- SSL errors on HTTPX: update certs (`/Applications/Python\ 3.x/Install\ Certificates.command`) or `pip install certifi`.
+- `curl` hangs: use flags above; ensure `NO_PROXY=localhost,127.0.0.1`.
+
 ### Method 2: Local Development Setup
 
 For local development without Docker:
