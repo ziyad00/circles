@@ -140,3 +140,107 @@ terraform plan && terraform apply
 ## Public access and HTTPS
 
 - The ALB is public on HTTP port 80. Mobile browsers often force HTTPS; use the explicit `http://` URL or configure a domain and ACM certificate to enable HTTPS (443 listener) with an HTTP→HTTPS redirect.
+
+## AWS architecture and rationale
+
+### Goals and constraints
+
+- Move fast with a managed, low-ops stack (no EC2 management).
+- Public HTTP entrypoint; support WebSockets; clean path to HTTPS + domain.
+- Private compute and database; outbound internet for the app; simple media storage.
+- First deploy is dev/staging-friendly; upgrade path to production hardening without redesign.
+
+### Why each component
+
+- VPC, subnets, route tables
+  - Why: Network isolation and blast-radius control. Public subnets host the ALB only; private subnets host compute and database.
+  - Trade-off: Adds NAT egress cost and complexity, but keeps services off the public internet.
+- NAT Gateway (single)
+  - Why: Lets private ECS tasks reach the internet for package installs, APIs (Foursquare/OSM), etc.
+  - Trade-off: Per-hour + data processing costs; for prod, consider 1 NAT per AZ for HA.
+- Application Load Balancer (ALB)
+  - Why: HTTP/1.1 and HTTP/2 support, WebSockets, health checks, path-based routing, easy blue/green via target groups.
+  - Trade-off: Slightly higher cost than NLB; simpler than API Gateway for session-based/websocket apps.
+- ECS on Fargate
+  - Why: Serverless containers (no EC2 to patch/scale). Native integration with ALB, IAM, CloudWatch, Secrets Manager.
+  - Trade-off: Per-vCPU/GB cost; fewer daemon/sidecar patterns than EC2, but sufficient here.
+- ECR
+  - Why: Private, regional container registry close to ECS; IAM-integrated.
+  - Trade-off: None significant vs Docker Hub for private workloads.
+- RDS PostgreSQL 15 (with PostGIS enabled at DB level)
+  - Why: Managed Postgres with automated backups, point-in-time restore; PostGIS for geospatial queries.
+  - Trade-off: Higher cost than self-managed; we avoid undifferentiated heavy lifting.
+- S3 (media)
+  - Why: Durable, cheap object storage for avatars/photos; integrates with CDN if/when added.
+  - Trade-off: Requires presigned flows or server-side proxy; here app writes directly with IAM.
+- Secrets Manager
+  - Why: Centralized secret storage with rotation, audit, and IAM access control; injects into ECS task env.
+  - Trade-off: Minor per-secret cost; far simpler and safer than baking into images or env files.
+- IAM
+  - Why: Least-privilege policies granting ECS task only what it needs (Secrets read, S3 access, logs).
+  - Trade-off: Requires careful scoping; Terraform codifies it.
+- CloudWatch Logs
+  - Why: Centralized stdout/stderr, retention control, easy AWS Console access and alarms.
+  - Trade-off: Log ingress costs; mitigated with retention and sampling in the app.
+
+### Security model
+
+- Public ALB on 80 today (HTTP). ECS tasks and RDS are private-only.
+- Security Groups:
+  - ALB SG: inbound 80 from 0.0.0.0/0 and ::/0; outbound all.
+  - ECS SG: inbound 8000 from ALB SG only; outbound all (via NAT).
+  - RDS SG: inbound 5432 from ECS SG only; no public access.
+- Secrets never committed; stored in Secrets Manager; Terraform state kept out of git.
+
+### Sizing defaults and scaling
+
+- ECS task: 0.5 vCPU (512) and 1 GiB (1024 MiB). Service desired count: 2 (simple HA behind ALB).
+- RDS: `db.t4g.small`, 20 GiB storage.
+- Scale up options:
+  - ECS: Target-tracking autoscaling on CPU/Memory; increase desired count or task size.
+  - RDS: Increase instance class, enable Multi-AZ, raise storage/IOPS; add read replicas if needed.
+  - ALB: Scales automatically; can add WAF for protection.
+
+### Trade-offs and alternatives considered
+
+- API Gateway + Lambda: great for request/response APIs, but websockets/stateful background tasks and FastAPI app container fit ECS better.
+- EC2 Auto Scaling: more control but more ops; Fargate eliminates node management.
+- EKS (Kubernetes): powerful, but operationally heavier than needed here.
+- NLB: cheaper L4, but lacks HTTP routing, health checks semantics, and websockets convenience.
+
+### Production hardening checklist
+
+- HTTPS + domain:
+  - Add Route53 hosted zone and ACM certificate.
+  - Add ALB HTTPS (443) listener with certificate and 80→443 redirect.
+- High availability:
+  - ECS service across 2+ AZs (already by subnets).
+  - RDS Multi-AZ and automated backups; set deletion protection.
+- Resilience/observability:
+  - Auto scaling policies for ECS; health alarms (ALB 5xx, target unhealthy count, CPU/mem high).
+  - RDS CPU/lag/storage alarms; disk auto-scaling if needed.
+  - ALB access logs to S3; optional WAF for L7 protections.
+- Security:
+  - Tighten IAM policies (S3 path-level, secret ARNs specific).
+  - Rotate secrets; consider KMS CMKs for S3 and RDS storage encryption.
+- Cost controls:
+  - Right-size ECS tasks; sleep non-prod at night; enable S3 lifecycle; monitor NAT data processing.
+
+### CI/CD and deployments
+
+- Build and push to ECR with linux/amd64 (Fargate x86_64):
+  - `docker buildx build --platform linux/amd64 -t "$ECR_URL:latest" -f Dockerfile . --push`
+- Deploy:
+  - `aws ecs update-service --cluster circles-cluster --service circles-svc --force-new-deployment`
+- Blue/green:
+  - Introduce a second target group and weighted listeners, or use CodeDeploy for ECS.
+
+### Environments
+
+- Variables in `infra/terraform/variables.tf` control sizing and counts.
+- For shared state across collaborators, move to S3 backend + DynamoDB locks and run `terraform init -migrate-state`.
+
+### Known behaviors
+
+- Without `APP_FOURSQUARE_API_KEY` in Secrets Manager, `/places/external/suggestions` may return 500.
+- Mobile browsers may force HTTPS; until a cert/domain is configured, use the explicit `http://` ALB URL.
