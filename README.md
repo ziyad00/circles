@@ -230,6 +230,23 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/circles
 
 Ensure the hostname is `postgres` (the service name), not `localhost`.
 
+##### Enabling PostGIS (Docker)
+
+PostGIS is enabled by default in Docker using the `postgis/postgis:15-3.4` image and an init script at `docker/initdb/01_enable_postgis.sql` that creates the extensions in the `circles` database.
+
+If you previously ran with a plain Postgres image, remove existing volumes to initialize with PostGIS:
+
+```bash
+docker-compose down -v
+docker-compose up --build
+```
+
+Verify inside the DB container:
+
+```bash
+docker exec -it circles_postgres psql -U postgres -d circles -c "SELECT PostGIS_Version();"
+```
+
 ##### Debugging: Verify application container
 
 ```bash
