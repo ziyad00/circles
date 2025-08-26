@@ -1,0 +1,45 @@
+# Terraform and infra artifacts
+infra/terraform/.terraform/
+infra/terraform/terraform.tfstate*
+infra/terraform/terraform.tfvars
+infra/terraform/tfplan
+infra/terraform/*.backup
+infra/terraform/crash.log
+infra/terraform/.terraform.lock.hcl
+infra/secrets.generated.env
+
+# Python virtualenvs and caches
+.venv/
+.env
+.env.*
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Git and OS files
+.git/
+.gitignore
+.gitattributes
+.DS_Store
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Node
+node_modules/
+
+# Local media/uploads
+media/
+
+# Misc
+*.log
+*.sqlite3
