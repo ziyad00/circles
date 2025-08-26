@@ -218,3 +218,15 @@ infra/terraform/*.backup
 
 # Local generated secrets
 infra/secrets.generated.env
+
+# Terraform (global)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfplan
+crash.log
+crash.*.log
+
+# Always commit provider lockfile
+!**/.terraform.lock.hcl
