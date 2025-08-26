@@ -42,6 +42,14 @@ A FastAPI application with OTP (One-Time Password) authentication and core Place
    uv sync
    ```
 
+   Or Option A (pip with requirements.txt):
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+
 3. **Start PostgreSQL database**
 
    ```bash
@@ -146,6 +154,36 @@ For local development without Docker:
 
 #### Steps
 
+Quick steps (TL;DR):
+
+```bash
+# 1) Ensure PostgreSQL is running and create the database
+createdb circles            # macOS/Linux; or create via pgAdmin/psql on Windows
+
+# 2) Copy env and set DB URL
+cp .env.example .env
+# Edit .env and set:
+# APP_DATABASE_URL=postgresql+asyncpg://<user>:<pass>@localhost:5432/circles
+
+# 3) Install dependencies
+uv sync                     # or: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+
+# 4) Run database migrations (apply all heads)
+uv run alembic upgrade heads
+
+# 5) Start the app
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# 6) Test
+curl --max-time 10 http://localhost:8000/health
+```
+
+Notes:
+
+- `APP_DATABASE_URL` must use the async driver: `postgresql+asyncpg://...`
+- Use `heads` (plural) for Alembic to apply all head revisions (not `head`).
+- `uv sync` installs project dependencies; `uv run <cmd>` executes `<cmd>` inside the project's virtual environment.
+
 1. **Install uv** (if not installed)
 
    ```bash
@@ -222,7 +260,7 @@ For local development without Docker:
 ### Method 3: Production Setup
 
 For production deployment:
-
+PostGIS
 #### Prerequisites
 
 - Python 3.12+
