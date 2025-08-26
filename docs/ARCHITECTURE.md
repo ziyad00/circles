@@ -244,3 +244,77 @@ terraform plan && terraform apply
 
 - Without `APP_FOURSQUARE_API_KEY` in Secrets Manager, `/places/external/suggestions` may return 500.
 - Mobile browsers may force HTTPS; until a cert/domain is configured, use the explicit `http://` ALB URL.
+
+## Deploying code updates (AWS)
+
+When code changes are ready, build an amd64 image and redeploy the ECS service:
+
+```bash
+# From repo root
+AWS_REGION=$(cd infra/terraform && terraform output -raw aws_region)
+ECR_URL=$(cd infra/terraform && terraform output -raw ecr_repository_url)
+
+# Build x86_64 image for Fargate and push
+docker buildx build --platform linux/amd64 -t "$ECR_URL:latest" -f Dockerfile . --push
+
+# Roll ECS to pull the new image
+aws ecs update-service \
+  --cluster circles-cluster \
+  --service circles-svc \
+  --force-new-deployment \
+  --region "$AWS_REGION"
+```
+
+Notes:
+
+- The service pulls the image tag defined in the task definition (default `latest`).
+- Any change to env or secrets requires a new task revision (via Terraform) and a service redeploy.
+
+## Managing secrets and configuration (AWS only)
+
+All sensitive config is stored in AWS Secrets Manager and injected into the ECS task at runtime. No local secrets are required.
+
+Secret store:
+
+- Name: `circles/app-config`
+- Typical keys: `APP_JWT_SECRET_KEY`, `APP_OTP_SECRET_KEY`, `APP_METRICS_TOKEN`, `APP_DATABASE_URL`, `S3_BUCKET`, `S3_REGION`, and optional `APP_FOURSQUARE_API_KEY`.
+
+Two supported ways to add/update secrets:
+
+1. Infrastructure-as-Code (preferred)
+
+- Add the key/value in `infra/terraform/secrets.tf` under `aws_secretsmanager_secret_version.app.secret_string`.
+- Ensure the ECS task definition exposes it via `secrets` in `infra/terraform/main.tf`, e.g.:
+
+```hcl
+secrets = [
+  { name = "APP_FOURSQUARE_API_KEY", valueFrom = "${aws_secretsmanager_secret.app.arn}:APP_FOURSQUARE_API_KEY::" },
+]
+```
+
+- Apply and redeploy:
+
+```bash
+cd infra/terraform
+terraform apply -auto-approve
+aws ecs update-service --cluster circles-cluster --service circles-svc --force-new-deployment --region "$(terraform output -raw aws_region)"
+```
+
+2. AWS Console (one-off)
+
+- Open Secrets Manager → `circles/app-config` → Edit secret value → add/update the key (e.g., `APP_FOURSQUARE_API_KEY`).
+- Then force a new ECS deployment to pick up the change:
+
+```bash
+AWS_REGION=$(cd infra/terraform && terraform output -raw aws_region)
+aws ecs update-service --cluster circles-cluster --service circles-svc --force-new-deployment --region "$AWS_REGION"
+```
+
+Environment variables vs secrets:
+
+- Non-sensitive toggles can be set in the ECS task `container_definitions.environment` (Terraform `main.tf`).
+- Sensitive values belong in Secrets Manager and should be consumed via `secrets` in the task definition.
+
+Reminder:
+
+- Terraform state can contain secret values; keep tfstate out of git and prefer an encrypted remote backend (S3 + DynamoDB locks) for collaboration.
