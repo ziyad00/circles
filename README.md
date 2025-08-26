@@ -59,7 +59,7 @@ A FastAPI application with OTP (One-Time Password) authentication and core Place
 4. **Run database migrations**
 
    ```bash
-   alembic upgrade head
+   uv run alembic upgrade heads
    ```
 
 5. **Start the application**
@@ -141,6 +141,295 @@ docker-compose restart app
 docker-compose down -v
 docker-compose up --build
 ```
+
+##### Debugging: Verify database container
+
+Use these to confirm PostgreSQL is up and reachable from the app:
+
+```bash
+# 1) List containers and status
+docker-compose ps
+```
+
+Example output:
+
+```
+    Name                   Command               State           Ports
+-----------------------------------------------------------------------------
+circles_app        /bin/sh -c uv run alembic  ...   Up      0.0.0.0:8000->8000/tcp
+circles_postgres   docker-entrypoint.sh postgres    Up      0.0.0.0:5432->5432/tcp
+```
+
+```bash
+# 2) Show recent database logs
+docker-compose logs postgres | tail -n 50
+```
+
+Example output:
+
+```
+postgres  | 2025-08-26 10:12:34.567 UTC [1] LOG:  database system is ready to accept connections
+postgres  | 2025-08-26 10:12:36.890 UTC [35] LOG:  connection authorized: user=postgres database=postgres
+postgres  | 2025-08-26 10:12:37.123 UTC [42] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+```
+
+```bash
+# 3) Exec into DB container to list databases
+docker exec -it circles_postgres psql -U postgres -c "\l"
+```
+
+Example output (excerpt):
+
+```
+                                   List of databases
+    Name    |  Owner   | Encoding |   Collate   |    Ctype    |   Access privileges
+------------+----------+----------+-------------+-------------+-----------------------
+ postgres   | postgres | UTF8     | en_US.utf8  | en_US.utf8  |
+ template0  | postgres | UTF8     | en_US.utf8  | en_US.utf8  | =c/postgres          +
+ template1  | postgres | UTF8     | en_US.utf8  | en_US.utf8  | =c/postgres          +
+ circles    | postgres | UTF8     | en_US.utf8  | en_US.utf8  |
+(4 rows)
+```
+
+```bash
+# 4) From the app container, test connectivity to DB
+docker exec -it circles_app bash -lc "pg_isready -h postgres -p 5432 -U postgres || true"
+```
+
+Example output:
+
+```
+postgres:5432 - accepting connections
+```
+
+```bash
+# 5) From the app container, run a quick SQL via psql
+docker exec -it circles_app bash -lc "psql 'postgresql://postgres:password@postgres:5432/postgres' -c 'SELECT 1;'"
+```
+
+Example output:
+
+```
+ ?column?
+----------
+        1
+(1 row)
+```
+
+If the DB is healthy but the app still fails to connect, check the app container env:
+
+```bash
+docker exec circles_app env | grep APP_DATABASE_URL
+```
+
+Example output:
+
+```
+APP_DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/circles
+```
+
+Ensure the hostname is `postgres` (the service name), not `localhost`.
+
+##### Debugging: Verify application container
+
+```bash
+# 1) Show app logs
+docker-compose logs app | tail -n 100
+```
+
+Example output:
+
+```
+app  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+app  | INFO:     Application startup complete
+app  | INFO:     Auto-seed: should_seed_data=True; starting Saudi cities seeding...
+```
+
+```bash
+# 2) Check container health and port mapping
+docker-compose ps app
+```
+
+Example output:
+
+```
+    Name         Command                State                Ports
+--------------------------------------------------------------------------
+circles_app   /bin/sh -c uv run ...     Up       0.0.0.0:8000->8000/tcp
+```
+
+```bash
+# 3) Hit health endpoint from HOST with timeout
+curl --max-time 10 -sS http://localhost:8000/health
+```
+
+Example output:
+
+```
+{"status":"ok"}
+```
+
+```bash
+# 4) Hit health endpoint from INSIDE the app container
+docker exec -it circles_app bash -lc "curl --max-time 10 -sS http://localhost:8000/health || true"
+```
+
+If this works inside but not outside, suspect a host firewall/VPN/proxy.
+
+```bash
+# 5) Check env & migrations inside app
+docker exec circles_app env | egrep "APP_ENV|APP_DATABASE_URL|APP_OVERPASS_ENDPOINTS"
+docker exec -it circles_app bash -lc "uv run alembic current -v | cat"
+docker exec -it circles_app bash -lc "uv run alembic heads -v | cat"
+```
+
+Expected: `current` should point to the latest revision and match one of the `heads`.
+
+If `Multiple head revisions` appears, the compose command must use `uv run alembic upgrade heads` (plural). Fix by ensuring compose config does so.
+
+##### Networking checks and solutions
+
+```bash
+# Port conflicts
+lsof -iTCP:8000 -sTCP:LISTEN | cat
+lsof -iTCP:5432 -sTCP:LISTEN | cat
+```
+
+If another process is listening, stop it or change ports in compose.
+
+```bash
+# Curl hangs – try these flags
+curl --max-time 10 --connect-timeout 3 --ipv4 --http1.1 --noproxy localhost http://localhost:8000/health
+```
+
+If CLI still hangs but browser works, check VPN/proxy/security tools. Disable for `localhost` or add split-tunneling. Also check env vars:
+
+```bash
+env | egrep "HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY"
+```
+
+Ensure `NO_PROXY` includes `localhost,127.0.0.1`.
+
+##### Migrations: diagnose and fix
+
+```bash
+# Status
+docker exec -it circles_app bash -lc "uv run alembic current | cat"
+docker exec -it circles_app bash -lc "uv run alembic history --verbose | tail -n 20 | cat"
+
+# Apply (inside container)
+docker exec -it circles_app bash -lc "uv run alembic upgrade heads"
+```
+
+Common issues and solutions:
+
+- Multiple heads: ensure compose uses `upgrade heads` and no stray files exist in `alembic/versions/`.
+- Missing table (e.g., users): use a single comprehensive initial migration, then incremental ones in order.
+
+##### PostGIS verification (optional)
+
+```bash
+docker exec -it circles_postgres psql -U postgres -d postgres -c "CREATE EXTENSION IF NOT EXISTS postgis; SELECT PostGIS_Version();"
+```
+
+Example output:
+
+```
+  postgis_version
+-------------------
+ 3.4.0
+(1 row)
+```
+
+If extension is unavailable, switch to a PostGIS image (e.g., `postgis/postgis`) or install it in the DB image.
+
+##### FastAPI/OpenAPI quick checks
+
+```bash
+curl --max-time 10 -sS http://localhost:8000/openapi.json | jq '.info.title,.paths | length'
+curl --max-time 10 -sS http://localhost:8000/docs >/dev/null && echo "Docs served"
+```
+
+##### Metrics endpoint
+
+```bash
+# If APP_METRICS_TOKEN is set to token 'secret', use:
+curl --max-time 10 -sS -H "Authorization: Bearer secret" http://localhost:8000/metrics | head -n 5
+```
+
+Example output:
+
+```
+# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
+# TYPE process_cpu_seconds_total counter
+```
+
+If 403/401, confirm token, and in dev mode the endpoint may be open.
+
+##### WebSockets (DMs)
+
+Use a client like `wscat` or `websocat`:
+
+```bash
+wscat -c ws://localhost:8000/ws/dms?thread_id=<ID>&token=<JWT>
+```
+
+Expected: connection opens, messages echo per protocol. If disconnects occur, check app logs for timeouts and ensure `APP_WS_SEND_TIMEOUT_SECONDS` is adequate.
+
+##### File uploads (avatar and check-in photos)
+
+```bash
+# Avatar upload (replace <JWT>)
+curl --max-time 10 -sS -H "Authorization: Bearer <JWT>" \
+  -F "file=@/path/to/image.jpg;type=image/jpeg" \
+  http://localhost:8000/users/me/avatar
+```
+
+Expected: 200 JSON with avatar URL. If 400, check content-type/size and ensure `APP_AVATAR_MAX_MB` is sufficient.
+
+```bash
+# Check-in photo upload (replace <JWT>, <CHECKIN_ID>)
+curl --max-time 10 -sS -H "Authorization: Bearer <JWT>" \
+  -F "file=@/path/to/image.jpg;type=image/jpeg" \
+  http://localhost:8000/places/check-ins/<CHECKIN_ID>/photo
+```
+
+If using S3, verify AWS credentials and bucket perms. For local storage, verify files appear under the configured media directory.
+
+##### External data (Overpass & Foursquare)
+
+```bash
+# Check configured Overpass endpoints in app env
+docker exec circles_app env | grep APP_OVERPASS_ENDPOINTS
+
+# Observe Overpass attempts and failover in logs
+docker-compose logs app | egrep -i "overpass|timeout|retry" | tail -n 50
+```
+
+If Overpass times out, confirm endpoints list contains multiple mirrors and `APP_OVERPASS_TIMEOUT_SECONDS` is reasonable.
+
+For Foursquare, ensure `APP_FOURSQUARE_API_KEY` is set; without it, enrichment/discovery gracefully degrades but some calls may return fewer details.
+
+##### Activity feed, support/admin quick checks
+
+```bash
+# Support ticket create (replace <JWT>)
+curl --max-time 10 -sS -H "Authorization: Bearer <JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"subject":"test","body":"hello"}' \
+  http://localhost:8000/support/tickets
+```
+
+Expected: 200/201 with ticket payload. If 500, confirm payload matches schema (uses `message` internally).
+
+##### Common issues and targeted fixes
+
+- App up but health fails: check `APP_DATABASE_URL` host is `postgres`, not `localhost`; verify DB accepts connections with `pg_isready`.
+- `curl` hangs: use the flags above; disable VPN/proxy for localhost; ensure `NO_PROXY` includes localhost.
+- Migrations error: ensure only `001_initial_schema.py` + sequential follow-ups exist; run `upgrade heads`.
+- PostGIS features slow/ignored: install PostGIS and create indexes; or rely on Haversine fallback with appropriate radius.
+- S3 blocking loop: confirm thread offloading is enabled (it is by default via `asyncio.to_thread`).
+- DM request blocked: verify block rules and privacy settings; logs will show recipient checks.
 
 ### Method 2: Local Development Setup
 
@@ -261,6 +550,7 @@ Notes:
 
 For production deployment:
 PostGIS
+
 #### Prerequisites
 
 - Python 3.12+
@@ -2229,7 +2519,7 @@ alembic revision --autogenerate -m "Description of changes"
 Apply migrations:
 
 ```bash
-alembic upgrade head
+uv run alembic upgrade heads
 ```
 
 ### Environment Variables
