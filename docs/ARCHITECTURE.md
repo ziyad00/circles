@@ -318,3 +318,24 @@ Environment variables vs secrets:
 Reminder:
 
 - Terraform state can contain secret values; keep tfstate out of git and prefer an encrypted remote backend (S3 + DynamoDB locks) for collaboration.
+
+## Approximate monthly cost (us-east-1)
+
+Assumes 730 hrs/mo, minimal traffic, defaults in Terraform; excludes internet egress and NAT data processing.
+
+- ECS Fargate (2 tasks, 0.5 vCPU/1 GiB each): ~$36/mo
+- ALB (hourly + baseline 1 LCU): ~$22/mo
+- NAT Gateway (1, hourly only): ~$33/mo
+- RDS Postgres db.t4g.small: ~$24/mo
+- RDS storage 20 GiB gp3: ~$1.6/mo
+- S3 (media, 10 GiB stored): ~$0.23/mo
+- CloudWatch Logs (1 GiB ingest + storage): ~$0.53/mo
+- Secrets Manager (1 secret): ~$0.40/mo
+- ECR storage (0.5 GiB): ~$0.05/mo
+
+Estimated baseline total: ~ $118/month
+
+Notes/variables:
+
+- NAT data processing ~$0.045/GB, ALB LCUs scale with requests/bandwidth, RDS Multi‑AZ and backups increase cost.
+- Savings: set `desired_count=1` in non‑prod, add VPC endpoints for S3/Secrets to reduce NAT data, right‑size RDS and ECS.

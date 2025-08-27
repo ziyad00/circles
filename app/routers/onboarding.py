@@ -100,18 +100,19 @@ async def request_phone_otp(
     user_result = await db.execute(user_query)
     user = user_result.scalar_one_or_none()
 
-    # Rate limiting: prevent spam
-    five_min_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
-    recent_otp_query = select(OTPCode).where(
-        OTPCode.phone == payload.phone,
-        OTPCode.created_at >= five_min_ago
-    )
-    recent_otp_result = await db.execute(recent_otp_query)
-    if recent_otp_result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=429,
-            detail="Please wait 5 minutes before requesting another OTP"
+    # Rate limiting: prevent spam (configurable)
+    if settings.otp_rate_limit_enabled:
+        five_min_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
+        recent_otp_query = select(OTPCode).where(
+            OTPCode.phone == payload.phone,
+            OTPCode.created_at >= five_min_ago
         )
+        recent_otp_result = await db.execute(recent_otp_query)
+        if recent_otp_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit: wait 5 minutes before requesting another OTP"
+            )
 
     # Invalidate any existing unused OTPs for this phone
     invalidate_query = select(OTPCode).where(
@@ -141,7 +142,7 @@ async def request_phone_otp(
     # In production, send SMS here
     # Only return OTP in response for development/debug mode
     response_data = {
-        "message": "OTP sent successfully"
+        "message": f"{payload.phone}"
     }
 
     if settings.debug:
@@ -158,33 +159,38 @@ async def verify_phone_otp(
 ):
     """Verify OTP and return user info or create new user"""
 
-    # Rate limiting for phone OTP verification
+    # Rate limiting for phone OTP verification (configurable)
     from ..config import settings
-    ip = request.client.host
-    key = (payload.phone, ip)
-    now = datetime.now(timezone.utc)
+    if settings.otp_rate_limit_enabled:
+        ip = request.client.host
+        key = (payload.phone, ip)
+        now = datetime.now(timezone.utc)
 
-    # Get all entries for this key
-    entries = _phone_otp_verify_log.get(key, [])
+        # Get all entries for this key
+        entries = _phone_otp_verify_log.get(key, [])
 
-    # Check per-minute limit
-    window_start = now - timedelta(minutes=1)
-    recent_entries = [ts for ts in entries if ts >= window_start]
-    if len(recent_entries) >= settings.otp_requests_per_minute:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                            detail="Too many OTP verification attempts. Please try again later.")
+        # Check per-minute limit
+        window_start = now - timedelta(minutes=1)
+        recent_entries = [ts for ts in entries if ts >= window_start]
+        if len(recent_entries) >= settings.otp_requests_per_minute:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit: too many OTP verification attempts; try again later."
+            )
 
-    # Check burst limit over 5 minutes (use full entries list)
-    burst_window_start = now - timedelta(minutes=5)
-    burst_entries = [ts for ts in entries if ts >= burst_window_start]
-    if len(burst_entries) >= settings.otp_requests_burst:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                            detail="Too many OTP verification attempts. Please slow down.")
+        # Check burst limit over 5 minutes (use full entries list)
+        burst_window_start = now - timedelta(minutes=5)
+        burst_entries = [ts for ts in entries if ts >= burst_window_start]
+        if len(burst_entries) >= settings.otp_requests_burst:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit: too many OTP verification attempts; slow down."
+            )
 
-    # Clean up old entries (older than 5 minutes) and record request
-    entries = [ts for ts in entries if ts >= burst_window_start]
-    entries.append(now)
-    _phone_otp_verify_log[key] = entries
+        # Clean up old entries (older than 5 minutes) and record request
+        entries = [ts for ts in entries if ts >= burst_window_start]
+        entries.append(now)
+        _phone_otp_verify_log[key] = entries
 
     # Validate phone number format
     if not validate_phone_number(payload.phone):
@@ -227,7 +233,6 @@ async def verify_phone_otp(
             user={
                 "id": user.id,
                 "phone": user.phone,
-                "email": user.email,
                 "username": user.username,
                 "first_name": user.name.split()[0] if user.name else None,
                 "last_name": " ".join(user.name.split()[1:]) if user.name and len(user.name.split()) > 1 else None,
@@ -253,7 +258,6 @@ async def verify_phone_otp(
             user={
                 "id": temp_user.id,
                 "phone": temp_user.phone,
-                "email": temp_user.email,
                 "username": temp_user.username,
                 "first_name": None,
                 "last_name": None,
@@ -344,7 +348,6 @@ async def complete_user_setup(
         user={
             "id": current_user.id,
             "phone": current_user.phone,
-            "email": current_user.email,
             "username": current_user.username,
             "first_name": payload.first_name,
             "last_name": payload.last_name,
@@ -382,7 +385,6 @@ async def get_onboarding_status(
         "user": {
             "id": current_user.id,
             "phone": current_user.phone,
-            "email": current_user.email,
             "username": current_user.username,
             "first_name": first_name,
             "last_name": last_name,

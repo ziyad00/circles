@@ -1,11 +1,10 @@
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, Union, List
 from enum import Enum
 from datetime import datetime
 
 
 class UserBase(BaseModel):
-    email: EmailStr
     phone: Optional[str] = None
 
 
@@ -14,7 +13,6 @@ class UserCreate(UserBase):
 
 
 class UserResponse(UserBase):
-    email: Optional[EmailStr] = None
     id: int
     is_verified: bool
     name: Optional[str] = None
@@ -25,11 +23,11 @@ class UserResponse(UserBase):
 
 
 class OTPRequest(BaseModel):
-    email: EmailStr
+    phone: str
 
 
 class OTPVerify(BaseModel):
-    email: EmailStr
+    phone: str
     otp_code: str
 
 
@@ -395,7 +393,7 @@ class PaginatedDMThreads(BaseModel):
 
 
 class DMRequestCreate(BaseModel):
-    recipient_email: EmailStr
+    recipient_id: int
     text: str = Field(..., min_length=1, max_length=2000)
 
 
@@ -466,7 +464,6 @@ class PresenceResponse(BaseModel):
 
 class FollowUserResponse(BaseModel):
     id: int
-    email: str
     is_verified: bool
     created_at: datetime
     followed_at: datetime

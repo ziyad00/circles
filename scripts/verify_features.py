@@ -294,25 +294,33 @@ def add_checkin_to_collection(results: dict, headers: dict, collection_id: int |
 
 
 def dm_request(results: dict, headers: dict) -> None:
-    import re
-    recipient = f'recipient{int(time.time()) % 100000}@test.com'
-    code_m, body_m = req('POST', '/auth/request-otp',
-                         data={'email': recipient})
-    rec_otp = ''
+    # Create a second user via phone onboarding
+    import random
+    import time
+    phone2 = '+1551' + \
+        f"{int(time.time()) % 10000:04d}{random.randint(1000, 9999)}"
+    code_m, body_m = req('POST', '/onboarding/request-otp',
+                         data={'phone': phone2})
+    otp2 = ''
     try:
-        msg = json.loads(body_m or b'{}').get('message', '')
-        m = re.search(r'(\d{6})', msg)
-        rec_otp = m.group(1) if m else ''
+        m = json.loads(body_m or b'{}')
+        otp2 = m.get('otp') or ''
     except Exception:
-        rec_otp = ''
-    if code_m == 200 and rec_otp and headers:
-        _code_v, _ = req('POST', '/auth/verify-otp',
-                         data={'email': recipient, 'otp_code': rec_otp})
-        code_dm, _ = req('POST', '/dms/requests', headers=headers,
-                         data={'recipient_email': recipient, 'text': 'hi'})
-        results['POST /dms/requests (send)'] = code_dm
-    else:
-        results['POST /dms/requests (send)'] = 0
+        otp2 = ''
+    if code_m == 200 and otp2 and headers:
+        _code_v, body_v = req('POST', '/onboarding/verify-otp',
+                              data={'phone': phone2, 'otp_code': otp2})
+        try:
+            user2 = json.loads(body_v or b'{}').get('user') or {}
+            recipient_id = user2.get('id')
+        except Exception:
+            recipient_id = None
+        if recipient_id:
+            code_dm, _ = req('POST', '/dms/requests', headers=headers,
+                             data={'recipient_id': recipient_id, 'text': 'hi'})
+            results['POST /dms/requests (send)'] = code_dm
+            return
+    results['POST /dms/requests (send)'] = 0
 
 
 def activity_and_support(results: dict, headers: dict) -> None:

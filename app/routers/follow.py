@@ -25,19 +25,20 @@ async def follow_user(user_id: int, current_user: User = Depends(JWTService.get_
         return {"message": "already following"}
     db.add(Follow(follower_id=current_user.id, followee_id=user_id))
     await db.commit()
-    
+
     # Create activity for the follow
     try:
         await create_follow_activity(
             db=db,
             follower_id=current_user.id,
             followee_id=user_id,
-            followee_name=target.name or target.email
+            followee_name=target.name or f"User {target.id}"
         )
     except Exception as e:
         # Log error but don't fail the follow creation
-        print(f"Failed to create activity for follow {current_user.id} -> {user_id}: {e}")
-    
+        print(
+            f"Failed to create activity for follow {current_user.id} -> {user_id}: {e}")
+
     return {"message": "ok"}
 
 
@@ -61,7 +62,7 @@ async def list_followers(limit: int = Query(20, ge=1, le=100), offset: int = Que
         select(User, subq.c.created_at).join_from(User, subq, User.id == subq.c.follower_id).order_by(
             desc(subq.c.created_at)).offset(offset).limit(limit)
     )
-    items = [FollowUserResponse(id=u.id, email=u.email, is_verified=u.is_verified,
+    items = [FollowUserResponse(id=u.id, is_verified=u.is_verified,
                                 created_at=u.created_at, followed_at=created_at) for (u, created_at) in res.all()]
     return PaginatedFollowers(items=items, total=total, limit=limit, offset=offset)
 
@@ -75,6 +76,6 @@ async def list_following(limit: int = Query(20, ge=1, le=100), offset: int = Que
         select(User, subq.c.created_at).join_from(User, subq, User.id == subq.c.followee_id).order_by(
             desc(subq.c.created_at)).offset(offset).limit(limit)
     )
-    items = [FollowUserResponse(id=u.id, email=u.email, is_verified=u.is_verified,
+    items = [FollowUserResponse(id=u.id, is_verified=u.is_verified,
                                 created_at=u.created_at, followed_at=created_at) for (u, created_at) in res.all()]
     return PaginatedFollowing(items=items, total=total, limit=limit, offset=offset)

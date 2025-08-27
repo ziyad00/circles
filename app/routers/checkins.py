@@ -27,7 +27,7 @@ async def get_check_in_detail(
     db: AsyncSession = Depends(get_db),
 ):
     """Get detailed check-in information with social stats"""
-    
+
     # Get check-in with place and user info
     stmt = (
         select(CheckIn)
@@ -40,30 +40,32 @@ async def get_check_in_detail(
         )
         .where(CheckIn.id == check_in_id)
     )
-    
+
     result = await db.execute(stmt)
     check_in = result.scalar_one_or_none()
-    
+
     if not check_in:
         raise HTTPException(status_code=404, detail="Check-in not found")
-    
+
     # Check visibility
     can_view = await can_view_checkin(db, check_in.user_id, current_user.id, check_in.visibility)
     if not can_view:
-        raise HTTPException(status_code=403, detail="You don't have permission to view this check-in")
-    
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to view this check-in")
+
     # Get social stats
     likes_count = len(check_in.likes)
     comments_count = len(check_in.comments)
-    is_liked_by_user = any(like.user_id == current_user.id for like in check_in.likes)
-    
+    is_liked_by_user = any(
+        like.user_id == current_user.id for like in check_in.likes)
+
     # Get photo URLs
     photo_urls = [photo.url for photo in check_in.photos]
-    
+
     return DetailedCheckInResponse(
         id=check_in.id,
         user_id=check_in.user_id,
-        user_name=check_in.user.name or check_in.user.email or f"User {check_in.user.id}",
+        user_name=check_in.user.name or f"User {check_in.user.id}",
         user_avatar_url=check_in.user.avatar_url,
         place_id=check_in.place_id,
         place_name=check_in.place.name,
@@ -86,25 +88,28 @@ async def get_check_in_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """Get check-in statistics"""
-    
+
     # Get check-in
     result = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
     check_in = result.scalar_one_or_none()
-    
+
     if not check_in:
         raise HTTPException(status_code=404, detail="Check-in not found")
-    
+
     # Check visibility
     can_view = await can_view_checkin(db, check_in.user_id, current_user.id, check_in.visibility)
     if not can_view:
-        raise HTTPException(status_code=403, detail="You don't have permission to view this check-in")
-    
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to view this check-in")
+
     # Get counts
     likes_count = await db.scalar(
-        select(func.count(CheckInLike.id)).where(CheckInLike.check_in_id == check_in_id)
+        select(func.count(CheckInLike.id)).where(
+            CheckInLike.check_in_id == check_in_id)
     )
     comments_count = await db.scalar(
-        select(func.count(CheckInComment.id)).where(CheckInComment.check_in_id == check_in_id)
+        select(func.count(CheckInComment.id)).where(
+            CheckInComment.check_in_id == check_in_id)
     )
     is_liked_by_user = await db.scalar(
         select(CheckInLike.id).where(
@@ -112,7 +117,7 @@ async def get_check_in_stats(
             CheckInLike.user_id == current_user.id
         )
     ) is not None
-    
+
     return CheckInStats(
         likes_count=likes_count,
         comments_count=comments_count,
@@ -129,19 +134,20 @@ async def get_check_in_comments(
     db: AsyncSession = Depends(get_db),
 ):
     """Get comments for a check-in"""
-    
+
     # Get check-in
     result = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
     check_in = result.scalar_one_or_none()
-    
+
     if not check_in:
         raise HTTPException(status_code=404, detail="Check-in not found")
-    
+
     # Check visibility
     can_view = await can_view_checkin(db, check_in.user_id, current_user.id, check_in.visibility)
     if not can_view:
-        raise HTTPException(status_code=403, detail="You don't have permission to view this check-in")
-    
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to view this check-in")
+
     # Get comments with user info
     stmt = (
         select(CheckInComment)
@@ -151,21 +157,21 @@ async def get_check_in_comments(
         .offset(offset)
         .limit(limit)
     )
-    
+
     count_stmt = (
         select(func.count(CheckInComment.id))
         .where(CheckInComment.check_in_id == check_in_id)
     )
-    
+
     total = await db.scalar(count_stmt)
     comments = (await db.execute(stmt)).scalars().all()
-    
+
     items = [
         CheckInCommentResponse(
             id=comment.id,
             check_in_id=comment.check_in_id,
             user_id=comment.user_id,
-            user_name=comment.user.name or comment.user.email or f"User {comment.user.id}",
+            user_name=comment.user.name or f"User {comment.user.id}",
             user_avatar_url=comment.user.avatar_url,
             content=comment.content,
             created_at=comment.created_at,
@@ -173,7 +179,7 @@ async def get_check_in_comments(
         )
         for comment in comments
     ]
-    
+
     return PaginatedCheckInComments(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -185,35 +191,36 @@ async def add_check_in_comment(
     db: AsyncSession = Depends(get_db),
 ):
     """Add a comment to a check-in"""
-    
+
     # Get check-in
     result = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
     check_in = result.scalar_one_or_none()
-    
+
     if not check_in:
         raise HTTPException(status_code=404, detail="Check-in not found")
-    
+
     # Check visibility
     can_view = await can_view_checkin(db, check_in.user_id, current_user.id, check_in.visibility)
     if not can_view:
-        raise HTTPException(status_code=403, detail="You don't have permission to comment on this check-in")
-    
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to comment on this check-in")
+
     # Create comment
     comment = CheckInComment(
         check_in_id=check_in_id,
         user_id=current_user.id,
         content=comment_data.content,
     )
-    
+
     db.add(comment)
     await db.commit()
     await db.refresh(comment, ['user'])
-    
+
     return CheckInCommentResponse(
         id=comment.id,
         check_in_id=comment.check_in_id,
         user_id=comment.user_id,
-        user_name=comment.user.name or comment.user.email or f"User {comment.user.id}",
+        user_name=comment.user.name or f"User {comment.user.id}",
         user_avatar_url=comment.user.avatar_url,
         content=comment.content,
         created_at=comment.created_at,
@@ -229,7 +236,7 @@ async def delete_check_in_comment(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a comment from a check-in"""
-    
+
     # Get comment
     result = await db.execute(
         select(CheckInComment).where(
@@ -238,14 +245,15 @@ async def delete_check_in_comment(
         )
     )
     comment = result.scalar_one_or_none()
-    
+
     if not comment:
         raise HTTPException(status_code=404, detail="Comment not found")
-    
+
     # Check ownership
     if comment.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="You can only delete your own comments")
-    
+        raise HTTPException(
+            status_code=403, detail="You can only delete your own comments")
+
     await db.delete(comment)
     await db.commit()
 
@@ -259,19 +267,20 @@ async def get_check_in_likes(
     db: AsyncSession = Depends(get_db),
 ):
     """Get likes for a check-in"""
-    
+
     # Get check-in
     result = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
     check_in = result.scalar_one_or_none()
-    
+
     if not check_in:
         raise HTTPException(status_code=404, detail="Check-in not found")
-    
+
     # Check visibility
     can_view = await can_view_checkin(db, check_in.user_id, current_user.id, check_in.visibility)
     if not can_view:
-        raise HTTPException(status_code=403, detail="You don't have permission to view this check-in")
-    
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to view this check-in")
+
     # Get likes with user info
     stmt = (
         select(CheckInLike)
@@ -281,27 +290,27 @@ async def get_check_in_likes(
         .offset(offset)
         .limit(limit)
     )
-    
+
     count_stmt = (
         select(func.count(CheckInLike.id))
         .where(CheckInLike.check_in_id == check_in_id)
     )
-    
+
     total = await db.scalar(count_stmt)
     likes = (await db.execute(stmt)).scalars().all()
-    
+
     items = [
         CheckInLikeResponse(
             id=like.id,
             check_in_id=like.check_in_id,
             user_id=like.user_id,
-            user_name=like.user.name or like.user.email or f"User {like.user.id}",
+            user_name=like.user.name or f"User {like.user.id}",
             user_avatar_url=like.user.avatar_url,
             created_at=like.created_at,
         )
         for like in likes
     ]
-    
+
     return PaginatedCheckInLikes(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -312,19 +321,20 @@ async def like_check_in(
     db: AsyncSession = Depends(get_db),
 ):
     """Like a check-in"""
-    
+
     # Get check-in
     result = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
     check_in = result.scalar_one_or_none()
-    
+
     if not check_in:
         raise HTTPException(status_code=404, detail="Check-in not found")
-    
+
     # Check visibility
     can_view = await can_view_checkin(db, check_in.user_id, current_user.id, check_in.visibility)
     if not can_view:
-        raise HTTPException(status_code=403, detail="You don't have permission to like this check-in")
-    
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to like this check-in")
+
     # Check if already liked
     existing_like = await db.scalar(
         select(CheckInLike).where(
@@ -332,19 +342,20 @@ async def like_check_in(
             CheckInLike.user_id == current_user.id
         )
     )
-    
+
     if existing_like:
-        raise HTTPException(status_code=400, detail="You have already liked this check-in")
-    
+        raise HTTPException(
+            status_code=400, detail="You have already liked this check-in")
+
     # Create like
     like = CheckInLike(
         check_in_id=check_in_id,
         user_id=current_user.id,
     )
-    
+
     db.add(like)
     await db.commit()
-    
+
     return {"message": "Check-in liked successfully"}
 
 
@@ -355,7 +366,7 @@ async def unlike_check_in(
     db: AsyncSession = Depends(get_db),
 ):
     """Unlike a check-in"""
-    
+
     # Get like
     result = await db.execute(
         select(CheckInLike).where(
@@ -364,11 +375,11 @@ async def unlike_check_in(
         )
     )
     like = result.scalar_one_or_none()
-    
+
     if not like:
         raise HTTPException(status_code=404, detail="Like not found")
-    
+
     await db.delete(like)
     await db.commit()
-    
+
     return {"message": "Check-in unliked successfully"}

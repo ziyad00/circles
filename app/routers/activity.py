@@ -183,7 +183,7 @@ async def get_activity_feed(
         activity_items.append(ActivityItem(
             id=activity.id,
             user_id=activity.user_id,
-            user_name=activity.user.name or activity.user.email,
+            user_name=activity.user.name or f"User {activity.user.id}",
             user_avatar_url=activity.user.avatar_url,
             activity_type=activity.activity_type,
             activity_data=activity_data,
@@ -269,7 +269,7 @@ async def get_filtered_activity_feed(
         activity_items.append(ActivityItem(
             id=activity.id,
             user_id=activity.user_id,
-            user_name=activity.user.name or activity.user.email,
+            user_name=activity.user.name or f"User {activity.user.id}",
             user_avatar_url=activity.user.avatar_url,
             activity_type=activity.activity_type,
             activity_data=activity_data,

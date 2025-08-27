@@ -231,11 +231,7 @@ async def _get_user_info(db: AsyncSession, user_id: int) -> dict:
     res = await db.execute(select(User).where(User.id == user_id))
     user = res.scalar_one_or_none()
     if user:
-        return {
-            "id": user.id,
-            "name": user.name or user.email,
-            "avatar_url": user.avatar_url
-        }
+        return {"id": user.id, "name": user.name or f"User {user.id}", "avatar_url": user.avatar_url}
     return {"id": user_id, "name": "Unknown", "avatar_url": None}
 
 

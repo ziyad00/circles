@@ -116,11 +116,11 @@ async def send_dm_request(
             detail=f"Rate limit exceeded. Maximum {DM_REQUEST_LIMIT} DM requests per minute."
         )
 
-    # Guard: current_user.email may be None (phone-only accounts)
-    if current_user.email and payload.recipient_email.lower() == (current_user.email or "").lower():
+    # Guard: cannot message self
+    if payload.recipient_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot message yourself")
-    # find recipient (case-insensitive)
-    res = await db.execute(select(User).where(func.lower(User.email) == payload.recipient_email.lower()))
+    # find recipient by id
+    res = await db.execute(select(User).where(User.id == payload.recipient_id))
     recipient = res.scalars().first()
     if not recipient:
         raise HTTPException(status_code=404, detail="Recipient not found")
@@ -291,8 +291,8 @@ async def inbox(
     if only_pinned:
         base = base.where(DMParticipantState.pinned.is_(True))
     if q:
-        # search by other participant name/email via subquery on last message text as well
-        # filter where last message text ilike q OR other user's email/name ilike q
+        # search by other participant name via subquery on last message text as well
+        # filter where last message text ilike q OR other user's name ilike q
         # last message subquery
         last_msg_subq = (
             select(DMMessage.thread_id, func.max(
@@ -310,16 +310,12 @@ async def inbox(
             (DMThread.user_a_id == current_user.id, DMThread.user_b_id),
             else_=DMThread.user_a_id,
         )
-        other_user_subq = select(User.id, User.email, User.name).subquery()
+        other_user_subq = select(User.id, User.name).subquery()
         base = base.join(other_user_subq, other_user_subq.c.id ==
                          other_id, isouter=True)
         like = f"%{q}%"
         base = base.where(
-            or_(
-                DMMessage.text.ilike(like),
-                other_user_subq.c.email.ilike(like),
-                other_user_subq.c.name.ilike(like),
-            )
+            or_(DMMessage.text.ilike(like), other_user_subq.c.name.ilike(like))
         )
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     # order: pinned first (treat NULL as false), then updated_at desc
