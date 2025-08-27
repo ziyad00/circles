@@ -14,32 +14,17 @@ class OTPService:
         return ''.join(random.choices(string.digits, k=6))
 
     @staticmethod
-    async def create_user_if_not_exists(db: AsyncSession, email: str, phone: str = None) -> User:
-        """Create a new user if they don't exist"""
-        # Normalize email to lowercase for consistent comparison
-        normalized_email = email.lower() if email else None
-
-        # Check if user exists by email OR phone (if provided)
-        conditions = [func.lower(User.email) == normalized_email]
-        if phone:
-            conditions.append(User.phone == phone)
-
-        stmt = select(User).where(or_(*conditions))
+    async def create_user_if_not_exists(db: AsyncSession, phone: str) -> User:
+        """Create a new user if they don't exist (phone-only)"""
+        stmt = select(User).where(User.phone == phone)
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
 
         if user is None:
-            # Create new user with normalized email
-            user = User(email=normalized_email, phone=phone)
+            user = User(phone=phone)
             db.add(user)
             await db.commit()
             await db.refresh(user)
-        else:
-            # Update phone if user exists but phone is different
-            if phone and user.phone != phone:
-                user.phone = phone
-                await db.commit()
-                await db.refresh(user)
 
         return user
 
@@ -79,11 +64,9 @@ class OTPService:
         return otp
 
     @staticmethod
-    async def verify_otp(db: AsyncSession, email: str, otp_code: str) -> tuple[bool, User]:
-        """Verify OTP code and return success status and user"""
-        # Get user with case-insensitive email lookup
-        normalized_email = email.lower() if email else None
-        stmt = select(User).where(func.lower(User.email) == normalized_email)
+    async def verify_otp(db: AsyncSession, phone: str, otp_code: str) -> tuple[bool, User]:
+        """Verify OTP code by phone and return success status and user"""
+        stmt = select(User).where(User.phone == phone)
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
 

@@ -76,7 +76,7 @@ Circles is a social location-based application that allows users to discover pla
 
 ## 🚀 Quick Start
 
-1. **Authentication**: Use OTP-based authentication with email or phone
+1. **Authentication**: Use OTP-based authentication with phone only
 2. **Places**: Discover and explore places around you
 3. **Check-ins**: Share your location and experiences
 4. **Social Features**: Follow users, send DMs, and view activity feeds
@@ -85,7 +85,6 @@ Circles is a social location-based application that allows users to discover pla
 ## 🔐 Authentication
 
 All authenticated endpoints require a Bearer token obtained from:
-- `POST /auth/verify-otp` (email-based)
 - `POST /onboarding/verify-otp` (phone-based)
 
 Include the token in the Authorization header: `Authorization: Bearer <your_token>`

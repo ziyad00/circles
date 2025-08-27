@@ -25,8 +25,12 @@ class Settings(BaseSettings):
         default="your-secret-key-change-in-production", env="OTP_SECRET_KEY"
     )
     otp_expiry_minutes: int = Field(default=10, env="OTP_EXPIRY_MINUTES")
-    otp_requests_per_minute: int = 5
-    otp_requests_burst: int = 10
+    # OTP rate limiting (configurable; disabled by default)
+    otp_rate_limit_enabled: bool = Field(
+        default=False, env="OTP_RATE_LIMIT_ENABLED")
+    otp_requests_per_minute: int = Field(
+        default=5, env="OTP_REQUESTS_PER_MINUTE")
+    otp_requests_burst: int = Field(default=10, env="OTP_REQUESTS_BURST")
 
     # JWT settings (for future use)
     jwt_secret_key: str = Field(

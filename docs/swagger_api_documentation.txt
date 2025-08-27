@@ -20,14 +20,14 @@ AUTHENTICATION ENDPOINTS
 
 POST /auth/request-otp
 ---------------------
-Request OTP for email authentication
-- Body: {"email": "user@example.com"}
-- Response: {"message": "OTP sent to email"}
+Request OTP for phone authentication
+- Body: {"phone": "+15551234567"}
+- Response: {"message": "OTP sent via SMS"}
 
 POST /auth/verify-otp
 ---------------------
 Verify OTP and get JWT token
-- Body: {"email": "user@example.com", "otp": "123456"}
+- Body: {"phone": "+15551234567", "otp_code": "123456"}
 - Response: {"access_token": "jwt_token", "token_type": "bearer"}
 
 POST /auth/refresh

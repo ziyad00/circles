@@ -22,10 +22,15 @@ async def client():
 
 
 async def auth_token(client: httpx.AsyncClient) -> str:
-    r = await client.post("/auth/request-otp", json={"email": "places@test.com"})
-    otp = r.json()["message"].split(":")[-1].strip()
-    r = await client.post("/auth/verify-otp", json={"email": "places@test.com", "otp_code": otp})
-    return r.json()["access_token"]
+    # Use phone-only onboarding OTP
+    import time
+    import random
+    phone = "+1550" + \
+        f"{int(time.time()) % 10000:04d}{random.randint(1000, 9999)}"
+    r = await client.post("/onboarding/request-otp", json={"phone": phone})
+    otp = (r.json() or {}).get("otp", "")
+    r = await client.post("/onboarding/verify-otp", json={"phone": phone, "otp_code": otp})
+    return (r.json() or {}).get("access_token", "")
 
 
 @pytest.mark.asyncio
@@ -148,11 +153,15 @@ async def test_places_flow(client: httpx.AsyncClient):
     assert "total" in reviews
 
 
-async def auth_token_email(client: httpx.AsyncClient, email: str) -> str:
-    r = await client.post("/auth/request-otp", json={"email": email})
-    otp = r.json()["message"].split(":")[-1].strip()
-    r = await client.post("/auth/verify-otp", json={"email": email, "otp_code": otp})
-    return r.json()["access_token"]
+async def auth_token_email(client: httpx.AsyncClient, label: str) -> str:
+    # Phone-based token helper; label used to vary number
+    import time
+    safe_digits = sum(ord(c) for c in (label or "a")) % 10000
+    phone = "+1551" + f"{safe_digits:04d}{int(time.time()) % 10000:04d}"
+    r = await client.post("/onboarding/request-otp", json={"phone": phone})
+    otp = (r.json() or {}).get("otp", "")
+    r = await client.post("/onboarding/verify-otp", json={"phone": phone, "otp_code": otp})
+    return (r.json() or {}).get("access_token", "")
 
 
 @pytest.mark.asyncio

@@ -31,8 +31,7 @@ async def search_users(
     stmt = select(User)
     if filters.q:
         like = f"%{filters.q}%"
-        stmt = stmt.where(User.email.ilike(like) | User.name.ilike(
-            like) | User.username.ilike(like))
+        stmt = stmt.where(User.name.ilike(like) | User.username.ilike(like))
     if filters.has_avatar is not None:
         if filters.has_avatar:
             stmt = stmt.where(User.avatar_url.is_not(None))
@@ -327,7 +326,16 @@ async def get_user_profile_stats(
         raise HTTPException(status_code=404, detail="User not found")
 
     # Check if current user can view this profile
-    can_view = user_id == current_user.id or await is_following(db, current_user.id, user_id)
+    # Allow viewing stats if it's own profile or follower; otherwise restrict advanced stats
+    can_view = user_id == current_user.id or (
+        await db.scalar(
+            select(func.count(Follow.id)).where(
+                Follow.follower_id == current_user.id,
+                Follow.followee_id == user_id,
+            )
+        )
+        > 0
+    )
 
     # Get check-in counts by visibility
     checkin_stats = await db.execute(
