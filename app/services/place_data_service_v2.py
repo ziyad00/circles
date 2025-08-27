@@ -28,6 +28,8 @@ class EnhancedPlaceDataService:
         self.enrichment_ttl_cold = settings.enrich_ttl_cold_days
         self.max_enrichment_distance = settings.enrich_max_distance_m
         self.min_name_similarity = settings.enrich_min_name_similarity
+        self.trending_radius_m = getattr(
+            settings, 'fsq_trending_radius_m', 5000)
 
         # OSM tags to seed
         self.osm_seed_tags = {
@@ -62,6 +64,86 @@ class EnhancedPlaceDataService:
         expires_at = datetime.now(timezone.utc) + \
             timedelta(seconds=self.cache_ttl_seconds)
         cache[key] = (expires_at, value)
+
+    async def fetch_foursquare_trending(
+        self,
+        lat: float,
+        lon: float,
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """Fetch trending venues from Foursquare v3 as a fallback/override.
+
+        There is no official v3 'trending' endpoint; we approximate by
+        using places/search with a popularity bias where available.
+        """
+        if not self.foursquare_api_key or self.foursquare_api_key == "demo_key_for_testing":
+            return []
+
+        cache_key = f"fsq_trending:{round(lat, 4)}:{round(lon, 4)}:{limit}:{self.trending_radius_m}"
+        cached = self._cache_get(self._cache_discovery, cache_key)
+        if cached is not None:
+            return cached
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.http_timeout_seconds)) as client:
+            url = "https://api.foursquare.com/v3/places/search"
+            headers = {"Authorization": self.foursquare_api_key,
+                       "Accept": "application/json"}
+            params = {
+                "ll": f"{lat},{lon}",
+                "radius": self.trending_radius_m,
+                "limit": min(limit * 2, 50),
+                # Some tenants support sort=POPULARITY; ignore if rejected
+                "sort": "POPULARITY",
+                "fields": "fsq_id,name,location,geocodes,categories,rating,stats,hours,website,tel"
+            }
+
+            try:
+                resp = await client.get(url, headers=headers, params=params)
+                if resp.status_code == 400 and 'sort' in resp.text:
+                    # Retry without sort parameter
+                    params.pop("sort", None)
+                    resp = await client.get(url, headers=headers, params=params)
+
+                if resp.status_code != 200:
+                    return []
+
+                data = resp.json()
+                venues = data.get("results", [])
+
+                results: List[Dict[str, Any]] = []
+                for v in venues[:limit]:
+                    loc = v.get("geocodes", {}).get("main") or {}
+                    vlat = (loc.get("latitude") if loc else None) or v.get(
+                        "location", {}).get("latitude")
+                    vlon = (loc.get("longitude") if loc else None) or v.get(
+                        "location", {}).get("longitude")
+                    if vlat is None or vlon is None:
+                        continue
+                    results.append({
+                        "id": None,
+                        "name": v.get("name"),
+                        "latitude": vlat,
+                        "longitude": vlon,
+                        "categories": ",".join([c.get("name", "") for c in v.get("categories", [])]) or None,
+                        "rating": v.get("rating"),
+                        "phone": v.get("tel"),
+                        "website": v.get("website"),
+                        "external_id": v.get("fsq_id"),
+                        "data_source": "foursquare",
+                        "metadata": {
+                            "foursquare_id": v.get("fsq_id"),
+                            "review_count": v.get("stats", {}).get("total_ratings"),
+                            "photo_count": v.get("stats", {}).get("total_photos"),
+                            "opening_hours": v.get("hours", {}).get("display"),
+                            "discovery_source": "foursquare_trending"
+                        },
+                    })
+
+                self._cache_set(self._cache_discovery, cache_key, results)
+                return results
+
+            except Exception:
+                return []
 
     async def seed_from_osm_overpass(self, db: AsyncSession, bbox: Tuple[float, float, float, float]):
         """

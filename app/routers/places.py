@@ -785,6 +785,31 @@ async def get_trending_places(
     - Location-aware trending
     - Activity-based discovery
     """
+    # FSQ override: always use Foursquare-based trending if enabled
+    from ..config import settings as app_settings
+    if app_settings.fsq_trending_override:
+        if lat is None or lng is None:
+            raise HTTPException(
+                status_code=400, detail="lat,lng required for FSQ trending override")
+        fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
+        now_ts = datetime.now(timezone.utc)
+        items = [
+            PlaceResponse(
+                id=-(idx + 1),
+                name=p.get("name"),
+                address=None,
+                city=None,
+                neighborhood=None,
+                latitude=p.get("latitude"),
+                longitude=p.get("longitude"),
+                categories=p.get("categories"),
+                rating=p.get("rating"),
+                created_at=now_ts,
+            )
+            for idx, p in enumerate(fsq)
+        ]
+        return PaginatedPlaces(items=items, total=len(items), limit=limit, offset=offset)
+
     # Calculate time window
     now = datetime.now(timezone.utc)
     time_windows = {
@@ -885,6 +910,27 @@ async def get_trending_places(
             return haversine_distance(lat, lng, p.latitude, p.longitude)
         items = sorted(items, key=distance_or_inf)
 
+    # Fallback to FSQ if no internal trending and enabled
+    if total == 0 and app_settings.fsq_trending_enabled and lat is not None and lng is not None:
+        fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
+        now_ts = datetime.now(timezone.utc)
+        items_fsq = [
+            PlaceResponse(
+                id=-(idx + 1),
+                name=p.get("name"),
+                address=None,
+                city=None,
+                neighborhood=None,
+                latitude=p.get("latitude"),
+                longitude=p.get("longitude"),
+                categories=p.get("categories"),
+                rating=p.get("rating"),
+                created_at=now_ts,
+            )
+            for idx, p in enumerate(fsq)
+        ]
+        return PaginatedPlaces(items=items_fsq, total=len(items_fsq), limit=limit, offset=offset)
+
     return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -897,6 +943,30 @@ async def get_global_trending_places(
     db: AsyncSession = Depends(get_db),
 ):
     """Get globally trending places (no auth required)"""
+    from ..config import settings as app_settings
+    # FSQ override: always use Foursquare-based trending if enabled
+    if app_settings.fsq_trending_override:
+        if lat is None or lng is None:
+            raise HTTPException(
+                status_code=400, detail="lat,lng required for FSQ trending override")
+        fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
+        now_ts = datetime.now(timezone.utc)
+        items = [
+            PlaceResponse(
+                id=-(idx + 1),
+                name=p.get("name"),
+                address=None,
+                city=None,
+                neighborhood=None,
+                latitude=p.get("latitude"),
+                longitude=p.get("longitude"),
+                categories=p.get("categories"),
+                rating=p.get("rating"),
+                created_at=now_ts,
+            )
+            for idx, p in enumerate(fsq)
+        ]
+        return PaginatedPlaces(items=items, total=len(items), limit=limit, offset=offset)
 
     # Use last 7 days for global trending
     window_start = datetime.now(timezone.utc) - timedelta(days=7)
@@ -1213,7 +1283,7 @@ async def get_place_stats(place_id: int, db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.get("/{place_id}/stats/enhanced", response_model=EnhancedPlaceStats)
+@router.get("/{place_id}/stats/enhanced", response_model=EnhancedPlaceStats, include_in_schema=False)
 async def get_enhanced_place_stats(
     place_id: int,
     current_user: User = Depends(JWTService.get_current_user),
@@ -2268,6 +2338,7 @@ async def search_external_places(
     query: str = Query(None, description="Optional search query"),
     types: str = Query(
         None, description="Comma-separated place types (e.g., restaurant,cafe)"),
+    limit: int = Query(20, ge=1, le=100, description="Max results"),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -2418,14 +2489,15 @@ async def enrich_place_data(
         )
 
 
-@router.get("/external/suggestions", response_model=list[dict])
+@router.get("/external/suggestions", response_model=list[dict], include_in_schema=False)
 async def get_external_place_suggestions(
     query: str = Query(..., min_length=1, description="Search query"),
     lat: float = Query(
         None, description="Optional latitude for location-based suggestions"),
     lon: float = Query(
         None, description="Optional longitude for location-based suggestions"),
-    limit: int = Query(10, ge=1, le=20, description="Number of suggestions")
+    limit: int = Query(10, ge=1, le=20, description="Number of suggestions"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get place suggestions from external data sources.
@@ -2454,12 +2526,13 @@ async def get_external_place_suggestions(
     - Location-based suggestions
     """
     try:
-        if lat and lon:
+        if lat is not None and lon is not None:
             # Location-based search
+            from ..config import settings as app_settings
             places = await enhanced_place_data_service._search_places_in_db(
                 lat=lat,
                 lon=lon,
-                radius=settings.external_suggestions_radius_m,
+                radius=app_settings.external_suggestions_radius_m,
                 query=query,
                 limit=limit,
                 db=db
@@ -2572,7 +2645,7 @@ async def seed_places_from_osm(
         )
 
 
-@router.get("/search/enhanced", response_model=list[dict])
+@router.get("/search/enhanced", response_model=list[dict], include_in_schema=False)
 async def search_places_enhanced(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),

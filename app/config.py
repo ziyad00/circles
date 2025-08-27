@@ -102,6 +102,18 @@ class Settings(BaseSettings):
     enrich_min_name_similarity: float = Field(
         default=0.65, env="ENRICH_MIN_NAME_SIM")
 
+    # Foursquare trending fallback/override
+    fsq_trending_enabled: bool = Field(
+        default=True, env="FSQ_TRENDING_ENABLED"
+    )
+    # If true, always use FSQ trending instead of internal trending
+    fsq_trending_override: bool = Field(
+        default=True, env="FSQ_TRENDING_OVERRIDE"
+    )
+    fsq_trending_radius_m: int = Field(
+        default=5000, env="FSQ_TRENDING_RADIUS_M"
+    )
+
     # Auto-seeding
     autoseed_enabled: bool = Field(default=True, env="AUTOSEED_ENABLED")
     autoseed_min_osm_count: int = Field(
