@@ -216,7 +216,7 @@ resource "aws_ecs_task_definition" "app" {
       essential = true
       portMappings = [{ containerPort = 8000, hostPort = 8000, protocol = "tcp" }]
       environment = [
-        { name = "APP_DEBUG", value = "false" },
+        { name = "APP_DEBUG", value = "true" },
         { name = "APP_USE_POSTGIS", value = "true" },
         { name = "APP_STORAGE_BACKEND", value = "s3" },
         { name = "S3_BUCKET", value = aws_s3_bucket.media.bucket },
