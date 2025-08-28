@@ -658,8 +658,8 @@ class OnboardingUserSetup(BaseModel):
                            description="User's last name")
     username: str = Field(..., min_length=3, max_length=30,
                           description="Unique username")
-    interests: list[str] = Field(..., min_items=1,
-                                 max_items=10, description="User interests")
+    interests: list[str] = Field(default_factory=list, min_items=0,
+                                 max_items=10, description="User interests (optional)")
 
 
 class OnboardingResponse(BaseModel):
