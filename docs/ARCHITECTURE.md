@@ -339,3 +339,243 @@ Notes/variables:
 
 - NAT data processing ~$0.045/GB, ALB LCUs scale with requests/bandwidth, RDS Multi‑AZ and backups increase cost.
 - Savings: set `desired_count=1` in non‑prod, add VPC endpoints for S3/Secrets to reduce NAT data, right‑size RDS and ECS.
+
+---
+
+## Feature algorithms, fallbacks, and configuration
+
+This section documents how core features work, what signals they use, and all fallback paths and toggles. It also distinguishes between what is configurable at runtime (via env/secrets) and what is baked into the code.
+
+### Trending places
+
+- Primary endpoint(s):
+
+  - `GET /places/trending` (time-windowed; defaults to last 24h)
+  - `GET /places/trending/global` (fixed last 7d)
+
+- Internal scoring (when using internal trending):
+
+  - Windowed over time parameter.
+  - Score = (check‑ins × 3) + (reviews × 2) + (photos × 1) + (unique users × 2).
+  - Requires any activity in the window; otherwise no internal results.
+
+- Foursquare-based override/fallback:
+
+  - Override: if enabled, always use Foursquare v3 search as "trending" proxy (popularity-biased) and require `lat,lng`.
+  - Fallback: if internal trending returns 0 items and fallback is enabled, fetch Foursquare results (also requires `lat,lng`).
+  - Implementation uses `GET v3/places/search` with `ll`, `radius`, `limit`, and attempts `sort=POPULARITY` when supported by tenant.
+  - Returns lightweight place objects (name, coords, categories, rating if available). These may not exist in our DB yet.
+
+Data provenance during trending:
+
+- Internal trending (DB only): all fields come from our tables (Places/CheckIns/Reviews/Photos). No external calls.
+- FSQ override/fallback: items come from FSQ `places/search`:
+
+  - name/coords/categories/rating from FSQ.
+  - Not saved by default; shown as external suggestions in trending payload.
+  - If an internal Place matches by proximity/name later, future results will be sourced from DB and enriched as needed.
+
+- Configurables:
+
+  - `APP_FSQ_TRENDING_OVERRIDE` (bool): if true, always use FSQ trending proxy (requires `lat,lng`). Default: true (can be set per environment).
+  - `APP_FSQ_TRENDING_ENABLED` (bool): if true, allows fallback to FSQ when internal trending is empty. Default: true.
+  - `APP_FSQ_TRENDING_RADIUS_M` (int): FSQ query radius in meters. Default: 5000.
+  - `APP_FOURSQUARE_API_KEY` (secret): required for non-demo usage.
+
+- Business behavior:
+  - Override provides consistent results in greenfield regions without in-app activity.
+  - Fallback ensures no "empty state" while our network effects ramp up.
+  - Operators can disable override in mature markets to prefer internal social signals.
+
+### Place suggestions (typeahead)
+
+- Endpoint: `GET /places/search/suggestions`.
+- Purpose: lightweight suggestions for cities, neighborhoods, categories and nearby places.
+- Behavior:
+  - If `lat,lng` provided, uses in-DB search within a configurable radius (PostGIS if enabled) and returns suggestions.
+  - If not, uses OSM Nominatim for general text suggestions.
+
+Data sources:
+
+- With `lat,lng`: our DB Places (OSM seeded and/or FSQ-enriched) sorted by distance; categories/address from DB.
+- Without `lat,lng`: OSM Nominatim returns display_name/coords; we map to suggestion shape (not persisted).
+
+- Configurables:
+  - `APP_EXTERNAL_SUGGESTIONS_RADIUS_M` (default 10,000 m).
+  - `APP_USE_POSTGIS` (bool) to enable spatial queries.
+- Business behavior:
+  - Designed for fast, low-payload UI typeaheads; not intended to return full place cards.
+  - Legacy alternative endpoints are hidden from Swagger to avoid confusion.
+
+### Place enrichment (Foursquare)
+
+- Purpose: improve place quality with phone, hours, rating, counts, and photos.
+- Triggers:
+  - On-demand endpoints (e.g., `GET /places/{id}/enrich`).
+  - Automatic enrichment in `search/enhanced` (hidden from docs) and other flows when stale or missing data is detected.
+- Signals and TTLs:
+  - "Hot" places get a shorter enrichment TTL; defaults: hot 14 days, cold 60 days.
+  - Matching uses name similarity + distance threshold.
+- Configurables:
+  - `APP_ENRICH_TTL_HOT_DAYS`, `APP_ENRICH_TTL_COLD_DAYS`.
+  - `APP_ENRICH_MAX_DISTANCE_M` (match radius for FSQ linking).
+  - `APP_ENRICH_MIN_NAME_SIM` (name similarity threshold).
+  - `APP_FOURSQUARE_API_KEY` (secret) to enable enrichment.
+- Business behavior:
+  - Higher data quality improves discovery and ranking.
+  - Enrichment respects rate limits and caches responses.
+
+#### Data provenance (fields and sources)
+
+When fields are missing in our DB, enrichment attempts to fill them:
+
+- From OpenStreetMap (OSM Overpass seed):
+
+  - name, latitude, longitude, categories (derived from tags), address, city
+  - phone (if present in tags), website (if present), opening_hours (metadata)
+  - external*id: `osm*<type>\_<id>`, data_source: `osm_overpass`
+
+- From Foursquare (v3):
+  - rating (venue details)
+  - phone (tel), website
+  - hours (display)
+  - stats: total_ratings, total_photos, total_tips (stored in metadata)
+  - photos: first N photo URLs (constructed from prefix/suffix)
+  - categories (names)
+  - fsq_id (stored in metadata and/or external_id)
+
+Field precedence (on update):
+
+1. Keep existing non-null DB fields unless enrichment provides higher-quality data (e.g., normalized phone/website).
+2. Merge metadata; never drop existing keys without explicit logic.
+3. Set `last_enriched_at` to track staleness TTL.
+
+If a place does not exist in OSM seed but appears via FSQ (e.g., trending override):
+
+- The response item originates from FSQ and is not immediately persisted.
+- Metadata contains `discovery_source=foursquare` and may include stats and category labels.
+- If promoted to DB later (future feature), we would set `external_id=fsq_id` and `data_source=foursquare` and backfill core fields from FSQ details.
+
+### Check-ins and proximity enforcement
+
+- Endpoint(s): `POST /checkins` and related list endpoints.
+- Enforcement:
+  - Optionally require user to be within a maximum distance of the place to check in.
+  - Calculated via PostGIS geography or Haversine fallback.
+- Configurables:
+  - `APP_CHECKIN_ENFORCE_PROXIMITY` (bool).
+  - `APP_CHECKIN_MAX_DISTANCE_METERS` (default 500 m).
+- Business behavior:
+  - Balances authenticity with ease of use; can be disabled in development or pilot programs.
+
+### Authentication (phone-only OTP)
+
+- Endpoints:
+  - `POST /onboarding/request-otp` → returns `{ message }` and in debug also `{ otp }`.
+  - `POST /onboarding/verify-otp` → returns token and user payload.
+- OTP rate limiting (configurable):
+  - Requests: 5-minute cooldown per phone (if enabled).
+  - Verification attempts: per-minute and 5-minute burst limits (if enabled).
+- Configurables:
+  - `APP_OTP_RATE_LIMIT_ENABLED` (bool): default false.
+  - `APP_OTP_REQUESTS_PER_MINUTE` (int): verification per-minute limit.
+  - `APP_OTP_REQUESTS_BURST` (int): verification burst over 5 minutes.
+  - `APP_OTP_EXPIRY_MINUTES` (default 10).
+  - `APP_DEBUG` (bool): when true, echo OTP in response (dev/staging only).
+- Business behavior:
+  - Phone-only onboarding reduces friction and aligns with SMS-based auth.
+  - Debug echo is never intended for production.
+
+### Direct messages (DMs)
+
+- REST + WebSocket (typing indicators, presence).
+- Request flow: request/accept modeled like Instagram; creation by `recipient_id` only (no email paths).
+- Rate limits:
+  - `APP_DM_REQUESTS_PER_MIN`.
+  - `APP_DM_MESSAGES_PER_MIN`.
+- Business behavior:
+  - Privacy: DM privacy respected when listing or initiating conversations.
+  - Inbox search excludes email and uses name/username only.
+
+### Activity feed and names
+
+- Display names:
+  - Prefer `user.name` if present; otherwise fallback to `User {id}` (email removed project-wide).
+- Feed endpoints aggregate recent actions from followed users.
+- Business behavior:
+  - Keeps PII minimal and consistent with phone-only identity.
+
+### Files and uploads
+
+- Avatars and check-in photos stored in local dev or S3 in AWS.
+- Configurables:
+  - `APP_STORAGE_BACKEND`: `local` or `s3`.
+  - Size caps: `APP_AVATAR_MAX_MB`, `APP_PHOTO_MAX_MB`.
+
+### What is configurable vs fixed
+
+- Configurable via env (non-sensitive):
+
+  - Debug modes, PostGIS usage, proximity enforcement, FSQ trending flags, suggestion radius, timeouts, upload limits, DM limits.
+  - All keys are listed in `.env.example`.
+
+- Configurable via Secrets Manager (sensitive):
+
+  - `APP_DATABASE_URL`, `APP_JWT_SECRET_KEY`, `APP_OTP_SECRET_KEY`, `APP_METRICS_TOKEN`, `APP_FOURSQUARE_API_KEY`, S3 credentials (if used).
+
+- Fixed in code (change requires deploy):
+  - Trending internal scoring weights.
+  - Username and phone validation rules.
+  - Enrichment TTL defaults (can be overridden via env), matching logic and category heuristics.
+
+## Business rules and feature behaviors
+
+### Onboarding
+
+- Phone-only OTP flow; email paths removed/hidden.
+- `OnboardingUserSetup` accepts an optional `interests` list; empty list allowed.
+- Username constraints: 3–30 characters, alphanumeric + underscore.
+
+### Discovery
+
+- Trending prioritizes social activity; FSQ override/fallback can ensure non-empty lists in new geographies.
+- Suggestions are light-weight and intended for fast UI experiences; not a substitute for full search results.
+
+### Privacy and safety
+
+- User display name fallbacks avoid exposing emails; private info minimized.
+- Check-in proximity enforcement (when enabled) helps reduce spoofing.
+- Rate limits across OTP and DMs mitigate abuse.
+
+### Operations (AWS toggles)
+
+- Debugging in AWS:
+  - `APP_DEBUG=true` enables returning OTP in responses (dev/staging only). Controlled in ECS task `environment` in Terraform.
+- Rolling out trending behavior:
+  - Use `APP_FSQ_TRENDING_OVERRIDE=true` to rely on FSQ while the network grows; disable when internal activity is sufficient.
+- Region expansion:
+  - FSQ enrichment and override ensure data quality in new regions; keep `APP_FOURSQUARE_API_KEY` set.
+
+---
+
+## Quick reference: environment variables
+
+- Core:
+  - `APP_DEBUG`, `APP_DATABASE_URL`, `APP_USE_POSTGIS`, `APP_STORAGE_BACKEND`
+- OTP:
+  - `APP_OTP_SECRET_KEY` (secret), `APP_OTP_EXPIRY_MINUTES`, `APP_OTP_RATE_LIMIT_ENABLED`, `APP_OTP_REQUESTS_PER_MINUTE`, `APP_OTP_REQUESTS_BURST`
+- JWT:
+  - `APP_JWT_SECRET_KEY` (secret), `APP_JWT_ALGORITHM`, `APP_JWT_EXPIRY_MINUTES`
+- DM:
+  - `APP_DM_REQUESTS_PER_MIN`, `APP_DM_MESSAGES_PER_MIN`
+- Foursquare/Discovery:
+  - `APP_FOURSQUARE_API_KEY` (secret)
+  - `APP_FSQ_TRENDING_ENABLED`, `APP_FSQ_TRENDING_OVERRIDE`, `APP_FSQ_TRENDING_RADIUS_M`
+  - `APP_EXTERNAL_SUGGESTIONS_RADIUS_M`
+- Timeouts/Uploads:
+  - `APP_HTTP_TIMEOUT_SECONDS`, `APP_OVERPASS_TIMEOUT_SECONDS`, `APP_WS_SEND_TIMEOUT_SECONDS`
+  - `APP_AVATAR_MAX_MB`, `APP_PHOTO_MAX_MB`
+- S3:
+  - `APP_S3_BUCKET`, `APP_S3_REGION`, `APP_S3_ENDPOINT_URL`, `APP_S3_ACCESS_KEY_ID`, `APP_S3_SECRET_ACCESS_KEY`, `APP_S3_PUBLIC_BASE_URL`, `APP_S3_USE_PATH_STYLE`
+- Metrics/Logging:
+  - `APP_METRICS_TOKEN` (secret), `APP_LOG_SAMPLE_RATE`

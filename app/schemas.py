@@ -15,10 +15,13 @@ class UserCreate(UserBase):
 class UserResponse(UserBase):
     id: int
     is_verified: bool
+    username: Optional[str] = None
     name: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
     created_at: datetime
+    followers_count: Optional[int] = None
+    following_count: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -464,10 +467,17 @@ class PresenceResponse(BaseModel):
 
 class FollowUserResponse(BaseModel):
     id: int
+    username: Optional[str] = None
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
     is_verified: bool
     created_at: datetime
     followed_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class FollowStatusResponse(BaseModel):
+    followed: bool
 
 
 class PaginatedFollowers(BaseModel):
