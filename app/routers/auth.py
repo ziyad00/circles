@@ -5,7 +5,8 @@ from ..database import get_db
 from ..schemas import PhoneOTPRequest, PhoneOTPVerify, OTPResponse, AuthResponse, UserResponse
 from ..services.otp_service import OTPService
 from ..services.jwt_service import JWTService, security
-from ..models import User
+from ..models import User, Follow
+from sqlalchemy import select, func
 from ..config import settings
 from datetime import datetime, timedelta, timezone
 
@@ -94,6 +95,7 @@ async def verify_otp(
 @router.get("/me", response_model=UserResponse)
 async def get_current_user(
     current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get current authenticated user's profile.
@@ -110,11 +112,23 @@ async def get_current_user(
     - Verify authentication status
     """
     try:
+        followers_count = await db.scalar(
+            select(func.count(Follow.id)).where(
+                Follow.followee_id == current_user.id)
+        )
+        following_count = await db.scalar(
+            select(func.count(Follow.id)).where(
+                Follow.follower_id == current_user.id)
+        )
+
         return UserResponse(
             id=current_user.id,
             phone=current_user.phone,
             is_verified=current_user.is_verified,
-            created_at=current_user.created_at
+            username=current_user.username,
+            created_at=current_user.created_at,
+            followers_count=followers_count or 0,
+            following_count=following_count or 0,
         )
     except Exception as e:
         raise HTTPException(

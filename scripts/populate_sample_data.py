@@ -249,13 +249,13 @@ class SampleDataPopulator:
                 existing_follow = await session.execute(
                     select(Follow).where(
                         Follow.follower_id == user.id,
-                        Follow.following_id == followed_user.id
+                        Follow.followee_id == followed_user.id
                     )
                 )
                 if not existing_follow.scalar_one_or_none():
                     follow = Follow(
                         follower_id=user.id,
-                        following_id=followed_user.id,
+                        followee_id=followed_user.id,
                         created_at=datetime.utcnow() - timedelta(days=random.randint(1, 30))
                     )
                     session.add(follow)
