@@ -59,6 +59,32 @@ router = APIRouter(
 )
 
 
+@router.get("/lookups/countries", response_model=list[str])
+async def lookup_countries(db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(func.distinct(Place.country)).where(Place.country.is_not(None)).order_by(Place.country.asc()))
+    return [r[0] for r in res.all() if r[0]]
+
+
+@router.get("/lookups/cities", response_model=list[str])
+async def lookup_cities(country: str | None = Query(None), db: AsyncSession = Depends(get_db)):
+    stmt = select(func.distinct(Place.city)).where(Place.city.is_not(None))
+    if country:
+        stmt = stmt.where(Place.country.ilike(country))
+    stmt = stmt.order_by(Place.city.asc())
+    res = await db.execute(stmt)
+    return [r[0] for r in res.all() if r[0]]
+
+
+@router.get("/lookups/neighborhoods", response_model=list[str])
+async def lookup_neighborhoods(country: str, city: str, db: AsyncSession = Depends(get_db)):
+    stmt = select(func.distinct(Place.neighborhood)).where(
+        Place.neighborhood.is_not(None),
+        Place.city.ilike(city),
+        Place.country.ilike(country),
+    ).order_by(Place.neighborhood.asc())
+    res = await db.execute(stmt)
+    return [r[0] for r in res.all() if r[0]]
+
 @router.post("/", response_model=PlaceResponse)
 async def create_place(payload: PlaceCreate, db: AsyncSession = Depends(get_db)):
     """
@@ -747,10 +773,17 @@ async def get_trending_places(
         "24h", description="Time window: 1h, 6h, 24h, 7d, 30d"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    lat: float | None = Query(None),
-    lng: float | None = Query(None),
-    city: str | None = Query(
-        None, description="City name (e.g., 'Riyadh'). If provided and FSQ override is enabled, trending is fetched for this city instead of radius."),
+    lat: float | None = Query(
+        None, description="Latitude of the user location"),
+    lng: float | None = Query(
+        None, description="Longitude of the user location"),
+    q: str | None = Query(None, description="Search text for place name"),
+    place_type: str | None = Query(None, description="Category contains (e.g., cafe)"),
+    country: str | None = Query(None, description="Country name to filter"),
+    city: str | None = Query(None, description="City name to filter (overrides inferred)"),
+    neighborhood: str | None = Query(None, description="Neighborhood contains"),
+    min_rating: float | None = Query(None, ge=0, le=5, description="Minimum rating"),
+    price_tier: str | None = Query(None, description="$, $$, $$$, $$$$"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -787,16 +820,20 @@ async def get_trending_places(
     - Location-aware trending
     - Activity-based discovery
     """
-    # FSQ override: use Foursquare-based trending if enabled
+    # Require coordinates for local trending
+    if lat is None or lng is None:
+        raise HTTPException(
+            status_code=400, detail="lat and lng are required for local trending")
+
+    # Derive city via reverse geocoding (Nominatim)
+    inferred_city = city or await enhanced_place_data_service.reverse_geocode_city(lat=lat, lon=lng)
+
+    # FSQ override: use Foursquare-based trending by inferred city if enabled
     from ..config import settings as app_settings
     if app_settings.fsq_trending_override:
-        # If city provided, use city-based trending (no radius)
-        if city:
-            fsq = await enhanced_place_data_service.fetch_foursquare_trending_city(city=city, limit=limit)
+        if inferred_city:
+            fsq = await enhanced_place_data_service.fetch_foursquare_trending_city(city=inferred_city, limit=limit)
         else:
-            if lat is None or lng is None:
-                raise HTTPException(
-                    status_code=400, detail="Provide either city or lat,lng for FSQ trending override")
             fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
         now_ts = datetime.now(timezone.utc)
         items = [
@@ -804,7 +841,7 @@ async def get_trending_places(
                 id=-(idx + 1),
                 name=p.get("name"),
                 address=None,
-                city=None,
+                city=inferred_city,
                 neighborhood=None,
                 latitude=p.get("latitude"),
                 longitude=p.get("longitude"),
@@ -814,6 +851,13 @@ async def get_trending_places(
             )
             for idx, p in enumerate(fsq)
         ]
+        # client-side like filters server-applied on FSQ set
+        if q:
+            items = [it for it in items if it.name and q.lower() in it.name.lower()]
+        if place_type:
+            items = [it for it in items if it.categories and place_type.lower() in str(it.categories).lower()]
+        if min_rating is not None:
+            items = [it for it in items if (it.rating or 0) >= min_rating]
         return PaginatedPlaces(items=items, total=len(items), limit=limit, offset=offset)
 
     # Calculate time window
@@ -832,7 +876,11 @@ async def get_trending_places(
 
     window_start = now - time_windows[time_window]
 
-    # Build trending score query
+    if not inferred_city:
+        raise HTTPException(
+            status_code=404, detail="Could not infer city from provided coordinates")
+
+    # Build trending score query filtered by inferred city
     # Score = (check-ins * 3) + (reviews * 2) + (photos * 1) + (unique users * 2)
     trending_base = (
         select(
@@ -878,8 +926,19 @@ async def get_trending_places(
         ))
     )
 
-    if city:
-        trending_base = trending_base.where(Place.city.ilike(city))
+    trending_base = trending_base.where(Place.city.ilike(inferred_city))
+    if country:
+        trending_base = trending_base.where(Place.country.ilike(country))
+    if q:
+        trending_base = trending_base.where(Place.name.ilike(f"%{q}%"))
+    if place_type:
+        trending_base = trending_base.where(Place.categories.ilike(f"%{place_type}%"))
+    if neighborhood:
+        trending_base = trending_base.where(Place.neighborhood.ilike(f"%{neighborhood}%"))
+    if min_rating is not None:
+        trending_base = trending_base.where(Place.rating >= min_rating)
+    if price_tier:
+        trending_base = trending_base.where(Place.price_tier == price_tier)
 
     trending_subq = (
         trending_base
@@ -913,15 +972,14 @@ async def get_trending_places(
     total = (await db.execute(count_stmt)).scalar_one()
     items = (await db.execute(stmt)).scalars().all()
 
-    # Optional: re-rank by proximity if coordinates provided
-    if lat is not None and lng is not None:
-        from ..utils import haversine_distance
+    # Optional: re-rank by proximity (we have lat/lng)
+    from ..utils import haversine_distance
 
-        def distance_or_inf(p: Place) -> float:
-            if p.latitude is None or p.longitude is None:
-                return float("inf")
-            return haversine_distance(lat, lng, p.latitude, p.longitude)
-        items = sorted(items, key=distance_or_inf)
+    def distance_or_inf(p: Place) -> float:
+        if p.latitude is None or p.longitude is None:
+            return float("inf")
+        return haversine_distance(lat, lng, p.latitude, p.longitude)
+    items = sorted(items, key=distance_or_inf)
 
     # Fallback to FSQ if no internal trending and enabled
     if total == 0 and app_settings.fsq_trending_enabled and lat is not None and lng is not None:
@@ -953,21 +1011,23 @@ async def get_global_trending_places(
     offset: int = Query(0, ge=0),
     lat: float | None = Query(None),
     lng: float | None = Query(None),
-    city: str | None = Query(
-        None, description="City name (e.g., 'Riyadh'). If provided and FSQ override is enabled, trending is fetched for this city."),
+    q: str | None = Query(None),
+    place_type: str | None = Query(None),
+    country: str | None = Query(None),
+    city: str | None = Query(None),
+    neighborhood: str | None = Query(None),
+    min_rating: float | None = Query(None, ge=0, le=5),
+    price_tier: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Get globally trending places (no auth required)"""
     from ..config import settings as app_settings
     # FSQ override: always use Foursquare-based trending if enabled
     if app_settings.fsq_trending_override:
-        if city:
-            fsq = await enhanced_place_data_service.fetch_foursquare_trending_city(city=city, limit=limit)
-        else:
-            if lat is None or lng is None:
-                raise HTTPException(
-                    status_code=400, detail="Provide either city or lat,lng for FSQ trending override")
-            fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
+        if lat is None or lng is None:
+            raise HTTPException(
+                status_code=400, detail="Provide lat,lng for FSQ trending override")
+        fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
         now_ts = datetime.now(timezone.utc)
         items = [
             PlaceResponse(
@@ -984,6 +1044,12 @@ async def get_global_trending_places(
             )
             for idx, p in enumerate(fsq)
         ]
+        if q:
+            items = [it for it in items if it.name and q.lower() in it.name.lower()]
+        if place_type:
+            items = [it for it in items if it.categories and place_type.lower() in str(it.categories).lower()]
+        if min_rating is not None:
+            items = [it for it in items if (it.rating or 0) >= min_rating]
         return PaginatedPlaces(items=items, total=len(items), limit=limit, offset=offset)
 
     # Use last 7 days for global trending
@@ -1034,8 +1100,7 @@ async def get_global_trending_places(
         ))
     )
 
-    if city:
-        trending_base = trending_base.where(Place.city.ilike(city))
+    # No city filter for global trending
 
     trending_subq = (
         trending_base
