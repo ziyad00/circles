@@ -229,7 +229,18 @@ class SampleDataPopulator:
             places.append(place)
 
         await session.commit()
-        print(f"Created {len(places)} places")
+        # Backfill city for Riyadh bounding box if missing
+        updated = 0
+        for p in places:
+            if getattr(p, 'city', None) in (None, '') and getattr(p, 'latitude', None) is not None and getattr(p, 'longitude', None) is not None:
+                lat, lon = p.latitude, p.longitude
+                if 24.3 <= lat <= 25.2 and 46.2 <= lon <= 47.3:
+                    p.city = "Riyadh"
+                    updated += 1
+        if updated:
+            await session.commit()
+        print(
+            f"Created {len(places)} places (city backfilled for Riyadh: {updated})")
         return places
 
     async def create_follows(self, session, users: List[User]):

@@ -8,11 +8,78 @@ import json
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
-from ..models import DMThread, DMParticipantState, DMMessage, User
+from ..models import DMThread, DMParticipantState, DMMessage, User, CheckIn
 from ..config import settings
 
 
 router = APIRouter()
+
+
+@router.websocket("/ws/places/{place_id}/chat")
+async def place_chat_ws(websocket: WebSocket, place_id: int, db: AsyncSession = Depends(get_db)):
+    user_id = await _authenticate(websocket)
+    if not user_id:
+        await websocket.close(code=4401)
+        return
+
+    # Only allow users with a recent check-in within window
+    window_start = datetime.now(
+        timezone.utc) - timedelta(hours=int(settings.place_chat_window_hours))
+    res = await db.execute(
+        select(CheckIn).where(
+            CheckIn.user_id == user_id,
+            CheckIn.place_id == place_id,
+            CheckIn.created_at >= window_start,
+        )
+    )
+    recent = res.scalar_one_or_none()
+    if not recent:
+        await websocket.close(code=4403)
+        return
+
+    # Use a synthetic thread id for room: negative ID space to avoid collision
+    thread_id = -int(place_id)
+    await manager.connect(thread_id, user_id, websocket)
+
+    try:
+        await websocket.send_json({"type": "connection_established", "place_id": place_id, "user_id": user_id, "window_hours": settings.place_chat_window_hours})
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = {"type": "message", "text": raw}
+
+            msg_type = data.get("type")
+            if msg_type == "ping":
+                manager.update_ping(thread_id, user_id, websocket)
+                await websocket.send_json({"type": "pong"})
+                continue
+
+            if msg_type == "typing":
+                await manager.broadcast_typing(thread_id, user_id, bool(data.get("typing", True)))
+                continue
+
+            if msg_type == "message":
+                text = (data.get("text") or "").strip()
+                if not text:
+                    continue
+                payload = {
+                    "type": "message",
+                    "place_id": place_id,
+                    "user_id": user_id,
+                    "text": text,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                await manager.broadcast(thread_id, user_id, payload)
+                continue
+
+            # Unknown types ignored
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        manager.disconnect(thread_id, user_id, websocket)
 
 
 class ConnectionManager:

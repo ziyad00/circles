@@ -9,6 +9,7 @@ from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, C
 from ..schemas import (
     UserUpdate,
     PublicUserResponse,
+    PublicUserSearchResponse,
     InterestCreate,
     InterestResponse,
     PaginatedCheckIns,
@@ -22,13 +23,27 @@ from ..schemas import (
 router = APIRouter(prefix="/users", tags=["users"])
 
 
-@router.post("/search", response_model=list[PublicUserResponse])
+@router.post("/search", response_model=list[PublicUserSearchResponse])
 async def search_users(
     filters: UserSearchFilters,
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(User)
+    # Subquery to mark if current_user follows a given user
+    followed_subq = (
+        select(Follow.followee_id)
+        .where(Follow.follower_id == current_user.id)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            User,
+            case((followed_subq.c.followee_id.is_not(None), True),
+                 else_=False).label("followed"),
+        )
+        .outerjoin(followed_subq, User.id == followed_subq.c.followee_id)
+    )
     if filters.q:
         like = f"%{filters.q}%"
         stmt = stmt.where(User.name.ilike(like) | User.username.ilike(like))
@@ -47,7 +62,22 @@ async def search_users(
         )
         stmt = stmt.where(User.id.in_(select(subq.c.user_id)))
     stmt = stmt.offset(filters.offset).limit(filters.limit)
-    return (await db.execute(stmt)).scalars().all()
+
+    res = await db.execute(stmt)
+    items = []
+    for user, followed in res.all():
+        items.append(
+            PublicUserSearchResponse(
+                id=user.id,
+                name=user.name,
+                bio=user.bio,
+                avatar_url=user.avatar_url,
+                created_at=user.created_at,
+                username=user.username,
+                followed=bool(followed),
+            )
+        )
+    return items
 
 
 @router.get("/{user_id}", response_model=PublicUserResponse)
@@ -56,7 +86,24 @@ async def get_user_profile(user_id: int, db: AsyncSession = Depends(get_db)):
     user = res.scalars().first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return user
+
+    followers_count = await db.scalar(
+        select(func.count()).where(Follow.followee_id == user.id)
+    )
+    following_count = await db.scalar(
+        select(func.count()).where(Follow.follower_id == user.id)
+    )
+
+    return PublicUserResponse(
+        id=user.id,
+        name=user.name,
+        username=user.username,
+        bio=user.bio,
+        avatar_url=user.avatar_url,
+        created_at=user.created_at,
+        followers_count=followers_count,
+        following_count=following_count,
+    )
 
 
 @router.put("/me", response_model=PublicUserResponse)
