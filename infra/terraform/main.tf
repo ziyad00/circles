@@ -221,6 +221,10 @@ resource "aws_ecs_task_definition" "app" {
         { name = "APP_STORAGE_BACKEND", value = "s3" },
         { name = "S3_BUCKET", value = aws_s3_bucket.media.bucket },
         { name = "S3_REGION", value = var.aws_region },
+        { name = "APP_JWT_EXPIRY_MINUTES", value = "20160" },
+        { name = "APP_FSQ_TRENDING_OVERRIDE", value = "false" },
+        { name = "APP_FSQ_TRENDING_ENABLED", value = "true" },
+        { name = "APP_CHECKIN_MAX_DISTANCE_METERS", value = "1000" },
       ]
       secrets = [
         { name = "APP_JWT_SECRET_KEY", valueFrom = "${aws_secretsmanager_secret.app.arn}:APP_JWT_SECRET_KEY::" },

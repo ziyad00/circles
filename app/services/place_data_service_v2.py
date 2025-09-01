@@ -145,6 +145,77 @@ class EnhancedPlaceDataService:
             except Exception:
                 return []
 
+    async def fetch_foursquare_trending_city(
+        self,
+        city: str,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Fetch trending venues from Foursquare by city name (no radius).
+
+        Uses places/search with the `near` parameter and optional popularity bias.
+        """
+        if not self.foursquare_api_key or self.foursquare_api_key == "demo_key_for_testing":
+            return []
+
+        city_key = city.strip().lower()
+        cache_key = f"fsq_trending_city:{city_key}:{limit}"
+        cached = self._cache_get(self._cache_discovery, cache_key)
+        if cached is not None:
+            return cached
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.http_timeout_seconds)) as client:
+            url = "https://api.foursquare.com/v3/places/search"
+            headers = {"Authorization": self.foursquare_api_key,
+                       "Accept": "application/json"}
+            params = {
+                "near": city,
+                "limit": min(limit * 2, 50),
+                "sort": "POPULARITY",
+                "fields": "fsq_id,name,location,geocodes,categories,rating,stats,hours,website,tel",
+            }
+
+            try:
+                resp = await client.get(url, headers=headers, params=params)
+                if resp.status_code == 400 and 'sort' in resp.text:
+                    params.pop("sort", None)
+                    resp = await client.get(url, headers=headers, params=params)
+                if resp.status_code != 200:
+                    return []
+
+                data = resp.json()
+                venues = data.get("results", [])
+                results: List[Dict[str, Any]] = []
+                for v in venues[:limit]:
+                    loc = v.get("geocodes", {}).get("main") or {}
+                    vlat = (loc.get("latitude") if loc else None) or v.get(
+                        "location", {}).get("latitude")
+                    vlon = (loc.get("longitude") if loc else None) or v.get(
+                        "location", {}).get("longitude")
+                    results.append({
+                        "id": None,
+                        "name": v.get("name"),
+                        "latitude": vlat,
+                        "longitude": vlon,
+                        "categories": ",".join([c.get("name", "") for c in v.get("categories", [])]) or None,
+                        "rating": v.get("rating"),
+                        "phone": v.get("tel"),
+                        "website": v.get("website"),
+                        "external_id": v.get("fsq_id"),
+                        "data_source": "foursquare",
+                        "metadata": {
+                            "foursquare_id": v.get("fsq_id"),
+                            "review_count": v.get("stats", {}).get("total_ratings"),
+                            "photo_count": v.get("stats", {}).get("total_photos"),
+                            "opening_hours": v.get("hours", {}).get("display"),
+                            "discovery_source": "foursquare_trending_city",
+                        },
+                    })
+
+                self._cache_set(self._cache_discovery, cache_key, results)
+                return results
+            except Exception:
+                return []
+
     async def seed_from_osm_overpass(self, db: AsyncSession, bbox: Tuple[float, float, float, float]):
         """
         Seed places from OpenStreetMap Overpass API

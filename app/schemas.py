@@ -473,6 +473,8 @@ class FollowUserResponse(BaseModel):
     is_verified: bool
     created_at: datetime
     followed_at: datetime
+    # Whether the current user follows this user
+    followed: bool = False
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -494,6 +496,18 @@ class PaginatedFollowing(BaseModel):
     offset: int
 
 
+# Users search result with follow status relative to current user
+class PublicUserSearchResponse(BaseModel):
+    id: int
+    name: Optional[str] = None
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+    created_at: datetime
+    username: Optional[str] = None
+    followed: bool = False
+    model_config = ConfigDict(from_attributes=True)
+
+
 class HeartResponse(BaseModel):
     liked: bool
     heart_count: int
@@ -511,9 +525,12 @@ class UserUpdate(BaseModel):
 class PublicUserResponse(BaseModel):
     id: int
     name: Optional[str] = None
+    username: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
     created_at: datetime
+    followers_count: Optional[int] = None
+    following_count: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 

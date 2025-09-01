@@ -114,6 +114,11 @@ class Settings(BaseSettings):
         default=5000, env="FSQ_TRENDING_RADIUS_M"
     )
 
+    # Place chat (ephemeral, check-in gated)
+    place_chat_window_hours: int = Field(
+        default=12, env="PLACE_CHAT_WINDOW_HOURS"
+    )
+
     # Auto-seeding
     autoseed_enabled: bool = Field(default=True, env="AUTOSEED_ENABLED")
     autoseed_min_osm_count: int = Field(

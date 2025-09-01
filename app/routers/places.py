@@ -749,6 +749,8 @@ async def get_trending_places(
     offset: int = Query(0, ge=0),
     lat: float | None = Query(None),
     lng: float | None = Query(None),
+    city: str | None = Query(
+        None, description="City name (e.g., 'Riyadh'). If provided and FSQ override is enabled, trending is fetched for this city instead of radius."),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -785,13 +787,17 @@ async def get_trending_places(
     - Location-aware trending
     - Activity-based discovery
     """
-    # FSQ override: always use Foursquare-based trending if enabled
+    # FSQ override: use Foursquare-based trending if enabled
     from ..config import settings as app_settings
     if app_settings.fsq_trending_override:
-        if lat is None or lng is None:
-            raise HTTPException(
-                status_code=400, detail="lat,lng required for FSQ trending override")
-        fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
+        # If city provided, use city-based trending (no radius)
+        if city:
+            fsq = await enhanced_place_data_service.fetch_foursquare_trending_city(city=city, limit=limit)
+        else:
+            if lat is None or lng is None:
+                raise HTTPException(
+                    status_code=400, detail="Provide either city or lat,lng for FSQ trending override")
+            fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
         now_ts = datetime.now(timezone.utc)
         items = [
             PlaceResponse(
@@ -828,7 +834,7 @@ async def get_trending_places(
 
     # Build trending score query
     # Score = (check-ins * 3) + (reviews * 2) + (photos * 1) + (unique users * 2)
-    trending_subq = (
+    trending_base = (
         select(
             Place.id,
             Place.name,
@@ -870,6 +876,13 @@ async def get_trending_places(
             Review.id == Photo.review_id,
             Photo.created_at >= window_start
         ))
+    )
+
+    if city:
+        trending_base = trending_base.where(Place.city.ilike(city))
+
+    trending_subq = (
+        trending_base
         .group_by(Place.id)
         .having(
             or_(
@@ -940,16 +953,21 @@ async def get_global_trending_places(
     offset: int = Query(0, ge=0),
     lat: float | None = Query(None),
     lng: float | None = Query(None),
+    city: str | None = Query(
+        None, description="City name (e.g., 'Riyadh'). If provided and FSQ override is enabled, trending is fetched for this city."),
     db: AsyncSession = Depends(get_db),
 ):
     """Get globally trending places (no auth required)"""
     from ..config import settings as app_settings
     # FSQ override: always use Foursquare-based trending if enabled
     if app_settings.fsq_trending_override:
-        if lat is None or lng is None:
-            raise HTTPException(
-                status_code=400, detail="lat,lng required for FSQ trending override")
-        fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
+        if city:
+            fsq = await enhanced_place_data_service.fetch_foursquare_trending_city(city=city, limit=limit)
+        else:
+            if lat is None or lng is None:
+                raise HTTPException(
+                    status_code=400, detail="Provide either city or lat,lng for FSQ trending override")
+            fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
         now_ts = datetime.now(timezone.utc)
         items = [
             PlaceResponse(
@@ -972,7 +990,7 @@ async def get_global_trending_places(
     window_start = datetime.now(timezone.utc) - timedelta(days=7)
 
     # Build trending score query
-    trending_subq = (
+    trending_base = (
         select(
             Place.id,
             Place.name,
@@ -1014,6 +1032,13 @@ async def get_global_trending_places(
             Review.id == Photo.review_id,
             Photo.created_at >= window_start
         ))
+    )
+
+    if city:
+        trending_base = trending_base.where(Place.city.ilike(city))
+
+    trending_subq = (
+        trending_base
         .group_by(Place.id)
         .having(
             or_(
