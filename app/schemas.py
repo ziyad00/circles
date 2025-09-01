@@ -57,6 +57,7 @@ class ErrorResponse(BaseModel):
 class PlaceBase(BaseModel):
     name: str = Field(..., examples=["Blue Bottle Coffee"])
     address: Optional[str] = Field(None, examples=["123 Market St"])
+    country: Optional[str] = Field(None, examples=["Saudi Arabia"])
     city: Optional[str] = Field(None, examples=["San Francisco"])
     neighborhood: Optional[str] = Field(None, examples=["SoMa"])
     latitude: Optional[float] = Field(None, examples=[37.781])
@@ -248,6 +249,7 @@ class EnhancedPlaceResponse(BaseModel):
     id: int
     name: str
     address: Optional[str] = None
+    country: Optional[str] = None
     city: Optional[str] = None
     neighborhood: Optional[str] = None
     latitude: Optional[float] = None

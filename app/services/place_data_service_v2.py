@@ -450,6 +450,34 @@ class EnhancedPlaceDataService:
             f"All Overpass endpoints failed. Last error: {last_error}")
         return []
 
+    async def reverse_geocode_city(self, lat: float, lon: float) -> Optional[str]:
+        """Resolve a city name from coordinates using Nominatim.
+
+        Returns a plain city/locality string or None on failure.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(settings.http_timeout_seconds)) as client:
+                url = "https://nominatim.openstreetmap.org/reverse"
+                params = {
+                    "lat": lat,
+                    "lon": lon,
+                    "format": "json",
+                    "zoom": 10,
+                    "addressdetails": 1,
+                }
+                headers = {
+                    "User-Agent": "circles-backend/1.0 (reverse-geocode)"
+                }
+                r = await client.get(url, params=params, headers=headers)
+                if r.status_code != 200:
+                    return None
+                data = r.json() or {}
+                addr = data.get("address", {})
+                # prefer city, then town, then village, then state_district
+                return addr.get("city") or addr.get("town") or addr.get("village") or addr.get("state_district")
+        except Exception:
+            return None
+
     def _parse_overpass_element(self, element: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Parse Overpass element into place data"""
         try:
