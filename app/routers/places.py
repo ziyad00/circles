@@ -781,6 +781,8 @@ async def get_trending_places(
     q: str | None = Query(None, description="Search text for place name"),
     place_type: str | None = Query(
         None, description="Category contains (e.g., cafe)"),
+    country: str | None = Query(None, description="Country filter (optional)"),
+    city: str | None = Query(None, description="City filter (optional)"),
     neighborhood: str | None = Query(
         None, description="Neighborhood contains"),
     min_rating: float | None = Query(
@@ -829,12 +831,13 @@ async def get_trending_places(
 
     # Derive geo details via reverse geocoding (Nominatim)
     geo = await enhanced_place_data_service.reverse_geocode_details(lat=lat, lon=lng)
-    inferred_city = geo.get("city")
+    inferred_city = city or geo.get("city")
     inferred_neighborhood = geo.get("neighborhood")
 
     # FSQ override: use Foursquare-based trending by inferred city if enabled
     from ..config import settings as app_settings
     if app_settings.fsq_trending_override:
+        # Prefer explicit city, else inferred; fallback to lat/lng search
         if inferred_city:
             fsq = await enhanced_place_data_service.fetch_foursquare_trending_city(city=inferred_city, limit=limit)
         else:
@@ -932,7 +935,11 @@ async def get_trending_places(
         ))
     )
 
-    trending_base = trending_base.where(Place.city.ilike(inferred_city))
+    # Apply location filters: prefer explicit params, else inferred city
+    if country:
+        trending_base = trending_base.where(Place.country.ilike(country))
+    if inferred_city:
+        trending_base = trending_base.where(Place.city.ilike(inferred_city))
     # Only narrow by neighborhood if explicitly provided
     if neighborhood:
         trending_base = trending_base.where(
