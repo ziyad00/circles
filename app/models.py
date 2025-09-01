@@ -71,6 +71,9 @@ class Place(Base):
     longitude = Column(Float, nullable=True)
     categories = Column(String, nullable=True)  # comma-separated categories
     rating = Column(Float, nullable=True)
+    description = Column(Text, nullable=True)
+    # Price tier: "$", "$$", "$$$", "$$$$"
+    price_tier = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # External data source fields

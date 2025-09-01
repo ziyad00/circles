@@ -234,9 +234,12 @@ async def list_user_checkins(
     visible = visible_checkins[start_idx:end_idx]
     # hydrate photo_urls
     result: list[CheckInResponse] = []
+    from ..config import settings as app_settings
     for ci in visible:
         res_ph = await db.execute(select(CheckInPhoto).where(CheckInPhoto.check_in_id == ci.id).order_by(CheckInPhoto.created_at.asc()))
         urls = [p.url for p in res_ph.scalars().all()]
+        allowed = (datetime.now(timezone.utc) -
+                   ci.created_at) <= timedelta(hours=app_settings.place_chat_window_hours)
         result.append(
             CheckInResponse(
                 id=ci.id,
@@ -248,6 +251,7 @@ async def list_user_checkins(
                 expires_at=ci.expires_at,
                 photo_url=ci.photo_url,
                 photo_urls=urls,
+                allowed_to_chat=allowed,
             )
         )
     return PaginatedCheckIns(items=result, total=total_visible, limit=limit, offset=offset)

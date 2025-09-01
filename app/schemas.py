@@ -61,6 +61,8 @@ class PlaceBase(BaseModel):
     neighborhood: Optional[str] = Field(None, examples=["SoMa"])
     latitude: Optional[float] = Field(None, examples=[37.781])
     longitude: Optional[float] = Field(None, examples=[-122.404])
+    description: Optional[str] = Field(
+        None, examples=["Specialty coffee and pastries in a modern space."])
     # Accept either a comma-separated string or a list of strings
     categories: Optional[Union[str, List[str]]] = Field(
         None, examples=[["coffee", "cafe"], "coffee,cafe"]
@@ -108,6 +110,8 @@ class CheckInResponse(BaseModel):
     photo_url: Optional[str] = None
     # New: multiple photos
     photo_urls: list[str] = []
+    # Whether this check-in is still eligible for place chat (within window)
+    allowed_to_chat: bool = False
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -250,6 +254,9 @@ class EnhancedPlaceResponse(BaseModel):
     longitude: Optional[float] = None
     categories: Optional[str] = None
     rating: Optional[float] = None
+    description: Optional[str] = None
+    # Price tier as $, $$, $$$, $$$$
+    price_tier: Optional[str] = None
     created_at: datetime
     # Enhanced stats
     stats: PlaceStats
@@ -352,6 +359,7 @@ class DetailedCheckInResponse(BaseModel):
     likes_count: int = 0
     comments_count: int = 0
     is_liked_by_user: bool = False
+    allowed_to_chat: bool = False
     model_config = ConfigDict(from_attributes=True)
 
 

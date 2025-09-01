@@ -1262,6 +1262,8 @@ async def get_place_details(
         longitude=place.longitude,
         categories=place.categories,
         rating=place.rating,
+        description=getattr(place, "description", None),
+        price_tier=getattr(place, "price_tier", None),
         created_at=place.created_at,
         stats=stats,
         current_checkins=current_checkins,
@@ -1665,7 +1667,22 @@ async def create_check_in(
         logger.error(
             f"Failed to create activity for check-in {check_in.id}: {e}")
 
-    return check_in
+    # compute allowed_to_chat
+    from ..config import settings as app_settings
+    allowed = (datetime.now(timezone.utc) -
+               check_in.created_at) <= timedelta(hours=app_settings.place_chat_window_hours)
+    return CheckInResponse(
+        id=check_in.id,
+        user_id=check_in.user_id,
+        place_id=check_in.place_id,
+        note=check_in.note,
+        visibility=check_in.visibility,
+        created_at=check_in.created_at,
+        expires_at=check_in.expires_at,
+        photo_url=check_in.photo_url,
+        photo_urls=[],
+        allowed_to_chat=allowed,
+    )
 
 
 @router.post("/check-ins/full", response_model=CheckInResponse)
@@ -1904,6 +1921,9 @@ async def upload_checkin_photo(
     # enrich response with photo_urls
     res_ph = await db.execute(select(CheckInPhoto).where(CheckInPhoto.check_in_id == check_in_id).order_by(CheckInPhoto.created_at.asc()))
     photo_urls = [p.url for p in res_ph.scalars().all()]
+    from ..config import settings as app_settings
+    allowed = (datetime.now(timezone.utc) -
+               checkin.created_at) <= timedelta(hours=app_settings.place_chat_window_hours)
     return CheckInResponse(
         id=checkin.id,
         user_id=checkin.user_id,
@@ -1914,6 +1934,7 @@ async def upload_checkin_photo(
         expires_at=checkin.expires_at,
         photo_url=checkin.photo_url,
         photo_urls=photo_urls,
+        allowed_to_chat=allowed,
     )
 
 
@@ -2055,6 +2076,9 @@ async def whos_here(
             .order_by(CheckInPhoto.created_at.asc())
         )
         urls = [p.url for p in res_ph.scalars().all()]
+        from ..config import settings as app_settings
+        allowed = (datetime.now(timezone.utc) -
+                   ci.created_at) <= timedelta(hours=app_settings.place_chat_window_hours)
         result.append(
             CheckInResponse(
                 id=ci.id,
@@ -2066,6 +2090,7 @@ async def whos_here(
                 expires_at=ci.expires_at,
                 photo_url=ci.photo_url,
                 photo_urls=urls,
+                allowed_to_chat=allowed,
             )
         )
     return result
@@ -2123,6 +2148,9 @@ async def my_check_ins(
             .order_by(CheckInPhoto.created_at.asc())
         )
         urls = [p.url for p in res_ph.scalars().all()]
+        from ..config import settings as app_settings
+        allowed = (datetime.now(timezone.utc) -
+                   ci.created_at) <= timedelta(hours=app_settings.place_chat_window_hours)
         enriched.append(
             CheckInResponse(
                 id=ci.id,
@@ -2134,6 +2162,7 @@ async def my_check_ins(
                 expires_at=ci.expires_at,
                 photo_url=ci.photo_url,
                 photo_urls=urls,
+                allowed_to_chat=allowed,
             )
         )
     return PaginatedCheckIns(items=enriched, total=total, limit=limit, offset=offset)
