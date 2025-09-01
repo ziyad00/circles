@@ -85,6 +85,7 @@ async def lookup_neighborhoods(country: str, city: str, db: AsyncSession = Depen
     res = await db.execute(stmt)
     return [r[0] for r in res.all() if r[0]]
 
+
 @router.post("/", response_model=PlaceResponse)
 async def create_place(payload: PlaceCreate, db: AsyncSession = Depends(get_db)):
     """
@@ -778,11 +779,12 @@ async def get_trending_places(
     lng: float | None = Query(
         None, description="Longitude of the user location"),
     q: str | None = Query(None, description="Search text for place name"),
-    place_type: str | None = Query(None, description="Category contains (e.g., cafe)"),
-    country: str | None = Query(None, description="Country name to filter"),
-    city: str | None = Query(None, description="City name to filter (overrides inferred)"),
-    neighborhood: str | None = Query(None, description="Neighborhood contains"),
-    min_rating: float | None = Query(None, ge=0, le=5, description="Minimum rating"),
+    place_type: str | None = Query(
+        None, description="Category contains (e.g., cafe)"),
+    neighborhood: str | None = Query(
+        None, description="Neighborhood contains"),
+    min_rating: float | None = Query(
+        None, ge=0, le=5, description="Minimum rating"),
     price_tier: str | None = Query(None, description="$, $$, $$$, $$$$"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -825,8 +827,10 @@ async def get_trending_places(
         raise HTTPException(
             status_code=400, detail="lat and lng are required for local trending")
 
-    # Derive city via reverse geocoding (Nominatim)
-    inferred_city = city or await enhanced_place_data_service.reverse_geocode_city(lat=lat, lon=lng)
+    # Derive geo details via reverse geocoding (Nominatim)
+    geo = await enhanced_place_data_service.reverse_geocode_details(lat=lat, lon=lng)
+    inferred_city = geo.get("city")
+    inferred_neighborhood = geo.get("neighborhood")
 
     # FSQ override: use Foursquare-based trending by inferred city if enabled
     from ..config import settings as app_settings
@@ -853,9 +857,11 @@ async def get_trending_places(
         ]
         # client-side like filters server-applied on FSQ set
         if q:
-            items = [it for it in items if it.name and q.lower() in it.name.lower()]
+            items = [it for it in items if it.name and q.lower()
+                     in it.name.lower()]
         if place_type:
-            items = [it for it in items if it.categories and place_type.lower() in str(it.categories).lower()]
+            items = [it for it in items if it.categories and place_type.lower() in str(
+                it.categories).lower()]
         if min_rating is not None:
             items = [it for it in items if (it.rating or 0) >= min_rating]
         return PaginatedPlaces(items=items, total=len(items), limit=limit, offset=offset)
@@ -927,14 +933,18 @@ async def get_trending_places(
     )
 
     trending_base = trending_base.where(Place.city.ilike(inferred_city))
-    if country:
-        trending_base = trending_base.where(Place.country.ilike(country))
+    # Only narrow by neighborhood if explicitly provided
+    if neighborhood:
+        trending_base = trending_base.where(
+            Place.neighborhood.ilike(f"%{neighborhood}%"))
     if q:
         trending_base = trending_base.where(Place.name.ilike(f"%{q}%"))
     if place_type:
-        trending_base = trending_base.where(Place.categories.ilike(f"%{place_type}%"))
+        trending_base = trending_base.where(
+            Place.categories.ilike(f"%{place_type}%"))
     if neighborhood:
-        trending_base = trending_base.where(Place.neighborhood.ilike(f"%{neighborhood}%"))
+        trending_base = trending_base.where(
+            Place.neighborhood.ilike(f"%{neighborhood}%"))
     if min_rating is not None:
         trending_base = trending_base.where(Place.rating >= min_rating)
     if price_tier:
@@ -1045,9 +1055,11 @@ async def get_global_trending_places(
             for idx, p in enumerate(fsq)
         ]
         if q:
-            items = [it for it in items if it.name and q.lower() in it.name.lower()]
+            items = [it for it in items if it.name and q.lower()
+                     in it.name.lower()]
         if place_type:
-            items = [it for it in items if it.categories and place_type.lower() in str(it.categories).lower()]
+            items = [it for it in items if it.categories and place_type.lower() in str(
+                it.categories).lower()]
         if min_rating is not None:
             items = [it for it in items if (it.rating or 0) >= min_rating]
         return PaginatedPlaces(items=items, total=len(items), limit=limit, offset=offset)

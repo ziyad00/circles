@@ -478,6 +478,45 @@ class EnhancedPlaceDataService:
         except Exception:
             return None
 
+    async def reverse_geocode_details(self, lat: float, lon: float) -> Dict[str, Optional[str]]:
+        """Resolve country, city, and neighborhood/suburb from coordinates.
+
+        Returns keys: country, city, neighborhood (values may be None).
+        """
+        result: Dict[str, Optional[str]] = {
+            "country": None, "city": None, "neighborhood": None}
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(settings.http_timeout_seconds)) as client:
+                url = "https://nominatim.openstreetmap.org/reverse"
+                params = {
+                    "lat": lat,
+                    "lon": lon,
+                    "format": "json",
+                    "zoom": 14,
+                    "addressdetails": 1,
+                }
+                headers = {
+                    "User-Agent": "circles-backend/1.0 (reverse-geocode-details)"}
+                r = await client.get(url, params=params, headers=headers)
+                if r.status_code != 200:
+                    return result
+                data = r.json() or {}
+                addr = data.get("address", {})
+                country = addr.get("country")
+                city = addr.get("city") or addr.get("town") or addr.get(
+                    "village") or addr.get("state_district")
+                neighborhood = (
+                    addr.get("neighbourhood")
+                    or addr.get("neighborhood")
+                    or addr.get("suburb")
+                    or addr.get("quarter")
+                )
+                result.update({"country": country, "city": city,
+                              "neighborhood": neighborhood})
+                return result
+        except Exception:
+            return result
+
     def _parse_overpass_element(self, element: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Parse Overpass element into place data"""
         try:
