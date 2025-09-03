@@ -10,6 +10,12 @@ Usage:
     python scripts/populate_sample_data.py
 """
 
+import sys
+import os
+
+# Ensure project root is importable before importing app.* modules
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select
 from app.services.jwt_service import JWTService
@@ -22,14 +28,9 @@ from app.models import (
 )
 from app.database import AsyncSessionLocal
 import asyncio
-import sys
-import os
 from datetime import datetime, timedelta
 from typing import List, Optional
 import random
-
-# Add the project root to the Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class SampleDataPopulator:

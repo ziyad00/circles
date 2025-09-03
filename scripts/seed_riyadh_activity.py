@@ -1,8 +1,13 @@
+import sys
+import os
 import asyncio
 import random
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+
+# Ensure project root on path for app.* imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import AsyncSessionLocal
 from app.models import User, Place, CheckIn

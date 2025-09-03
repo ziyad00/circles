@@ -4,18 +4,16 @@ Initial Place Seeding Script
 Seeds major cities with OSM Overpass data
 """
 
-from app.database import get_db
-from app.services.place_data_service_v2 import enhanced_place_data_service
-import asyncio
 import sys
 import os
+import asyncio
 from datetime import datetime
 
-# Add the app directory to the path
+# Ensure project root on path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-# Import after path setup
-
+from app.database import get_db
+from app.services.place_data_service_v2 import enhanced_place_data_service
 
 # Major Saudi cities to seed
 MAJOR_CITIES = [
