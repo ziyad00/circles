@@ -3,12 +3,38 @@ import logging
 from typing import Optional
 
 from ..config import settings
+import os as _os
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 
 class StorageService:
+    @staticmethod
+    def _resolved_s3_config():
+        bucket = settings.s3_bucket or _os.getenv(
+            "APP_S3_BUCKET") or _os.getenv("S3_BUCKET")
+        region = settings.s3_region or _os.getenv(
+            "APP_S3_REGION") or _os.getenv("S3_REGION")
+        endpoint = settings.s3_endpoint_url or _os.getenv(
+            "APP_S3_ENDPOINT_URL") or _os.getenv("S3_ENDPOINT_URL")
+        public_base = settings.s3_public_base_url or _os.getenv(
+            "APP_S3_PUBLIC_BASE_URL") or _os.getenv("S3_PUBLIC_BASE_URL")
+        use_path_style_env = _os.getenv(
+            "APP_S3_USE_PATH_STYLE") or _os.getenv("S3_USE_PATH_STYLE")
+        try:
+            use_path_style = settings.s3_use_path_style if use_path_style_env is None else str(
+                use_path_style_env).lower() in ("1", "true", "yes")
+        except Exception:
+            use_path_style = settings.s3_use_path_style
+        return {
+            "bucket": bucket,
+            "region": region,
+            "endpoint": endpoint,
+            "public_base": public_base,
+            "use_path_style": use_path_style,
+        }
+
     @staticmethod
     async def save_review_photo(review_id: int, filename: str, content: bytes) -> str:
         _validate_image_or_raise(filename, content)
@@ -37,15 +63,16 @@ class StorageService:
     async def delete_review_photo(review_id: int, filename: str) -> None:
         if settings.storage_backend == "s3":
             import boto3
+            cfg = StorageService._resolved_s3_config()
             session = boto3.session.Session(
                 aws_access_key_id=settings.s3_access_key_id,
                 aws_secret_access_key=settings.s3_secret_access_key,
-                region_name=settings.s3_region,
+                region_name=cfg["region"],
             )
-            s3 = session.client("s3", endpoint_url=settings.s3_endpoint_url)
+            s3 = session.client("s3", endpoint_url=cfg["endpoint"])
             key = f"reviews/{review_id}/{filename}"
             try:
-                s3.delete_object(Bucket=settings.s3_bucket, Key=key)
+                s3.delete_object(Bucket=cfg["bucket"], Key=key)
             except Exception as e:
                 logger.error(f"Failed to delete S3 review photo {key}: {e}")
         else:
@@ -66,32 +93,38 @@ class StorageService:
         from botocore.config import Config as BotoConfig
         import asyncio
 
+        cfg = StorageService._resolved_s3_config()
+
+        if not cfg["bucket"]:
+            raise ValueError(
+                "S3 bucket is not configured. Set S3_BUCKET or APP_S3_BUCKET.")
+
         def _upload_to_s3():
             session = boto3.session.Session(
                 aws_access_key_id=settings.s3_access_key_id,
                 aws_secret_access_key=settings.s3_secret_access_key,
-                region_name=settings.s3_region,
+                region_name=cfg["region"],
             )
             s3 = session.client(
                 "s3",
-                endpoint_url=settings.s3_endpoint_url,
+                endpoint_url=cfg["endpoint"],
                 config=BotoConfig(
-                    s3={"addressing_style": "path" if settings.s3_use_path_style else "auto"}),
+                    s3={"addressing_style": "path" if cfg["use_path_style"] else "auto"}),
             )
             key = f"reviews/{review_id}/{filename}"
-            s3.put_object(Bucket=settings.s3_bucket, Key=key,
+            s3.put_object(Bucket=cfg["bucket"], Key=key,
                           Body=content, ContentType=_guess_content_type(filename))
             return key
 
         # Run S3 upload in thread pool to avoid blocking event loop
         key = await asyncio.to_thread(_upload_to_s3)
 
-        if settings.s3_public_base_url:
-            return f"{settings.s3_public_base_url.rstrip('/')}/{key}"
+        if cfg["public_base"]:
+            return f"{cfg['public_base'].rstrip('/')}/{key}"
         # fallback to virtual-hosted style if possible
-        host = settings.s3_endpoint_url.rstrip(
-            '/') if settings.s3_endpoint_url else f"https://{settings.s3_bucket}.s3.amazonaws.com"
-        return f"{host}/{settings.s3_bucket}/{key}" if settings.s3_use_path_style else f"https://{settings.s3_bucket}.s3.amazonaws.com/{key}"
+        host = cfg["endpoint"].rstrip(
+            '/') if cfg["endpoint"] else f"https://{cfg['bucket']}.s3.amazonaws.com"
+        return f"{host}/{cfg['bucket']}/{key}" if cfg["use_path_style"] else f"https://{cfg['bucket']}.s3.amazonaws.com/{key}"
 
     @staticmethod
     async def _save_checkin_local(check_in_id: int, filename: str, content: bytes) -> str:
@@ -107,15 +140,16 @@ class StorageService:
     async def delete_checkin_photo(check_in_id: int, filename: str) -> None:
         if settings.storage_backend == "s3":
             import boto3
+            cfg = StorageService._resolved_s3_config()
             session = boto3.session.Session(
                 aws_access_key_id=settings.s3_access_key_id,
                 aws_secret_access_key=settings.s3_secret_access_key,
-                region_name=settings.s3_region,
+                region_name=cfg["region"],
             )
-            s3 = session.client("s3", endpoint_url=settings.s3_endpoint_url)
+            s3 = session.client("s3", endpoint_url=cfg["endpoint"])
             key = f"checkins/{check_in_id}/{filename}"
             try:
-                s3.delete_object(Bucket=settings.s3_bucket, Key=key)
+                s3.delete_object(Bucket=cfg["bucket"], Key=key)
             except Exception as e:
                 logger.error(f"Failed to delete S3 checkin photo {key}: {e}")
         else:
@@ -136,31 +170,37 @@ class StorageService:
         from botocore.config import Config as BotoConfig
         import asyncio
 
+        cfg = StorageService._resolved_s3_config()
+
+        if not cfg["bucket"]:
+            raise ValueError(
+                "S3 bucket is not configured. Set S3_BUCKET or APP_S3_BUCKET.")
+
         def _upload_checkin_to_s3():
             session = boto3.session.Session(
                 aws_access_key_id=settings.s3_access_key_id,
                 aws_secret_access_key=settings.s3_secret_access_key,
-                region_name=settings.s3_region,
+                region_name=cfg["region"],
             )
             s3 = session.client(
                 "s3",
-                endpoint_url=settings.s3_endpoint_url,
+                endpoint_url=cfg["endpoint"],
                 config=BotoConfig(
-                    s3={"addressing_style": "path" if settings.s3_use_path_style else "auto"}),
+                    s3={"addressing_style": "path" if cfg["use_path_style"] else "auto"}),
             )
             key = f"checkins/{check_in_id}/{filename}"
-            s3.put_object(Bucket=settings.s3_bucket, Key=key,
+            s3.put_object(Bucket=cfg["bucket"], Key=key,
                           Body=content, ContentType=_guess_content_type(filename))
             return key
 
         # Run S3 upload in thread pool to avoid blocking event loop
         key = await asyncio.to_thread(_upload_checkin_to_s3)
 
-        if settings.s3_public_base_url:
-            return f"{settings.s3_public_base_url.rstrip('/')}/{key}"
-        host = settings.s3_endpoint_url.rstrip(
-            '/') if settings.s3_endpoint_url else f"https://{settings.s3_bucket}.s3.amazonaws.com"
-        return f"{host}/{settings.s3_bucket}/{key}" if settings.s3_use_path_style else f"https://{settings.s3_bucket}.s3.amazonaws.com/{key}"
+        if cfg["public_base"]:
+            return f"{cfg['public_base'].rstrip('/')}/{key}"
+        host = cfg["endpoint"].rstrip(
+            '/') if cfg["endpoint"] else f"https://{cfg['bucket']}.s3.amazonaws.com"
+        return f"{host}/{cfg['bucket']}/{key}" if cfg["use_path_style"] else f"https://{cfg['bucket']}.s3.amazonaws.com/{key}"
 
 
 def _guess_content_type(filename: str) -> str:
