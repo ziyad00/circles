@@ -22,6 +22,13 @@ class StorageService:
             "APP_S3_PUBLIC_BASE_URL") or _os.getenv("S3_PUBLIC_BASE_URL")
         use_path_style_env = _os.getenv(
             "APP_S3_USE_PATH_STYLE") or _os.getenv("S3_USE_PATH_STYLE")
+        
+        # Debug logging to understand what's happening
+        logger.info(f"S3 Config Debug - settings.s3_bucket: {settings.s3_bucket}")
+        logger.info(f"S3 Config Debug - APP_S3_BUCKET env: {_os.getenv('APP_S3_BUCKET')}")
+        logger.info(f"S3 Config Debug - S3_BUCKET env: {_os.getenv('S3_BUCKET')}")
+        logger.info(f"S3 Config Debug - resolved bucket: {bucket}")
+        
         try:
             use_path_style = settings.s3_use_path_style if use_path_style_env is None else str(
                 use_path_style_env).lower() in ("1", "true", "yes")
