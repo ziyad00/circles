@@ -25,9 +25,13 @@ class StorageService:
         
         # Debug logging to understand what's happening
         logger.info(f"S3 Config Debug - settings.s3_bucket: {settings.s3_bucket}")
+        logger.info(f"S3 Config Debug - settings.storage_backend: {settings.storage_backend}")
         logger.info(f"S3 Config Debug - APP_S3_BUCKET env: {_os.getenv('APP_S3_BUCKET')}")
         logger.info(f"S3 Config Debug - S3_BUCKET env: {_os.getenv('S3_BUCKET')}")
         logger.info(f"S3 Config Debug - resolved bucket: {bucket}")
+        
+        if not bucket:
+            logger.error("S3 bucket is None! This will cause the TypeError.")
         
         try:
             use_path_style = settings.s3_use_path_style if use_path_style_env is None else str(
