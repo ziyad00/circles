@@ -119,6 +119,20 @@ class EnhancedPlaceDataService:
                         "location", {}).get("longitude")
                     if vlat is None or vlon is None:
                         continue
+                    # Extract simple amenities from attributes if present
+                    attrs = (v.get("attributes") or {}).get("groups") or []
+                    attr_flags: Dict[str, bool] = {}
+                    try:
+                        for grp in attrs:
+                            for item in grp.get("items", []):
+                                key = (item.get("key") or "").lower()
+                                val = item.get("value")
+                                if key in ("wifi", "outdoor_seating", "good_for_kids", "family_friendly"):
+                                    attr_flags[key] = bool(val) if isinstance(
+                                        val, bool) else str(val).lower() in ("yes", "true", "1")
+                    except Exception:
+                        attr_flags = {}
+
                     results.append({
                         "id": None,
                         "name": v.get("name"),
@@ -135,7 +149,8 @@ class EnhancedPlaceDataService:
                             "review_count": v.get("stats", {}).get("total_ratings"),
                             "photo_count": v.get("stats", {}).get("total_photos"),
                             "opening_hours": v.get("hours", {}).get("display"),
-                            "discovery_source": "foursquare_trending"
+                            "discovery_source": "foursquare_trending",
+                            "amenities": attr_flags,
                         },
                     })
 
@@ -1087,7 +1102,6 @@ class EnhancedPlaceDataService:
         """Calculate quality score for place"""
         score = 0.0
 
-        # Phone (+0.3)
         if place.phone:
             score += 0.3
 
