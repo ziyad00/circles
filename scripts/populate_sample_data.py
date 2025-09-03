@@ -14,7 +14,13 @@ import sys
 import os
 
 # Ensure project root is importable before importing app.* modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+# Also try current working directory (for ECS container)
+if os.getcwd() not in sys.path:
+    sys.path.insert(0, os.getcwd())
 
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select
