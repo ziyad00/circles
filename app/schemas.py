@@ -78,6 +78,8 @@ class PlaceCreate(PlaceBase):
 class PlaceResponse(PlaceBase):
     id: int
     created_at: datetime
+    # Optional representative photo for list views (latest review/check-in photo)
+    photo_url: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -196,6 +198,7 @@ class WhosHereItem(BaseModel):
     check_in_id: int
     user_id: int
     user_name: str
+    username: Optional[str] = None
     user_avatar_url: Optional[str] = None
     created_at: datetime
     photo_urls: list[str] = []
@@ -259,6 +262,10 @@ class EnhancedPlaceResponse(BaseModel):
     description: Optional[str] = None
     # Price tier as $, $$, $$$, $$$$
     price_tier: Optional[str] = None
+    # Human-friendly opening hours string (if available)
+    opening_hours: Optional[str] = None
+    # Direct link to Google Maps directions/search for this place
+    google_maps_url: Optional[str] = None
     created_at: datetime
     # Enhanced stats
     stats: PlaceStats
@@ -274,6 +281,12 @@ class EnhancedPlaceResponse(BaseModel):
     is_checked_in: Optional[bool] = None
     # User's saved status (if authenticated)
     is_saved: Optional[bool] = None
+    # Whether current user can check in now (given optional lat/lng and cooldown)
+    can_check_in: Optional[bool] = None
+    # If cannot check in, a short reason string
+    check_in_block_reason: Optional[str] = None
+    # Optional amenities derived from external sources (e.g., FSQ attributes)
+    amenities: Optional[dict[str, bool]] = None
     model_config = ConfigDict(from_attributes=True)
 
 

@@ -61,8 +61,10 @@ router = APIRouter(
 
 @router.get("/lookups/countries", response_model=list[str])
 async def lookup_countries(db: AsyncSession = Depends(get_db)):
+    # Live query from places table, falling back to reverse geocoding for recent places missing country
     res = await db.execute(select(func.distinct(Place.country)).where(Place.country.is_not(None)).order_by(Place.country.asc()))
-    return [r[0] for r in res.all() if r[0]]
+    countries = [r[0] for r in res.all() if r[0]]
+    return countries
 
 
 @router.get("/lookups/cities", response_model=list[str])
@@ -137,6 +139,25 @@ async def create_place(payload: PlaceCreate, db: AsyncSession = Depends(get_db))
     if app_settings.use_postgis and place.latitude is not None and place.longitude is not None:
         await db.execute(text("UPDATE places SET location = ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography WHERE id = :id"), {"lng": place.longitude, "lat": place.latitude, "id": place.id})
         await db.commit()
+    # Auto-populate country/city/neighborhood if missing using reverse geocoding
+    if place.latitude is not None and place.longitude is not None:
+        try:
+            geo = await enhanced_place_data_service.reverse_geocode_details(lat=place.latitude, lon=place.longitude)
+            updated = False
+            if not getattr(place, "country", None) and geo.get("country"):
+                place.country = geo.get("country")
+                updated = True
+            if not place.city and geo.get("city"):
+                place.city = geo.get("city")
+                updated = True
+            if not place.neighborhood and geo.get("neighborhood"):
+                place.neighborhood = geo.get("neighborhood")
+                updated = True
+            if updated:
+                await db.commit()
+                await db.refresh(place)
+        except Exception:
+            pass
     return place
 
 
@@ -475,7 +496,32 @@ async def advanced_search_places(
 
     # Execute queries
     total = (await db.execute(count_stmt)).scalar_one()
-    items = (await db.execute(stmt)).scalars().all()
+    places = (await db.execute(stmt)).scalars().all()
+
+    # Attach FSQ photo if available in place_metadata
+    items: list[PlaceResponse] = []
+    for p in places:
+        photo_url = None
+        md = getattr(p, 'place_metadata', None) or {}
+        photos = md.get('photos') or []
+        if photos:
+            first = photos[0]
+            photo_url = first if isinstance(first, str) else first.get('url')
+        items.append(PlaceResponse(
+            id=p.id,
+            name=p.name,
+            address=p.address,
+            country=getattr(p, 'country', None),
+            city=p.city,
+            neighborhood=p.neighborhood,
+            latitude=p.latitude,
+            longitude=p.longitude,
+            categories=p.categories,
+            rating=p.rating,
+            description=getattr(p, 'description', None),
+            created_at=p.created_at,
+            photo_url=photo_url,
+        ))
 
     # Apply distance filtering for non-PostGIS fallback
     if (filters.latitude is not None and filters.longitude is not None and
@@ -843,21 +889,32 @@ async def get_trending_places(
         else:
             fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
         now_ts = datetime.now(timezone.utc)
-        items = [
-            PlaceResponse(
-                id=-(idx + 1),
-                name=p.get("name"),
-                address=None,
-                city=inferred_city,
-                neighborhood=None,
-                latitude=p.get("latitude"),
-                longitude=p.get("longitude"),
-                categories=p.get("categories"),
-                rating=p.get("rating"),
-                created_at=now_ts,
+        # Optionally attach a best-effort photo if present in metadata
+        items = []
+        for idx, p in enumerate(fsq):
+            photo_url = None
+            md = p.get("metadata") or {}
+            photos = md.get("photos") or []
+            if photos and isinstance(photos, list):
+                # photos may be URL strings or dicts with url
+                first = photos[0]
+                photo_url = first if isinstance(
+                    first, str) else first.get("url")
+            items.append(
+                PlaceResponse(
+                    id=-(idx + 1),
+                    name=p.get("name"),
+                    address=None,
+                    city=inferred_city,
+                    neighborhood=None,
+                    latitude=p.get("latitude"),
+                    longitude=p.get("longitude"),
+                    categories=p.get("categories"),
+                    rating=p.get("rating"),
+                    created_at=now_ts,
+                    photo_url=photo_url,
+                )
             )
-            for idx, p in enumerate(fsq)
-        ]
         # client-side like filters server-applied on FSQ set
         if q:
             items = [it for it in items if it.name and q.lower()
@@ -970,20 +1027,45 @@ async def get_trending_places(
         .subquery()
     )
 
-    # Main query with pagination
-    stmt = (
-        select(Place)
-        .join(trending_subq, Place.id == trending_subq.c.id)
-        .order_by(trending_subq.c.trending_score.desc())
-        .offset(offset)
-        .limit(limit)
-    )
+    if q:
+        # Build a general place filter for the search keyword within location/other filters
+        place_filter = select(Place.id).where(Place.city.ilike(inferred_city))
+        if neighborhood:
+            place_filter = place_filter.where(
+                Place.neighborhood.ilike(f"%{neighborhood}%"))
+        if place_type:
+            place_filter = place_filter.where(
+                Place.categories.ilike(f"%{place_type}%"))
+        if min_rating is not None:
+            place_filter = place_filter.where(Place.rating >= min_rating)
+        if price_tier:
+            place_filter = place_filter.where(Place.price_tier == price_tier)
+        place_filter = place_filter.where(
+            Place.name.ilike(f"%{q}%")).subquery()
 
-    # Count query for pagination
-    count_stmt = (
-        select(func.count())
-        .select_from(trending_subq)
-    )
+        # Main query: all matching places, ordered by trending score if available
+        stmt = (
+            select(Place)
+            .join(place_filter, Place.id == place_filter.c.id)
+            .outerjoin(trending_subq, Place.id == trending_subq.c.id)
+            .order_by(trending_subq.c.trending_score.desc().nullslast())
+            .offset(offset)
+            .limit(limit)
+        )
+
+        # Count is the number of matching places
+        count_stmt = select(func.count()).select_from(place_filter)
+    else:
+        # Trending-only flow (no general search keyword)
+        stmt = (
+            select(Place)
+            .join(trending_subq, Place.id == trending_subq.c.id)
+            .order_by(trending_subq.c.trending_score.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+
+        count_stmt = select(func.count()).select_from(trending_subq)
 
     # Execute queries
     total = (await db.execute(count_stmt)).scalar_one()
@@ -1232,6 +1314,10 @@ async def get_place_details(
     place_id: int,
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
+    lat: float | None = Query(
+        None, description="User latitude for check-in feasibility"),
+    lng: float | None = Query(
+        None, description="User longitude for check-in feasibility"),
 ):
     """
     Get detailed information about a place.
@@ -1335,11 +1421,50 @@ async def get_place_details(
         active_checkins=current_checkins
     )
 
+    # Determine if user can check in now
+    can_check_in: bool | None = None
+    block_reason: str | None = None
+    try:
+        five_min_ago = now - timedelta(minutes=5)
+        same_place_recent = await db.execute(
+            select(CheckIn.id).where(
+                CheckIn.user_id == current_user.id,
+                CheckIn.place_id == place_id,
+                CheckIn.created_at >= five_min_ago,
+            )
+        )
+        if same_place_recent.scalar_one_or_none() is not None:
+            can_check_in = False
+            block_reason = "cooldown"
+        else:
+            from ..config import settings as app_settings
+            if getattr(app_settings, "checkin_enforce_proximity", True):
+                if place.latitude is None or place.longitude is None:
+                    can_check_in = False
+                    block_reason = "place_no_coords"
+                elif lat is None or lng is None:
+                    can_check_in = False
+                    block_reason = "missing_location"
+                else:
+                    dist_km = haversine_distance(
+                        lat, lng, place.latitude, place.longitude)
+                    can_check_in = dist_km * \
+                        1000 <= getattr(
+                            app_settings, "checkin_max_distance_meters", 500)
+                    if not can_check_in:
+                        block_reason = "too_far"
+            else:
+                can_check_in = True
+    except Exception:
+        can_check_in = None
+        block_reason = None
+
     # Create enhanced response
     return EnhancedPlaceResponse(
         id=place.id,
         name=place.name,
         address=place.address,
+        country=getattr(place, "country", None),
         city=place.city,
         neighborhood=place.neighborhood,
         latitude=place.latitude,
@@ -1348,6 +1473,10 @@ async def get_place_details(
         rating=place.rating,
         description=getattr(place, "description", None),
         price_tier=getattr(place, "price_tier", None),
+        opening_hours=(place.place_metadata or {}).get(
+            "opening_hours") if getattr(place, "place_metadata", None) else None,
+        google_maps_url=(f"https://www.google.com/maps/search/?api=1&query={place.latitude},{place.longitude}") if (
+            place.latitude and place.longitude) else None,
         created_at=place.created_at,
         stats=stats,
         current_checkins=current_checkins,
@@ -1355,7 +1484,11 @@ async def get_place_details(
         recent_reviews=recent_reviews,
         photos_count=photos_count,
         is_checked_in=is_checked_in,
-        is_saved=is_saved
+        is_saved=is_saved,
+        can_check_in=can_check_in,
+        check_in_block_reason=block_reason,
+        amenities=(place.place_metadata or {}).get("amenities") if getattr(
+            place, "place_metadata", None) else None,
     )
 
 
@@ -1590,7 +1723,7 @@ async def whos_here(
 
     # Get check-ins with user info
     stmt = (
-        select(CheckIn, User.name, User.avatar_url)
+        select(CheckIn, User.name, User.avatar_url, User.username)
         .join(User, User.id == CheckIn.user_id)
         .where(CheckIn.place_id == place_id, CheckIn.created_at >= yesterday)
         .order_by(CheckIn.created_at.desc())
@@ -1602,7 +1735,7 @@ async def whos_here(
     # Filter based on visibility
     from ..utils import can_view_checkin
     items: list[WhosHereItem] = []
-    for checkin, user_name, avatar_url in rows:
+    for checkin, user_name, avatar_url, username in rows:
         if await can_view_checkin(db, checkin.user_id, current_user.id, checkin.visibility):
             # photos
             res_ph = await db.execute(select(CheckInPhoto).where(CheckInPhoto.check_in_id == checkin.id).order_by(CheckInPhoto.created_at.asc()))
@@ -1612,6 +1745,7 @@ async def whos_here(
                     check_in_id=checkin.id,
                     user_id=checkin.user_id,
                     user_name=user_name or f"User {checkin.user_id}",
+                    username=username,
                     user_avatar_url=avatar_url,
                     created_at=checkin.created_at,
                     photo_urls=urls,
