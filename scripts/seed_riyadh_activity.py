@@ -1,3 +1,5 @@
+from app.models import User, Place, CheckIn
+from app.database import AsyncSessionLocal
 import sys
 import os
 import asyncio
@@ -8,9 +10,6 @@ from sqlalchemy import select
 
 # Ensure project root on path for app.* imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from app.database import AsyncSessionLocal
-from app.models import User, Place, CheckIn
 
 
 RIYADH_BBOX = (24.3, 25.2, 46.2, 47.3)  # (min_lat, max_lat, min_lon, max_lon)
