@@ -12,16 +12,12 @@ logger = logging.getLogger(__name__)
 class StorageService:
     @staticmethod
     def _resolved_s3_config():
-        bucket = settings.s3_bucket or _os.getenv(
-            "APP_S3_BUCKET") or _os.getenv("S3_BUCKET")
-        region = settings.s3_region or _os.getenv(
-            "APP_S3_REGION") or _os.getenv("S3_REGION")
-        endpoint = settings.s3_endpoint_url or _os.getenv(
-            "APP_S3_ENDPOINT_URL") or _os.getenv("S3_ENDPOINT_URL")
-        public_base = settings.s3_public_base_url or _os.getenv(
-            "APP_S3_PUBLIC_BASE_URL") or _os.getenv("S3_PUBLIC_BASE_URL")
-        use_path_style_env = _os.getenv(
-            "APP_S3_USE_PATH_STYLE") or _os.getenv("S3_USE_PATH_STYLE")
+        # Direct environment variable reading with multiple fallbacks
+        bucket = _os.getenv("APP_S3_BUCKET") or _os.getenv("S3_BUCKET") or settings.s3_bucket
+        region = _os.getenv("APP_S3_REGION") or _os.getenv("S3_REGION") or settings.s3_region
+        endpoint = _os.getenv("APP_S3_ENDPOINT_URL") or _os.getenv("S3_ENDPOINT_URL") or settings.s3_endpoint_url
+        public_base = _os.getenv("APP_S3_PUBLIC_BASE_URL") or _os.getenv("S3_PUBLIC_BASE_URL") or settings.s3_public_base_url
+        use_path_style_env = _os.getenv("APP_S3_USE_PATH_STYLE") or _os.getenv("S3_USE_PATH_STYLE")
         
         # Debug logging to understand what's happening
         logger.info(f"S3 Config Debug - settings.s3_bucket: {settings.s3_bucket}")
@@ -30,8 +26,14 @@ class StorageService:
         logger.info(f"S3 Config Debug - S3_BUCKET env: {_os.getenv('S3_BUCKET')}")
         logger.info(f"S3 Config Debug - resolved bucket: {bucket}")
         
+        # Force fallback if bucket is still None
         if not bucket:
-            logger.error("S3 bucket is None! This will cause the TypeError.")
+            bucket = "circles-media-259c"  # Hardcode the known bucket as last resort
+            logger.warning(f"S3 bucket was None, using hardcoded fallback: {bucket}")
+        
+        if not region:
+            region = "us-east-1"  # Hardcode the known region as last resort
+            logger.warning(f"S3 region was None, using hardcoded fallback: {region}")
         
         try:
             use_path_style = settings.s3_use_path_style if use_path_style_env is None else str(
