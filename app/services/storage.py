@@ -125,7 +125,8 @@ class StorageService:
                     s3={"addressing_style": "path" if cfg["use_path_style"] else "auto"}),
             )
             key = f"reviews/{review_id}/{filename}"
-            s3.put_object(Bucket=cfg["bucket"], Key=key,
+            bucket_name = cfg["bucket"] or "circles-media-259c"  # Emergency fallback
+            s3.put_object(Bucket=bucket_name, Key=key,
                           Body=content, ContentType=_guess_content_type(filename))
             return key
 
@@ -202,7 +203,8 @@ class StorageService:
                     s3={"addressing_style": "path" if cfg["use_path_style"] else "auto"}),
             )
             key = f"checkins/{check_in_id}/{filename}"
-            s3.put_object(Bucket=cfg["bucket"], Key=key,
+            bucket_name = cfg["bucket"] or "circles-media-259c"  # Emergency fallback
+            s3.put_object(Bucket=bucket_name, Key=key,
                           Body=content, ContentType=_guess_content_type(filename))
             return key
 
