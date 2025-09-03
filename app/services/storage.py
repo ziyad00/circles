@@ -13,28 +13,39 @@ class StorageService:
     @staticmethod
     def _resolved_s3_config():
         # Direct environment variable reading with multiple fallbacks
-        bucket = _os.getenv("APP_S3_BUCKET") or _os.getenv("S3_BUCKET") or settings.s3_bucket
-        region = _os.getenv("APP_S3_REGION") or _os.getenv("S3_REGION") or settings.s3_region
-        endpoint = _os.getenv("APP_S3_ENDPOINT_URL") or _os.getenv("S3_ENDPOINT_URL") or settings.s3_endpoint_url
-        public_base = _os.getenv("APP_S3_PUBLIC_BASE_URL") or _os.getenv("S3_PUBLIC_BASE_URL") or settings.s3_public_base_url
-        use_path_style_env = _os.getenv("APP_S3_USE_PATH_STYLE") or _os.getenv("S3_USE_PATH_STYLE")
-        
+        bucket = _os.getenv("APP_S3_BUCKET") or _os.getenv(
+            "S3_BUCKET") or settings.s3_bucket
+        region = _os.getenv("APP_S3_REGION") or _os.getenv(
+            "S3_REGION") or settings.s3_region
+        endpoint = _os.getenv("APP_S3_ENDPOINT_URL") or _os.getenv(
+            "S3_ENDPOINT_URL") or settings.s3_endpoint_url
+        public_base = _os.getenv("APP_S3_PUBLIC_BASE_URL") or _os.getenv(
+            "S3_PUBLIC_BASE_URL") or settings.s3_public_base_url
+        use_path_style_env = _os.getenv(
+            "APP_S3_USE_PATH_STYLE") or _os.getenv("S3_USE_PATH_STYLE")
+
         # Debug logging to understand what's happening
-        logger.info(f"S3 Config Debug - settings.s3_bucket: {settings.s3_bucket}")
-        logger.info(f"S3 Config Debug - settings.storage_backend: {settings.storage_backend}")
-        logger.info(f"S3 Config Debug - APP_S3_BUCKET env: {_os.getenv('APP_S3_BUCKET')}")
-        logger.info(f"S3 Config Debug - S3_BUCKET env: {_os.getenv('S3_BUCKET')}")
+        logger.info(
+            f"S3 Config Debug - settings.s3_bucket: {settings.s3_bucket}")
+        logger.info(
+            f"S3 Config Debug - settings.storage_backend: {settings.storage_backend}")
+        logger.info(
+            f"S3 Config Debug - APP_S3_BUCKET env: {_os.getenv('APP_S3_BUCKET')}")
+        logger.info(
+            f"S3 Config Debug - S3_BUCKET env: {_os.getenv('S3_BUCKET')}")
         logger.info(f"S3 Config Debug - resolved bucket: {bucket}")
-        
+
         # Force fallback if bucket is still None
         if not bucket:
             bucket = "circles-media-259c"  # Hardcode the known bucket as last resort
-            logger.warning(f"S3 bucket was None, using hardcoded fallback: {bucket}")
-        
+            logger.warning(
+                f"S3 bucket was None, using hardcoded fallback: {bucket}")
+
         if not region:
             region = "us-east-1"  # Hardcode the known region as last resort
-            logger.warning(f"S3 region was None, using hardcoded fallback: {region}")
-        
+            logger.warning(
+                f"S3 region was None, using hardcoded fallback: {region}")
+
         try:
             use_path_style = settings.s3_use_path_style if use_path_style_env is None else str(
                 use_path_style_env).lower() in ("1", "true", "yes")
@@ -125,7 +136,8 @@ class StorageService:
                     s3={"addressing_style": "path" if cfg["use_path_style"] else "auto"}),
             )
             key = f"reviews/{review_id}/{filename}"
-            bucket_name = cfg["bucket"] or "circles-media-259c"  # Emergency fallback
+            # Emergency fallback
+            bucket_name = cfg["bucket"] or "circles-media-259c"
             s3.put_object(Bucket=bucket_name, Key=key,
                           Body=content, ContentType=_guess_content_type(filename))
             return key
@@ -203,7 +215,8 @@ class StorageService:
                     s3={"addressing_style": "path" if cfg["use_path_style"] else "auto"}),
             )
             key = f"checkins/{check_in_id}/{filename}"
-            bucket_name = cfg["bucket"] or "circles-media-259c"  # Emergency fallback
+            # Emergency fallback
+            bucket_name = cfg["bucket"] or "circles-media-259c"
             s3.put_object(Bucket=bucket_name, Key=key,
                           Body=content, ContentType=_guess_content_type(filename))
             return key
