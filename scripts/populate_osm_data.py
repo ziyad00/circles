@@ -4,6 +4,10 @@ OpenStreetMap Data Population Script
 Populates missing data like photos, amenities, and other details from OSM
 """
 
+from app.config import settings
+from app.services.place_data_service_v2 import enhanced_place_data_service
+from app.models import Place
+from app.database import get_db
 import sys
 import os
 import asyncio
@@ -16,10 +20,6 @@ import logging
 # Ensure project root on path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from app.database import get_db
-from app.models import Place
-from app.services.place_data_service_v2 import enhanced_place_data_service
-from app.config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,7 +63,8 @@ class OSMDataPopulator:
                     if updated:
                         total_updated += 1
                     places_processed += 1
-                    logger.info(f"Processed {place.name} ({places_processed}/{len(places)})")
+                    logger.info(
+                        f"Processed {place.name} ({places_processed}/{len(places)})")
 
                 except Exception as e:
                     logger.error(f"Failed to process {place.name}: {e}")
@@ -73,7 +74,8 @@ class OSMDataPopulator:
             if i + self.batch_size < len(places):
                 await asyncio.sleep(self.delay_between_batches)
 
-        logger.info(f"Completed data population: {places_processed} processed, {total_updated} updated")
+        logger.info(
+            f"Completed data population: {places_processed} processed, {total_updated} updated")
         return {
             "places_processed": places_processed,
             "updated": total_updated,
@@ -225,8 +227,10 @@ class OSMDataPopulator:
                 osm_lon = float(osm_result['lon'])
 
                 # Simple distance calculation (rough approximation)
-                distance = ((place.latitude - osm_lat) ** 2 + (place.longitude - osm_lon) ** 2) ** 0.5
-                proximity_score = max(0, 1 - distance * 100)  # Closer = higher score
+                distance = ((place.latitude - osm_lat) ** 2 +
+                            (place.longitude - osm_lon) ** 2) ** 0.5
+                # Closer = higher score
+                proximity_score = max(0, 1 - distance * 100)
                 score += 0.4 * proximity_score
             except (ValueError, TypeError):
                 pass
@@ -553,7 +557,8 @@ class OSMDataPopulator:
 
 async def populate_osm_data(limit: int = 100, city_filter: Optional[str] = None):
     """Main function to populate OSM data"""
-    logger.info(f"Starting OSM data population (limit: {limit}, city: {city_filter or 'all'})")
+    logger.info(
+        f"Starting OSM data population (limit: {limit}, city: {city_filter or 'all'})")
 
     populator = OSMDataPopulator()
 
@@ -589,15 +594,19 @@ async def check_data_status():
             phone_count = with_phone.scalar_one()
 
             with_metadata = await db.execute(
-                select(func.count(Place.id)).where(Place.place_metadata.is_not(None))
+                select(func.count(Place.id)).where(
+                    Place.place_metadata.is_not(None))
             )
             metadata_count = with_metadata.scalar_one()
 
             print("📊 Current Data Status:")
             print(f"   Total places: {total}")
-            print(f"   With website: {website_count} ({website_count/total*100:.1f}%)")
-            print(f"   With phone: {phone_count} ({phone_count/total*100:.1f}%)")
-            print(f"   With metadata: {metadata_count} ({metadata_count/total*100:.1f}%)")
+            print(
+                f"   With website: {website_count} ({website_count/total*100:.1f}%)")
+            print(
+                f"   With phone: {phone_count} ({phone_count/total*100:.1f}%)")
+            print(
+                f"   With metadata: {metadata_count} ({metadata_count/total*100:.1f}%)")
 
             return {
                 "total": total,
@@ -615,9 +624,11 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Populate missing OSM data")
-    parser.add_argument("--limit", type=int, default=50, help="Number of places to process")
+    parser.add_argument("--limit", type=int, default=50,
+                        help="Number of places to process")
     parser.add_argument("--city", type=str, help="Filter by city name")
-    parser.add_argument("--status", action="store_true", help="Check current data status only")
+    parser.add_argument("--status", action="store_true",
+                        help="Check current data status only")
 
     args = parser.parse_args()
 
