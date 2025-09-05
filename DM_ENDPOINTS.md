@@ -147,7 +147,31 @@ The DM system provides a comprehensive messaging platform with privacy controls,
       "created_at": "2025-09-05T19:33:40Z",
       "seen": true,
       "heart_count": 2,
-      "liked_by_me": false
+      "liked_by_me": false,
+      // Reply fields (optional)
+      "reply_to_id": null,
+      "reply_to_text": null,
+      "reply_to_sender_name": null,
+      // Media fields (optional)
+      "photo_urls": [],
+      "video_urls": []
+    },
+    {
+      "id": 2,
+      "thread_id": 123,
+      "sender_id": 789,
+      "text": "I agree!",
+      "created_at": "2025-09-05T19:34:15Z",
+      "seen": false,
+      "heart_count": 0,
+      "liked_by_me": false,
+      // Reply example
+      "reply_to_id": 1,
+      "reply_to_text": "Hello!",
+      "reply_to_sender_name": "John Doe",
+      // Media example
+      "photo_urls": ["https://s3.amazonaws.com/bucket/photos/reply_image.jpg"],
+      "video_urls": []
     }
   ],
   "total": 25,
@@ -160,20 +184,99 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 
 **Purpose**: Send a message in an active DM thread
 
-**Authentication**: Required  
+**Authentication**: Required
 **Body**:
 
 ```json
 {
-  "text": "Your message here"
+  "text": "Your message here",
+  "reply_to_id": 123, // Optional: ID of message being replied to
+  "photo_urls": ["https://..."], // Optional: Array of photo URLs
+  "video_urls": ["https://..."] // Optional: Array of video URLs
 }
 ```
 
-**Features**:
+**Enhanced Features**:
 
-- Rate limited (20/minute)
-- Real-time delivery via WebSocket
-- Automatic unread count updates
+- ✅ **Reply functionality**: Reply to specific messages
+- ✅ **Threading support**: Maintain conversation context
+- ✅ **Media attachments**: Photos and videos support
+- ✅ **Rate limited** (20/minute)
+- ✅ **Real-time delivery** via WebSocket
+- ✅ **Automatic unread count updates**
+
+**Reply Example**:
+
+```json
+{
+  "text": "I agree with that!",
+  "reply_to_id": 456
+}
+```
+
+**Response includes reply and media information**:
+
+```json
+{
+  "id": 789,
+  "thread_id": 123,
+  "sender_id": 111,
+  "text": "I agree with that!",
+  "created_at": "2025-09-05T23:45:00Z",
+  "reply_to_id": 456,
+  "reply_to_text": "What do you think about...",
+  "reply_to_sender_name": "John Doe",
+  "photo_urls": ["https://s3.amazonaws.com/..."],
+  "video_urls": []
+}
+```
+
+**Media Example**:
+
+```json
+{
+  "text": "Check out this photo!",
+  "photo_urls": [
+    "https://s3.amazonaws.com/bucket/photos/image1.jpg",
+    "https://s3.amazonaws.com/bucket/photos/image2.jpg"
+  ]
+}
+```
+
+### `POST /dms/upload/media` - Upload Media
+
+**Purpose**: Upload media files (photos/videos) for DM messages
+
+**Authentication**: Required
+**Content-Type**: `multipart/form-data`
+**Body**: Form data with file
+
+**Supported file types**:
+
+- **Images**: `image/jpeg`, `image/png`, `image/gif`
+- **Videos**: `video/mp4`, `video/quicktime`
+
+**File size limits**:
+
+- **Images**: 10MB maximum
+- **Videos**: 50MB maximum
+
+**Response**:
+
+```json
+{
+  "url": "https://s3.amazonaws.com/bucket/dm_media/123/photos/image.jpg",
+  "media_type": "photos",
+  "file_size": 2048576,
+  "content_type": "image/jpeg"
+}
+```
+
+**Usage Flow**:
+
+1. Upload media file to get URL
+2. Include URL in `photo_urls` or `video_urls` when sending message
+3. Message will display the attached media
 
 ### `DELETE /dms/threads/{thread_id}/messages/{message_id}` - Delete Message
 
@@ -208,8 +311,6 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 - `404`: Message or thread not found
 
 ---
-
-
 
 ## 🔔 Notifications & Status
 
