@@ -472,6 +472,7 @@ async def list_messages(
                 reply_to_sender_name=reply_sender_name,
                 photo_urls=m.photo_urls or [],
                 video_urls=m.video_urls or [],
+                caption=m.caption,
             )
         )
     return PaginatedDMMessages(items=response_items, total=total, limit=limit, offset=offset)
@@ -556,8 +557,15 @@ async def send_message(
                 detail="Reply message not found or not in this thread"
             )
         # Store preview text of the message being replied to
-        reply_to_text = reply_msg.text[:200] + \
-            "..." if len(reply_msg.text) > 200 else reply_msg.text
+        if reply_msg.text.strip():
+            reply_to_text = reply_msg.text[:200] + \
+                "..." if len(reply_msg.text) > 200 else reply_msg.text
+        elif reply_msg.photo_urls:
+            reply_to_text = f"[Photo] {reply_msg.caption or ''}".strip()
+        elif reply_msg.video_urls:
+            reply_to_text = f"[Video] {reply_msg.caption or ''}".strip()
+        else:
+            reply_to_text = "[Media message]"
 
            msg = DMMessage(
            thread_id=thread_id,
@@ -566,7 +574,8 @@ async def send_message(
            reply_to_id=payload.reply_to_id,
            reply_to_text=reply_to_text,
            photo_urls=payload.photo_urls,
-           video_urls=payload.video_urls
+           video_urls=payload.video_urls,
+           caption=payload.caption
        )
     db.add(msg)
     # bump thread updated_at
@@ -593,6 +602,7 @@ async def send_message(
            reply_to_sender_name=reply_sender_name,
            photo_urls=msg.photo_urls,
            video_urls=msg.video_urls,
+           caption=msg.caption,
        )
 
 
