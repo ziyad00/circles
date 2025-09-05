@@ -154,7 +154,8 @@ The DM system provides a comprehensive messaging platform with privacy controls,
       "reply_to_sender_name": null,
       // Media fields (optional)
       "photo_urls": [],
-      "video_urls": []
+      "video_urls": [],
+      "caption": null
     },
     {
       "id": 2,
@@ -169,9 +170,10 @@ The DM system provides a comprehensive messaging platform with privacy controls,
       "reply_to_id": 1,
       "reply_to_text": "Hello!",
       "reply_to_sender_name": "John Doe",
-      // Media example
+      // Media example with caption
       "photo_urls": ["https://s3.amazonaws.com/bucket/photos/reply_image.jpg"],
-      "video_urls": []
+      "video_urls": [],
+      "caption": "Check out this amazing view!"
     }
   ],
   "total": 25,
@@ -190,9 +192,10 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 ```json
 {
   "text": "Your message here",
-  "reply_to_id": 123, // Optional: ID of message being replied to
-  "photo_urls": ["https://..."], // Optional: Array of photo URLs
-  "video_urls": ["https://..."] // Optional: Array of video URLs
+  "reply_to_id": 123,  // Optional: ID of message being replied to
+  "photo_urls": ["https://..."],  // Optional: Array of photo URLs
+  "video_urls": ["https://..."], // Optional: Array of video URLs
+  "caption": "Optional caption for media" // Optional: Caption for media messages
 }
 ```
 
@@ -214,7 +217,7 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 }
 ```
 
-**Response includes reply and media information**:
+**Response includes reply, media, and caption information**:
 
 ```json
 {
@@ -227,7 +230,25 @@ The DM system provides a comprehensive messaging platform with privacy controls,
   "reply_to_text": "What do you think about...",
   "reply_to_sender_name": "John Doe",
   "photo_urls": ["https://s3.amazonaws.com/..."],
-  "video_urls": []
+  "video_urls": [],
+  "caption": "Beautiful sunset view!"
+}
+```
+
+**Reply to Media Message Example**:
+```json
+{
+  "text": "Love this photo!",
+  "reply_to_id": 999  // Can reply to media-only messages
+}
+```
+
+**Media with Caption Example**:
+```json
+{
+  "text": "Check this out",
+  "photo_urls": ["https://s3.amazonaws.com/photo.jpg"],
+  "caption": "My vacation photo from the beach!"
 }
 ```
 
@@ -247,9 +268,17 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 
 **Purpose**: Upload media files (photos/videos) for DM messages
 
-**Authentication**: Required
+**Authentication**: ✅ **Required** (JWT Bearer Token)
+**Security**: User-scoped uploads, file validation, size limits
 **Content-Type**: `multipart/form-data`
 **Body**: Form data with file
+
+**Security Features**:
+- ✅ **Authentication Required**: JWT token validation
+- ✅ **User Isolation**: Files stored in user-specific directories
+- ✅ **File Type Validation**: Only allowed image/video formats
+- ✅ **Size Limits**: 10MB (images), 50MB (videos)
+- ✅ **Path Sanitization**: Safe filename handling
 
 **Supported file types**:
 
