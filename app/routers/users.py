@@ -24,6 +24,66 @@ from ..schemas import (
 router = APIRouter(prefix="/users", tags=["users"])
 
 
+def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
+    """
+    Convert S3 keys to signed URLs for secure access.
+    """
+    signed_urls = []
+    for url in photo_urls:
+        if url and not url.startswith('http'):
+            # This is an S3 key, convert to signed URL
+            try:
+                signed_url = StorageService.generate_signed_url(url)
+                signed_urls.append(signed_url)
+            except Exception as e:
+                # Fallback to original URL if signing fails
+                signed_urls.append(url)
+        else:
+            # Already a full URL (e.g., from FSQ or local storage)
+            signed_urls.append(url)
+    return signed_urls
+
+
+def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
+    """
+    Convert a single S3 key or S3 URL to signed URL for secure access.
+    """
+    if not photo_url:
+        return None
+
+    if not photo_url.startswith('http'):
+        # This is an S3 key, convert to signed URL
+        try:
+            return StorageService.generate_signed_url(photo_url)
+        except Exception as e:
+            # Fallback to original URL if signing fails
+            return photo_url
+    elif 's3.amazonaws.com' in photo_url or 'circles-media-259c' in photo_url:
+        # This is an S3 URL, extract the key and convert to signed URL
+        try:
+            # Extract S3 key from URL like: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
+            # or: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
+            if 's3.amazonaws.com' in photo_url:
+                # Handle both path-style and virtual-hosted-style URLs
+                if '/circles-media-259c/' in photo_url:
+                    # Path-style: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
+                    s3_key = photo_url.split('/circles-media-259c/')[1]
+                else:
+                    # Virtual-hosted-style: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
+                    s3_key = photo_url.split('.s3.amazonaws.com/')[1]
+
+                return StorageService.generate_signed_url(s3_key)
+            else:
+                # Fallback for other S3 URLs
+                return photo_url
+        except Exception as e:
+            # Fallback to original URL if signing fails
+            return photo_url
+    else:
+        # Already a full URL (e.g., from FSQ or local storage)
+        return photo_url
+
+
 @router.post("/search", response_model=list[PublicUserSearchResponse])
 async def search_users(
     filters: UserSearchFilters,
@@ -72,7 +132,7 @@ async def search_users(
                 id=user.id,
                 name=user.name,
                 bio=user.bio,
-                avatar_url=user.avatar_url,
+                avatar_url=_convert_single_to_signed_url(user.avatar_url),
                 created_at=user.created_at,
                 username=user.username,
                 followed=bool(followed),
@@ -82,7 +142,11 @@ async def search_users(
 
 
 @router.get("/{user_id}", response_model=PublicUserResponse)
-async def get_user_profile(user_id: int, db: AsyncSession = Depends(get_db)):
+async def get_user_profile(
+    user_id: int,
+    current_user: User = Depends(JWTService.get_current_user_optional),
+    db: AsyncSession = Depends(get_db)
+):
     res = await db.execute(select(User).where(User.id == user_id))
     user = res.scalars().first()
     if not user:
@@ -95,15 +159,33 @@ async def get_user_profile(user_id: int, db: AsyncSession = Depends(get_db)):
         select(func.count()).where(Follow.follower_id == user.id)
     )
 
+    # Get check-ins count
+    check_ins_count = await db.scalar(
+        select(func.count()).where(CheckIn.user_id == user.id)
+    )
+
+    # Check if current user is following this user
+    is_followed = None
+    if current_user:
+        is_followed_result = await db.scalar(
+            select(func.count()).where(
+                Follow.follower_id == current_user.id,
+                Follow.followee_id == user.id
+            )
+        )
+        is_followed = is_followed_result > 0
+
     return PublicUserResponse(
         id=user.id,
         name=user.name,
         username=user.username,
         bio=user.bio,
-        avatar_url=user.avatar_url,
+        avatar_url=_convert_single_to_signed_url(user.avatar_url),
         created_at=user.created_at,
         followers_count=followers_count,
         following_count=following_count,
+        check_ins_count=check_ins_count,
+        is_followed=is_followed,
     )
 
 
@@ -198,6 +280,12 @@ async def upload_avatar(
     current_user.avatar_url = url_path
     await db.commit()
     await db.refresh(current_user)
+
+    # Convert S3 key to signed URL for response
+    if settings.storage_backend == "s3":
+        current_user.avatar_url = _convert_single_to_signed_url(
+            current_user.avatar_url)
+
     return current_user
 
 
@@ -239,6 +327,9 @@ async def list_user_checkins(
     for ci in visible:
         res_ph = await db.execute(select(CheckInPhoto).where(CheckInPhoto.check_in_id == ci.id).order_by(CheckInPhoto.created_at.asc()))
         urls = [p.url for p in res_ph.scalars().all()]
+        # Convert S3 keys to signed URLs
+        urls = _convert_to_signed_urls(urls)
+
         allowed = (datetime.now(timezone.utc) -
                    ci.created_at) <= timedelta(hours=app_settings.place_chat_window_hours)
         result.append(
@@ -250,7 +341,7 @@ async def list_user_checkins(
                 visibility=ci.visibility,
                 created_at=ci.created_at,
                 expires_at=ci.expires_at,
-                photo_url=ci.photo_url,
+                photo_url=_convert_single_to_signed_url(ci.photo_url),
                 photo_urls=urls,
                 allowed_to_chat=allowed,
             )

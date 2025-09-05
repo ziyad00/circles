@@ -554,6 +554,8 @@ class PublicUserResponse(BaseModel):
     created_at: datetime
     followers_count: Optional[int] = None
     following_count: Optional[int] = None
+    check_ins_count: Optional[int] = None
+    is_followed: Optional[bool] = None
     model_config = ConfigDict(from_attributes=True)
 
 

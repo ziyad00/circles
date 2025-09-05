@@ -57,6 +57,8 @@ class StorageService:
             "endpoint": endpoint,
             "public_base": public_base,
             "use_path_style": use_path_style,
+            "access_key_id": settings.s3_access_key_id,
+            "secret_access_key": settings.s3_secret_access_key,
         }
 
     @staticmethod
@@ -145,12 +147,8 @@ class StorageService:
         # Run S3 upload in thread pool to avoid blocking event loop
         key = await asyncio.to_thread(_upload_to_s3)
 
-        if cfg["public_base"]:
-            return f"{cfg['public_base'].rstrip('/')}/{key}"
-        # fallback to virtual-hosted style if possible
-        host = cfg["endpoint"].rstrip(
-            '/') if cfg["endpoint"] else f"https://{cfg['bucket']}.s3.amazonaws.com"
-        return f"{host}/{cfg['bucket']}/{key}" if cfg["use_path_style"] else f"https://{cfg['bucket']}.s3.amazonaws.com/{key}"
+        # Return the S3 key instead of full URL - signed URLs will be generated on-demand
+        return key
 
     @staticmethod
     async def _save_checkin_local(check_in_id: int, filename: str, content: bytes) -> str:
@@ -224,22 +222,51 @@ class StorageService:
         # Run S3 upload in thread pool to avoid blocking event loop
         key = await asyncio.to_thread(_upload_checkin_to_s3)
 
-        if cfg["public_base"]:
-            return f"{cfg['public_base'].rstrip('/')}/{key}"
-        host = cfg["endpoint"].rstrip(
-            '/') if cfg["endpoint"] else f"https://{cfg['bucket']}.s3.amazonaws.com"
-        return f"{host}/{cfg['bucket']}/{key}" if cfg["use_path_style"] else f"https://{cfg['bucket']}.s3.amazonaws.com/{key}"
+        # Return the S3 key instead of full URL - signed URLs will be generated on-demand
+        return key
 
+    @staticmethod
+    def generate_signed_url(s3_key: str, expiration: int = 3600) -> str:
+        """
+        Generate a signed URL for accessing an S3 object.
 
-def _guess_content_type(filename: str) -> str:
-    ext = os.path.splitext(filename.lower())[1]
-    return {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-    }.get(ext, "application/octet-stream")
+        Args:
+            s3_key: The S3 object key (e.g., "checkins/34/test.png")
+            expiration: URL expiration time in seconds (default: 1 hour)
+
+        Returns:
+            Signed URL that allows temporary access to the S3 object
+        """
+        import boto3
+        from botocore.exceptions import ClientError
+
+        cfg = StorageService._resolved_s3_config()
+
+        if not cfg["bucket"]:
+            raise ValueError("S3 bucket is not configured")
+
+        try:
+            session = boto3.session.Session(
+                aws_access_key_id=cfg["access_key_id"],
+                aws_secret_access_key=cfg["secret_access_key"],
+                region_name=cfg["region"],
+            )
+            s3_client = session.client("s3", endpoint_url=cfg["endpoint"])
+
+            bucket_name = cfg["bucket"] or "circles-media-259c"
+
+            # Generate signed URL
+            signed_url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': bucket_name, 'Key': s3_key},
+                ExpiresIn=expiration
+            )
+
+            return signed_url
+
+        except ClientError as e:
+            logger.error(f"Error generating signed URL for {s3_key}: {e}")
+            raise ValueError(f"Failed to generate signed URL: {e}")
 
 
 def _validate_image_or_raise(filename: str, content: bytes) -> None:
@@ -259,3 +286,14 @@ def _validate_image_or_raise(filename: str, content: bytes) -> None:
         Image.open(io.BytesIO(content)).verify()
     except Exception:
         raise ValueError("Invalid image file")
+
+
+def _guess_content_type(filename: str) -> str:
+    ext = os.path.splitext(filename.lower())[1]
+    return {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }.get(ext, "application/octet-stream")

@@ -10,6 +10,47 @@ from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..models import DMThread, DMParticipantState, DMMessage, User, CheckIn
 from ..config import settings
+from ..services.storage import StorageService
+
+
+def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
+    """
+    Convert a single S3 key or S3 URL to signed URL for secure access.
+    """
+    if not photo_url:
+        return None
+
+    if not photo_url.startswith('http'):
+        # This is an S3 key, convert to signed URL
+        try:
+            return StorageService.generate_signed_url(photo_url)
+        except Exception as e:
+            # Fallback to original URL if signing fails
+            return photo_url
+    elif 's3.amazonaws.com' in photo_url or 'circles-media-259c' in photo_url:
+        # This is an S3 URL, extract the key and convert to signed URL
+        try:
+            # Extract S3 key from URL like: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
+            # or: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
+            if 's3.amazonaws.com' in photo_url:
+                # Handle both path-style and virtual-hosted-style URLs
+                if '/circles-media-259c/' in photo_url:
+                    # Path-style: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
+                    s3_key = photo_url.split('/circles-media-259c/')[1]
+                else:
+                    # Virtual-hosted-style: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
+                    s3_key = photo_url.split('.s3.amazonaws.com/')[1]
+
+                return StorageService.generate_signed_url(s3_key)
+            else:
+                # Fallback for other S3 URLs
+                return photo_url
+        except Exception as e:
+            # Fallback to original URL if signing fails
+            return photo_url
+    else:
+        # Already a full URL (e.g., from FSQ or local storage)
+        return photo_url
 
 
 router = APIRouter()
@@ -298,7 +339,7 @@ async def _get_user_info(db: AsyncSession, user_id: int) -> dict:
     res = await db.execute(select(User).where(User.id == user_id))
     user = res.scalar_one_or_none()
     if user:
-        return {"id": user.id, "name": user.name or f"User {user.id}", "avatar_url": user.avatar_url}
+        return {"id": user.id, "name": user.name or f"User {user.id}", "avatar_url": _convert_single_to_signed_url(user.avatar_url)}
     return {"id": user_id, "name": "Unknown", "avatar_url": None}
 
 

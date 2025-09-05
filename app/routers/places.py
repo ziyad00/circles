@@ -47,6 +47,70 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
+    """
+    Convert S3 keys to signed URLs for secure access.
+    """
+    signed_urls = []
+    for url in photo_urls:
+        if url and not url.startswith('http'):
+            # This is an S3 key, convert to signed URL
+            try:
+                signed_url = StorageService.generate_signed_url(url)
+                signed_urls.append(signed_url)
+            except Exception as e:
+                logger.error(f"Failed to generate signed URL for {url}: {e}")
+                # Fallback to original URL if signing fails
+                signed_urls.append(url)
+        else:
+            # Already a full URL (e.g., from FSQ or local storage)
+            signed_urls.append(url)
+    return signed_urls
+
+
+def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
+    """
+    Convert a single S3 key or S3 URL to signed URL for secure access.
+    """
+    if not photo_url:
+        return None
+
+    if not photo_url.startswith('http'):
+        # This is an S3 key, convert to signed URL
+        try:
+            return StorageService.generate_signed_url(photo_url)
+        except Exception as e:
+            logger.error(f"Failed to generate signed URL for {photo_url}: {e}")
+            # Fallback to original URL if signing fails
+            return photo_url
+    elif 's3.amazonaws.com' in photo_url or 'circles-media-259c' in photo_url:
+        # This is an S3 URL, extract the key and convert to signed URL
+        try:
+            # Extract S3 key from URL like: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
+            # or: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
+            if 's3.amazonaws.com' in photo_url:
+                # Handle both path-style and virtual-hosted-style URLs
+                if '/circles-media-259c/' in photo_url:
+                    # Path-style: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
+                    s3_key = photo_url.split('/circles-media-259c/')[1]
+                else:
+                    # Virtual-hosted-style: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
+                    s3_key = photo_url.split('.s3.amazonaws.com/')[1]
+
+                return StorageService.generate_signed_url(s3_key)
+            else:
+                # Fallback for other S3 URLs
+                return photo_url
+        except Exception as e:
+            logger.error(
+                f"Failed to generate signed URL from S3 URL {photo_url}: {e}")
+            # Fallback to original URL if signing fails
+            return photo_url
+    else:
+        # Already a full URL (e.g., from FSQ or local storage)
+        return photo_url
+
+
 router = APIRouter(
     prefix="/places",
     tags=["places"],
@@ -719,6 +783,11 @@ async def add_review_photo(
     db.add(photo)
     await db.commit()
     await db.refresh(photo)
+
+    # Convert S3 key to signed URL for response
+    signed_url = _convert_single_to_signed_url(photo.url)
+    photo.url = signed_url
+
     return photo
 
 
@@ -748,6 +817,11 @@ async def list_review_photos_for_place(
         .limit(limit)
     )
     items = (await db.execute(stmt)).scalars().all()
+
+    # Convert S3 keys to signed URLs for all photos
+    for photo in items:
+        photo.url = _convert_single_to_signed_url(photo.url)
+
     return PaginatedPhotos(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -1746,7 +1820,7 @@ async def whos_here(
                     user_id=checkin.user_id,
                     user_name=user_name or f"User {checkin.user_id}",
                     username=username,
-                    user_avatar_url=avatar_url,
+                    user_avatar_url=_convert_single_to_signed_url(avatar_url),
                     created_at=checkin.created_at,
                     photo_urls=urls,
                 )
@@ -1897,7 +1971,7 @@ async def create_check_in(
         visibility=check_in.visibility,
         created_at=check_in.created_at,
         expires_at=check_in.expires_at,
-        photo_url=check_in.photo_url,
+        photo_url=_convert_single_to_signed_url(check_in.photo_url),
         photo_urls=[],
         allowed_to_chat=allowed,
     )
@@ -1917,7 +1991,7 @@ async def create_check_in_full(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Create a check-in with photos and collection assignments in one request.
+    Create a check-in with optional photos and collection assignments in one request.
 
     **Authentication Required:** Yes
 
@@ -1933,10 +2007,11 @@ async def create_check_in_full(
     - Requires valid place coordinates
 
     **Photo Upload:**
-    - Multiple photos supported
+    - **Optional**: Photos are completely optional for check-ins
+    - Multiple photos supported when provided
     - Formats: JPEG, PNG, WebP
     - Max size: 10MB per photo
-    - Stored locally in development
+    - Stored in S3 with signed URLs for secure access
 
     **Collection Assignment:**
     - `collection_ids`: JSON array or comma-separated string
@@ -2008,7 +2083,7 @@ async def create_check_in_full(
                 continue
 
             # Validate file type and size during streaming
-            if not file.content_type or not file.content_type.startswith('image/'):
+            if not file.content_type or not isinstance(file.content_type, str) or not file.content_type.startswith('image/'):
                 raise HTTPException(
                     status_code=400,
                     detail="File must be an image (JPEG, PNG, WebP)"
@@ -2076,6 +2151,8 @@ async def create_check_in_full(
                                    check_in.id).order_by(CheckInPhoto.created_at.asc())
     )
     photo_urls = [p.url for p in res_ph.scalars().all()]
+    # Convert S3 keys to signed URLs
+    photo_urls = _convert_to_signed_urls(photo_urls)
 
     # Create activity for the check-in
     try:
@@ -2098,7 +2175,7 @@ async def create_check_in_full(
         visibility=check_in.visibility,
         created_at=check_in.created_at,
         expires_at=check_in.expires_at,
-        photo_url=check_in.photo_url,
+        photo_url=_convert_single_to_signed_url(check_in.photo_url),
         photo_urls=photo_urls,
     )
 
@@ -2139,6 +2216,9 @@ async def upload_checkin_photo(
     # enrich response with photo_urls
     res_ph = await db.execute(select(CheckInPhoto).where(CheckInPhoto.check_in_id == check_in_id).order_by(CheckInPhoto.created_at.asc()))
     photo_urls = [p.url for p in res_ph.scalars().all()]
+    # Convert S3 keys to signed URLs
+    photo_urls = _convert_to_signed_urls(photo_urls)
+
     from ..config import settings as app_settings
     allowed = (datetime.now(timezone.utc) -
                checkin.created_at) <= timedelta(hours=app_settings.place_chat_window_hours)
@@ -2150,7 +2230,7 @@ async def upload_checkin_photo(
         visibility=checkin.visibility,
         created_at=checkin.created_at,
         expires_at=checkin.expires_at,
-        photo_url=checkin.photo_url,
+        photo_url=_convert_single_to_signed_url(checkin.photo_url),
         photo_urls=photo_urls,
         allowed_to_chat=allowed,
     )
@@ -2201,7 +2281,7 @@ async def list_checkin_photos(
                                    check_in_id).order_by(CheckInPhoto.created_at.asc())
     )
     photos = res_ph.scalars().all()
-    return [CheckInPhotoResponse(id=p.id, check_in_id=p.check_in_id, url=p.url, created_at=p.created_at) for p in photos]
+    return [CheckInPhotoResponse(id=p.id, check_in_id=p.check_in_id, url=_convert_single_to_signed_url(p.url), created_at=p.created_at) for p in photos]
 
 
 @router.delete("/check-ins/{check_in_id}/photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -2294,6 +2374,9 @@ async def whos_here(
             .order_by(CheckInPhoto.created_at.asc())
         )
         urls = [p.url for p in res_ph.scalars().all()]
+        # Convert S3 keys to signed URLs
+        urls = _convert_to_signed_urls(urls)
+
         from ..config import settings as app_settings
         allowed = (datetime.now(timezone.utc) -
                    ci.created_at) <= timedelta(hours=app_settings.place_chat_window_hours)
@@ -2306,7 +2389,7 @@ async def whos_here(
                 visibility=ci.visibility,
                 created_at=ci.created_at,
                 expires_at=ci.expires_at,
-                photo_url=ci.photo_url,
+                photo_url=_convert_single_to_signed_url(ci.photo_url),
                 photo_urls=urls,
                 allowed_to_chat=allowed,
             )
@@ -2366,6 +2449,9 @@ async def my_check_ins(
             .order_by(CheckInPhoto.created_at.asc())
         )
         urls = [p.url for p in res_ph.scalars().all()]
+        # Convert S3 keys to signed URLs
+        urls = _convert_to_signed_urls(urls)
+
         from ..config import settings as app_settings
         allowed = (datetime.now(timezone.utc) -
                    ci.created_at) <= timedelta(hours=app_settings.place_chat_window_hours)
@@ -2378,7 +2464,7 @@ async def my_check_ins(
                 visibility=ci.visibility,
                 created_at=ci.created_at,
                 expires_at=ci.expires_at,
-                photo_url=ci.photo_url,
+                photo_url=_convert_single_to_signed_url(ci.photo_url),
                 photo_urls=urls,
                 allowed_to_chat=allowed,
             )

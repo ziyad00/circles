@@ -16,6 +16,48 @@ from ..schemas import (
 )
 from ..services.jwt_service import JWTService
 from ..utils import can_view_checkin
+from ..services.storage import StorageService
+
+
+def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
+    """
+    Convert a single S3 key or S3 URL to signed URL for secure access.
+    """
+    if not photo_url:
+        return None
+
+    if not photo_url.startswith('http'):
+        # This is an S3 key, convert to signed URL
+        try:
+            return StorageService.generate_signed_url(photo_url)
+        except Exception as e:
+            # Fallback to original URL if signing fails
+            return photo_url
+    elif 's3.amazonaws.com' in photo_url or 'circles-media-259c' in photo_url:
+        # This is an S3 URL, extract the key and convert to signed URL
+        try:
+            # Extract S3 key from URL like: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
+            # or: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
+            if 's3.amazonaws.com' in photo_url:
+                # Handle both path-style and virtual-hosted-style URLs
+                if '/circles-media-259c/' in photo_url:
+                    # Path-style: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
+                    s3_key = photo_url.split('/circles-media-259c/')[1]
+                else:
+                    # Virtual-hosted-style: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
+                    s3_key = photo_url.split('.s3.amazonaws.com/')[1]
+
+                return StorageService.generate_signed_url(s3_key)
+            else:
+                # Fallback for other S3 URLs
+                return photo_url
+        except Exception as e:
+            # Fallback to original URL if signing fails
+            return photo_url
+    else:
+        # Already a full URL (e.g., from FSQ or local storage)
+        return photo_url
+
 
 router = APIRouter(prefix="/check-ins", tags=["check-ins"])
 
@@ -66,7 +108,8 @@ async def get_check_in_detail(
         id=check_in.id,
         user_id=check_in.user_id,
         user_name=check_in.user.name or f"User {check_in.user.id}",
-        user_avatar_url=check_in.user.avatar_url,
+        user_avatar_url=_convert_single_to_signed_url(
+            check_in.user.avatar_url),
         place_id=check_in.place_id,
         place_name=check_in.place.name,
         note=check_in.note,
@@ -172,7 +215,8 @@ async def get_check_in_comments(
             check_in_id=comment.check_in_id,
             user_id=comment.user_id,
             user_name=comment.user.name or f"User {comment.user.id}",
-            user_avatar_url=comment.user.avatar_url,
+            user_avatar_url=_convert_single_to_signed_url(
+                comment.user.avatar_url),
             content=comment.content,
             created_at=comment.created_at,
             updated_at=comment.updated_at,
@@ -221,7 +265,7 @@ async def add_check_in_comment(
         check_in_id=comment.check_in_id,
         user_id=comment.user_id,
         user_name=comment.user.name or f"User {comment.user.id}",
-        user_avatar_url=comment.user.avatar_url,
+        user_avatar_url=_convert_single_to_signed_url(comment.user.avatar_url),
         content=comment.content,
         created_at=comment.created_at,
         updated_at=comment.updated_at,
@@ -305,7 +349,8 @@ async def get_check_in_likes(
             check_in_id=like.check_in_id,
             user_id=like.user_id,
             user_name=like.user.name or f"User {like.user.id}",
-            user_avatar_url=like.user.avatar_url,
+            user_avatar_url=_convert_single_to_signed_url(
+                like.user.avatar_url),
             created_at=like.created_at,
         )
         for like in likes
