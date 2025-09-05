@@ -15,6 +15,48 @@ from ..schemas import (
     ActivityFeedFilters,
 )
 from ..services.jwt_service import JWTService
+from ..services.storage import StorageService
+
+
+def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
+    """
+    Convert a single S3 key or S3 URL to signed URL for secure access.
+    """
+    if not photo_url:
+        return None
+
+    if not photo_url.startswith('http'):
+        # This is an S3 key, convert to signed URL
+        try:
+            return StorageService.generate_signed_url(photo_url)
+        except Exception as e:
+            # Fallback to original URL if signing fails
+            return photo_url
+    elif 's3.amazonaws.com' in photo_url or 'circles-media-259c' in photo_url:
+        # This is an S3 URL, extract the key and convert to signed URL
+        try:
+            # Extract S3 key from URL like: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
+            # or: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
+            if 's3.amazonaws.com' in photo_url:
+                # Handle both path-style and virtual-hosted-style URLs
+                if '/circles-media-259c/' in photo_url:
+                    # Path-style: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
+                    s3_key = photo_url.split('/circles-media-259c/')[1]
+                else:
+                    # Virtual-hosted-style: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
+                    s3_key = photo_url.split('.s3.amazonaws.com/')[1]
+
+                return StorageService.generate_signed_url(s3_key)
+            else:
+                # Fallback for other S3 URLs
+                return photo_url
+        except Exception as e:
+            # Fallback to original URL if signing fails
+            return photo_url
+    else:
+        # Already a full URL (e.g., from FSQ or local storage)
+        return photo_url
+
 
 router = APIRouter(
     prefix="/activity",
@@ -184,7 +226,8 @@ async def get_activity_feed(
             id=activity.id,
             user_id=activity.user_id,
             user_name=activity.user.name or f"User {activity.user.id}",
-            user_avatar_url=activity.user.avatar_url,
+            user_avatar_url=_convert_single_to_signed_url(
+                activity.user.avatar_url),
             activity_type=activity.activity_type,
             activity_data=activity_data,
             created_at=activity.created_at
@@ -270,7 +313,8 @@ async def get_filtered_activity_feed(
             id=activity.id,
             user_id=activity.user_id,
             user_name=activity.user.name or f"User {activity.user.id}",
-            user_avatar_url=activity.user.avatar_url,
+            user_avatar_url=_convert_single_to_signed_url(
+                activity.user.avatar_url),
             activity_type=activity.activity_type,
             activity_data=activity_data,
             created_at=activity.created_at

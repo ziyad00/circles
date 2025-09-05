@@ -1074,7 +1074,7 @@ class EnhancedPlaceDataService:
 
         # Extract amenities from FSQ attributes
         amenities = self._extract_fsq_amenities(venue_details)
-        
+
         # Update metadata
         metadata = place.place_metadata or {}
         metadata.update({
@@ -1105,14 +1105,14 @@ class EnhancedPlaceDataService:
     def _extract_fsq_amenities(self, venue_details: Dict[str, Any]) -> Dict[str, bool]:
         """Extract amenities from Foursquare venue attributes"""
         amenities = {}
-        
+
         # Get attributes from the venue details
         attrs = (venue_details.get("attributes") or {}).get("groups") or []
-        
+
         # Mapping of FSQ attribute keys to our amenity names
         amenity_mappings = {
             "wifi": "wifi",
-            "outdoor_seating": "outdoor_seating", 
+            "outdoor_seating": "outdoor_seating",
             "good_for_kids": "family_friendly",
             "family_friendly": "family_friendly",
             "accepts_credit_cards": "credit_cards",
@@ -1129,24 +1129,25 @@ class EnhancedPlaceDataService:
             "dinner": "dinner",
             "late_night": "late_night"
         }
-        
+
         try:
             for grp in attrs:
                 for item in grp.get("items", []):
                     key = (item.get("key") or "").lower()
                     val = item.get("value")
-                    
+
                     if key in amenity_mappings:
                         amenity_name = amenity_mappings[key]
                         if isinstance(val, bool):
                             amenities[amenity_name] = val
                         elif isinstance(val, str):
-                            amenities[amenity_name] = val.lower() in ("yes", "true", "1", "available")
+                            amenities[amenity_name] = val.lower() in (
+                                "yes", "true", "1", "available")
                         elif val is not None:
                             amenities[amenity_name] = bool(val)
         except Exception as e:
             logger.warning(f"Error extracting FSQ amenities: {e}")
-            
+
         return amenities
 
     def _calculate_quality_score(self, place: Place) -> float:

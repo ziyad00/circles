@@ -63,6 +63,7 @@ class CheckIn(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime)
 
+
 class Review(Base):
     __tablename__ = "reviews"
     id = Column(Integer, primary_key=True)
@@ -71,6 +72,7 @@ class Review(Base):
     rating = Column(Integer)
     content = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
+
 
 class Photo(Base):
     __tablename__ = "photos"
@@ -209,7 +211,7 @@ async def seed_data():
         # Create sample reviews and photos
         reviews_created = 0
         photos_created = 0
-        
+
         # Sample photo URLs (using placeholder images)
         sample_photo_urls = [
             "https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=800",  # cafe
@@ -223,12 +225,13 @@ async def seed_data():
             "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800",  # outdoor
             "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=800",  # modern space
         ]
-        
+
         for place in places:
             # Each place gets 1-2 reviews with photos
             num_reviews = random.randint(1, 2)
-            place_reviewers = random.sample(users, min(num_reviews, len(users)))
-            
+            place_reviewers = random.sample(
+                users, min(num_reviews, len(users)))
+
             for reviewer in place_reviewers:
                 review = Review(
                     user_id=reviewer.id,
@@ -246,7 +249,7 @@ async def seed_data():
                 )
                 session.add(review)
                 reviews_created += 1
-                
+
                 # Add 1-3 photos per review
                 num_photos = random.randint(1, 3)
                 for _ in range(num_photos):
@@ -258,28 +261,30 @@ async def seed_data():
                     )
                     session.add(photo)
                     photos_created += 1
-        
+
         await session.commit()
-        
+
         # Update photos with review_ids
         from sqlalchemy import update
         reviews = await session.execute(select(Review))
         reviews_list = reviews.scalars().all()
-        
+
         photos = await session.execute(select(Photo).where(Photo.review_id.is_(None)))
         photos_list = photos.scalars().all()
-        
+
         # Assign photos to reviews (simple assignment)
-        photos_per_review = len(photos_list) // len(reviews_list) if reviews_list else 0
+        photos_per_review = len(
+            photos_list) // len(reviews_list) if reviews_list else 0
         for i, review in enumerate(reviews_list):
             start_idx = i * photos_per_review
             end_idx = start_idx + photos_per_review
             for j in range(start_idx, min(end_idx, len(photos_list))):
                 if j < len(photos_list):
                     photos_list[j].review_id = review.id
-        
+
         await session.commit()
-        print(f"✅ Created {reviews_created} reviews and {photos_created} photos")
+        print(
+            f"✅ Created {reviews_created} reviews and {photos_created} photos")
 
         print("🎉 Seeding completed successfully!")
         print(

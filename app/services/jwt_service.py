@@ -104,3 +104,39 @@ class JWTService:
             )
 
         return user
+
+    @staticmethod
+    async def get_current_user_optional(
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(
+            security),
+        db: AsyncSession = Depends(get_db)
+    ) -> Optional[User]:
+        """Get the current authenticated user from JWT token (optional)"""
+        if not credentials:
+            return None
+
+        try:
+            token = credentials.credentials
+            payload = JWTService.verify_token(token)
+
+            user_id_str = payload.get("sub")
+            if user_id_str is None:
+                return None
+
+            try:
+                user_id = int(user_id_str)
+            except (ValueError, TypeError):
+                return None
+
+            # Get user from database
+            stmt = select(User).where(User.id == user_id)
+            result = await db.execute(stmt)
+            user = result.scalar_one_or_none()
+
+            if user is None or not user.is_verified:
+                return None
+
+            return user
+        except:
+            # Any error in token validation returns None (user not authenticated)
+            return None
