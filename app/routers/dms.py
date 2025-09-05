@@ -27,6 +27,7 @@ from ..schemas import (
     HeartResponse,
 )
 from ..services.jwt_service import JWTService
+from ..routers.users import _convert_single_to_signed_url
 
 
 router = APIRouter(
@@ -265,13 +266,54 @@ async def inbox(
     - Search conversations
     - Organize important threads
     """
+    # Get other user's info and last message in one query
+    other_user_id = func.case(
+        (DMThread.user_a_id == current_user.id, DMThread.user_b_id),
+        else_=DMThread.user_a_id,
+    )
+
+    # Subquery for last message
+    last_msg_subq = (
+        select(
+            DMMessage.thread_id,
+            DMMessage.text.label("last_message_text"),
+            DMMessage.created_at.label("last_message_time"),
+            func.row_number().over(
+                partition_by=DMMessage.thread_id,
+                order_by=DMMessage.created_at.desc()
+            ).label("rn")
+        )
+        .where(DMMessage.thread_id == DMThread.id)
+        .subquery()
+    )
+
     base = (
-        select(DMThread)
+        select(
+            DMThread,
+            User.name.label("other_user_name"),
+            User.username.label("other_user_username"),
+            User.avatar_url.label("other_user_avatar"),
+            last_msg_subq.c.last_message_text.label("last_message"),
+            last_msg_subq.c.last_message_time.label("last_message_time"),
+        )
         .join(
             DMParticipantState,
             and_(
                 DMParticipantState.thread_id == DMThread.id,
                 DMParticipantState.user_id == current_user.id,
+            ),
+            isouter=True,
+        )
+        .join(
+            User,
+            User.id == other_user_id,
+            isouter=True,
+        )
+        .join(
+            last_msg_subq,
+            and_(
+                last_msg_subq.c.thread_id == DMThread.id,
+                last_msg_subq.c.rn == 1,
             ),
             isouter=True,
         )
@@ -291,38 +333,54 @@ async def inbox(
     if only_pinned:
         base = base.where(DMParticipantState.pinned.is_(True))
     if q:
-        # search by other participant name via subquery on last message text as well
-        # filter where last message text ilike q OR other user's name ilike q
-        # last message subquery
-        last_msg_subq = (
-            select(DMMessage.thread_id, func.max(
-                DMMessage.created_at).label("last_ts"))
-            .group_by(DMMessage.thread_id)
-            .subquery()
-        )
-        base = (
-            base.join(last_msg_subq, last_msg_subq.c.thread_id ==
-                      DMThread.id, isouter=True)
-            .join(DMMessage, and_(DMMessage.thread_id == DMThread.id, DMMessage.created_at == last_msg_subq.c.last_ts), isouter=True)
-        )
-        # other participant lookup
-        other_id = func.case(
-            (DMThread.user_a_id == current_user.id, DMThread.user_b_id),
-            else_=DMThread.user_a_id,
-        )
-        other_user_subq = select(User.id, User.name).subquery()
-        base = base.join(other_user_subq, other_user_subq.c.id ==
-                         other_id, isouter=True)
         like = f"%{q}%"
         base = base.where(
-            or_(DMMessage.text.ilike(like), other_user_subq.c.name.ilike(like))
+            or_(
+                last_msg_subq.c.last_message_text.ilike(like),
+                User.name.ilike(like),
+                User.username.ilike(like)
+            )
         )
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     # order: pinned first (treat NULL as false), then updated_at desc
     pinned_first = func.coalesce(DMParticipantState.pinned, False).desc()
     stmt = base.order_by(pinned_first, desc(
         DMThread.updated_at)).offset(offset).limit(limit)
-    items = (await db.execute(stmt)).scalars().all()
+    results = (await db.execute(stmt)).all()
+
+    # Convert results to DMThreadResponse objects with additional fields
+    items = []
+    for result in results:
+        thread = result[0]  # DMThread object
+        other_user_name = result[1]
+        other_user_username = result[2]
+        other_user_avatar = result[3]
+        last_message = result[4]
+        last_message_time = result[5]
+
+        # Convert avatar URL to signed URL if needed
+        if other_user_avatar and not other_user_avatar.startswith('http'):
+            try:
+                other_user_avatar = _convert_single_to_signed_url(other_user_avatar)
+            except Exception:
+                pass  # Keep original if signing fails
+
+        response_item = DMThreadResponse(
+            id=thread.id,
+            user_a_id=thread.user_a_id,
+            user_b_id=thread.user_b_id,
+            initiator_id=thread.initiator_id,
+            status=thread.status,
+            created_at=thread.created_at,
+            updated_at=thread.updated_at,
+            other_user_name=other_user_name,
+            other_user_username=other_user_username,
+            other_user_avatar=other_user_avatar,
+            last_message=last_message,
+            last_message_time=last_message_time,
+        )
+        items.append(response_item)
+
     return PaginatedDMThreads(items=items, total=total, limit=limit, offset=offset)
 
 

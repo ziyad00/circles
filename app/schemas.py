@@ -408,6 +408,12 @@ class DMThreadResponse(BaseModel):
     status: DMThreadStatus
     created_at: datetime
     updated_at: datetime
+    # Additional fields for inbox display
+    other_user_name: Optional[str] = None
+    other_user_username: Optional[str] = None
+    other_user_avatar: Optional[str] = None
+    last_message: Optional[str] = None
+    last_message_time: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
 
