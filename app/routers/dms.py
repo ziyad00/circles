@@ -283,7 +283,10 @@ async def inbox(
                 order_by=DMMessage.created_at.desc()
             ).label("rn")
         )
-        .where(DMMessage.thread_id == DMThread.id)
+        .where(
+            DMMessage.thread_id == DMThread.id,
+            DMMessage.deleted_at.is_(None)
+        )
         .subquery()
     )
 
@@ -361,7 +364,8 @@ async def inbox(
         # Convert avatar URL to signed URL if needed
         if other_user_avatar and not other_user_avatar.startswith('http'):
             try:
-                other_user_avatar = _convert_single_to_signed_url(other_user_avatar)
+                other_user_avatar = _convert_single_to_signed_url(
+                    other_user_avatar)
             except Exception:
                 pass  # Keep original if signing fails
 
@@ -402,7 +406,10 @@ async def list_messages(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
-    base = select(DMMessage).where(DMMessage.thread_id == thread_id)
+    base = select(DMMessage).where(
+        DMMessage.thread_id == thread_id,
+        DMMessage.deleted_at.is_(None)
+    )
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     stmt = base.order_by(DMMessage.created_at.asc()
                          ).offset(offset).limit(limit)
@@ -527,6 +534,70 @@ async def send_message(
         heart_count=0,
         liked_by_me=False,
     )
+
+
+@router.delete("/threads/{thread_id}/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_message(
+    thread_id: int,
+    message_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Delete a message in a DM thread (soft delete).
+
+    Only the sender can delete their own messages.
+
+    **Authentication Required:** Yes
+
+    **Features:**
+    - Soft delete (message is hidden but preserved)
+    - Only sender can delete their messages
+    - Updates thread's last activity timestamp
+    - Maintains conversation history integrity
+
+    **Rate Limiting:**
+    - No specific rate limit for deletions
+
+    **Use Cases:**
+    - Remove inappropriate messages
+    - Correct sent messages
+    - Clean up conversation
+    """
+    # Verify thread exists and user is participant
+    thread_result = await db.execute(select(DMThread).where(DMThread.id == thread_id))
+    thread = thread_result.scalars().first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if not _is_participant(thread, current_user.id):
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    # Find and verify the message
+    message_result = await db.execute(
+        select(DMMessage).where(
+            DMMessage.id == message_id,
+            DMMessage.thread_id == thread_id,
+            DMMessage.deleted_at.is_(None)
+        )
+    )
+    message = message_result.scalars().first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # Verify the current user is the sender
+    if message.sender_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only delete your own messages"
+        )
+
+    # Soft delete the message
+    message.deleted_at = func.now()
+    thread.updated_at = func.now()
+
+    await db.commit()
+
+    # Note: We don't return anything for 204 No Content
 
 
 def _participant_state_base(thread_id: int, user_id: int):

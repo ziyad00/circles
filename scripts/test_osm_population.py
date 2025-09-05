@@ -4,6 +4,7 @@ Test OSM Data Population Script
 Test the OSM data population functionality with mock data
 """
 
+from scripts.populate_osm_data import OSMDataPopulator
 import sys
 import os
 import asyncio
@@ -13,8 +14,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 # Ensure project root on path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-
-from scripts.populate_osm_data import OSMDataPopulator
 
 
 async def test_osm_data_population():
@@ -84,7 +83,8 @@ async def test_osm_data_population():
         print("   📊 Parsed OSM data:")
         print(f"      Website: {parsed_data.get('website', 'None')}")
         print(f"      Phone: {parsed_data.get('phone', 'None')}")
-        print(f"      Opening hours: {parsed_data.get('opening_hours', 'None')}")
+        print(
+            f"      Opening hours: {parsed_data.get('opening_hours', 'None')}")
         print(f"      Amenities: {parsed_data.get('amenities', {})}")
 
     except Exception as e:
@@ -116,7 +116,8 @@ async def test_osm_data_population():
         print(f"   🖼️  Found {len(wikimedia_photos)} Wikimedia photos")
         if wikimedia_photos:
             for i, photo in enumerate(wikimedia_photos[:2]):
-                print(f"      Photo {i+1}: {photo.get('caption', 'No caption')}")
+                print(
+                    f"      Photo {i+1}: {photo.get('caption', 'No caption')}")
 
     except Exception as e:
         print(f"   ⚠️  Wikimedia test failed (expected): {e}")

@@ -5,6 +5,7 @@ This directory contains scripts to populate missing data for places from OpenStr
 ## 📋 Overview
 
 The OSM data population system enhances place data by fetching missing information like:
+
 - **Websites** and **phone numbers**
 - **Opening hours** and **detailed amenities**
 - **Photos** from multiple sources (Wikimedia Commons, Flickr, Foursquare)
@@ -17,6 +18,7 @@ The OSM data population system enhances place data by fetching missing informati
 **Purpose**: Populate missing data for places in the database from OSM and other sources.
 
 **Features**:
+
 - ✅ Fetches missing websites, phones, and amenities from OpenStreetMap
 - ✅ Retrieves real photos from Wikimedia Commons, Flickr, and Foursquare
 - ✅ Extracts detailed amenities (WiFi, outdoor seating, wheelchair access, etc.)
@@ -38,6 +40,7 @@ python scripts/populate_osm_data.py --status
 ```
 
 **Command Line Options**:
+
 - `--limit N`: Number of places to process (default: 50)
 - `--city CITY`: Filter places by city name
 - `--status`: Show current data completeness statistics only
@@ -54,6 +57,7 @@ python scripts/test_osm_population.py
 ```
 
 **What it tests**:
+
 - OSM element finding and matching
 - Data parsing and amenity extraction
 - Photo fetching from various sources
@@ -81,11 +85,13 @@ export DATABASE_URL="postgresql+asyncpg://user:pass@host:port/db"
 ## 📊 Data Sources
 
 ### Primary Sources
+
 - **OpenStreetMap (OSM)**: Main source for addresses, phones, websites, amenities
 - **Nominatim**: OSM geocoding service for place matching
 - **Overpass API**: Advanced OSM data querying
 
 ### Photo Sources
+
 - **Wikimedia Commons**: Free licensed photos
 - **Flickr**: User-generated photos (requires API key)
 - **Foursquare**: Venue photos (requires API key)
@@ -94,12 +100,14 @@ export DATABASE_URL="postgresql+asyncpg://user:pass@host:port/db"
 ### Data Types Populated
 
 #### Basic Information
+
 - Website URLs
 - Phone numbers
 - Opening hours
 - Categories and tags
 
 #### Amenities
+
 - WiFi availability
 - Outdoor seating
 - Wheelchair accessibility
@@ -109,6 +117,7 @@ export DATABASE_URL="postgresql+asyncpg://user:pass@host:port/db"
 - Family-friendly features
 
 #### Photos
+
 - Venue exterior/interior photos
 - Themed placeholder photos
 - High-resolution images with metadata
@@ -155,6 +164,7 @@ python scripts/test_osm_population.py
 ```
 
 **Test Results** (example):
+
 ```
 ✅ OSM element finding: Working
 ✅ Data parsing: Working
@@ -166,6 +176,7 @@ python scripts/test_osm_population.py
 ## 🚀 Production Usage
 
 ### Initial Setup
+
 ```bash
 # Check current data status
 python scripts/populate_osm_data.py --status
@@ -176,12 +187,14 @@ python scripts/populate_osm_data.py --limit 300 --city Jeddah
 ```
 
 ### Ongoing Maintenance
+
 ```bash
 # Weekly updates for places missing data
 python scripts/populate_osm_data.py --limit 100
 ```
 
 ### Monitoring
+
 - Check logs for success rates and error patterns
 - Monitor API usage and rate limits
 - Track data completeness improvements
@@ -199,14 +212,17 @@ python scripts/populate_osm_data.py --limit 100
 ### Common Issues
 
 1. **Database Connection Failed**
+
    - Check DATABASE_URL configuration
    - Ensure database is running and accessible
 
 2. **OSM API Rate Limited**
+
    - Reduce batch size or increase delays
    - Use different Overpass endpoints
 
 3. **No Photos Found**
+
    - This is normal - not all places have public photos
    - Script falls back to placeholder photos
 

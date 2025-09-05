@@ -99,6 +99,7 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 - Ordered by most recent activity
 
 **Response**:
+
 ```json
 {
   "items": [
@@ -174,7 +175,41 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 - Real-time delivery via WebSocket
 - Automatic unread count updates
 
+### `DELETE /dms/threads/{thread_id}/messages/{message_id}` - Delete Message
+
+**Purpose**: Delete a message in a DM thread (soft delete)
+
+**Authentication**: Required
+**Response**: 204 No Content
+
+**Features**:
+
+- Only sender can delete their own messages
+- Soft delete (message is hidden but preserved)
+- Updates thread's last activity timestamp
+- Maintains conversation history integrity
+
+**Permissions**:
+
+- ❌ Recipients cannot delete sender's messages
+- ✅ Senders can delete their own messages
+- ❌ Cannot delete already deleted messages
+
+**Use Cases**:
+
+- Remove inappropriate messages
+- Correct sent messages
+- Clean up conversation
+
+**Response Codes**:
+
+- `204`: Message deleted successfully
+- `403`: Not authorized to delete this message
+- `404`: Message or thread not found
+
 ---
+
+
 
 ## 🔔 Notifications & Status
 
