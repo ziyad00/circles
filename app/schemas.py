@@ -557,7 +557,8 @@ class HeartResponse(BaseModel):
 
 
 class ReactionCreate(BaseModel):
-    emoji: str = Field(..., min_length=1, max_length=10, examples=["👍", "❤️", "😂"])
+    emoji: str = Field(..., min_length=1, max_length=10,
+                       examples=["👍", "❤️", "😂"])
 
 
 class ReactionResponse(BaseModel):

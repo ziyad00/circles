@@ -485,6 +485,7 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 
 **Authentication**: Required
 **Body**:
+
 ```json
 {
   "emoji": "👍"
@@ -492,11 +493,13 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 ```
 
 **Features**:
+
 - ✅ One reaction per emoji per user per message
 - ✅ Real-time reaction updates via WebSocket
 - ✅ Automatic duplicate prevention
 
 **Response**:
+
 ```json
 {
   "id": 123,
@@ -515,6 +518,7 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 **URL Parameters**: `emoji` (URL-encoded emoji, e.g., `%F0%9F%91%8D` for 👍)
 
 **Response**:
+
 ```json
 {
   "success": true
@@ -528,15 +532,14 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 **Authentication**: Required
 
 **Response**:
+
 ```json
 {
   "👍": [
-    {"user_id": 123, "user_name": "Alice"},
-    {"user_id": 456, "user_name": "Bob"}
+    { "user_id": 123, "user_name": "Alice" },
+    { "user_id": 456, "user_name": "Bob" }
   ],
-  "❤️": [
-    {"user_id": 789, "user_name": "Charlie"}
-  ]
+  "❤️": [{ "user_id": 789, "user_name": "Charlie" }]
 }
 ```
 
@@ -547,6 +550,7 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 The DM system now includes comprehensive real-time notifications:
 
 ### **WebSocket Events**
+
 - `dm_message`: New message received
 - `dm_reply`: Reply to your message
 - `dm_media`: Media message received
@@ -554,6 +558,7 @@ The DM system now includes comprehensive real-time notifications:
 - `reaction_update`: Message reaction added/removed
 
 ### **Notification Payload Example**
+
 ```json
 {
   "type": "dm_notification",
@@ -570,12 +575,14 @@ The DM system now includes comprehensive real-time notifications:
 ```
 
 ### **Smart Notification Types**
+
 - **Text Messages**: `"Alice: Hey there!"`
 - **Media Messages**: `"Alice sent you 2 photos"`
 - **Replies**: `"Alice replied to your message"`
 - **Captions**: Include caption in preview when available
 
 ### **Mute Support**
+
 - ✅ Respect thread mute settings
 - ✅ No notifications for muted threads
 - ✅ User preferences honored
