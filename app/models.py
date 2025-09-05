@@ -300,6 +300,24 @@ class DMMessageLike(Base):
     )
 
 
+class DMMessageReaction(Base):
+    __tablename__ = "dm_message_reactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey(
+        "dm_messages.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"),
+                     nullable=False, index=True)
+    emoji = Column(String(10), nullable=False)  # Emoji character
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Unique constraint to prevent duplicate reactions per user per message
+    __table_args__ = (
+        UniqueConstraint('message_id', 'user_id', 'emoji',
+                         name='uq_dm_message_reaction_user_emoji'),
+    )
+
+
 class DMParticipantState(Base):
     __tablename__ = "dm_participant_states"
 
