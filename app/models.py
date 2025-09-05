@@ -267,7 +267,18 @@ class DMMessage(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Reply functionality
+    reply_to_id = Column(Integer, ForeignKey(
+        "dm_messages.id"), nullable=True, index=True)
+    reply_to_text = Column(Text, nullable=True)
+
+    # Media attachments
+    photo_urls = Column(JSON, default=list)
+    video_urls = Column(JSON, default=list)
+
     sender = relationship("User", back_populates="dm_messages")
+    # Self-referencing relationship for replies
+    reply_to = relationship("DMMessage", remote_side=[id], backref="replies")
 
 
 class DMMessageLike(Base):

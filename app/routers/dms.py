@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, UploadFile, File
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_, func, desc, nullslast
@@ -7,6 +7,7 @@ from typing import Optional
 from ..database import get_db
 from ..models import User, DMThread, DMMessage, DMParticipantState, DMMessageLike, Follow
 from ..config import settings
+from ..services.storage import StorageService
 from ..schemas import (
     DMThreadResponse,
     PaginatedDMThreads,
@@ -272,11 +273,12 @@ async def inbox(
         else_=DMThread.user_a_id,
     )
 
-    # Subquery for last message
+    # Subquery for last message with reply handling
     last_msg_subq = (
         select(
             DMMessage.thread_id,
             DMMessage.text.label("last_message_text"),
+            DMMessage.reply_to_text.label("reply_preview"),
             DMMessage.created_at.label("last_message_time"),
             func.row_number().over(
                 partition_by=DMMessage.thread_id,
@@ -298,6 +300,7 @@ async def inbox(
             User.avatar_url.label("other_user_avatar"),
             last_msg_subq.c.last_message_text.label("last_message"),
             last_msg_subq.c.last_message_time.label("last_message_time"),
+            last_msg_subq.c.reply_preview.label("reply_preview"),
         )
         .join(
             DMParticipantState,
@@ -360,6 +363,13 @@ async def inbox(
         other_user_avatar = result[3]
         last_message = result[4]
         last_message_time = result[5]
+        reply_preview = result[6]
+
+        # Handle reply preview in last message
+        if reply_preview:
+            # If it's a reply, show a shortened version
+            last_message = last_message[:100] + \
+                "..." if len(last_message) > 100 else last_message
 
         # Convert avatar URL to signed URL if needed
         if other_user_avatar and not other_user_avatar.startswith('http'):
@@ -441,6 +451,12 @@ async def list_messages(
         seen = None
         if m.sender_id == current_user.id and other_last_read is not None:
             seen = m.created_at <= other_last_read
+
+        # Get reply sender name if this is a reply
+        reply_sender_name = None
+        if m.reply_to_id and m.reply_to:
+            reply_sender_name = m.reply_to.sender.name
+
         response_items.append(
             DMMessageResponse(
                 id=m.id,
@@ -451,6 +467,11 @@ async def list_messages(
                 seen=seen,
                 heart_count=like_counts.get(m.id, 0),
                 liked_by_me=(m.id in liked_by_me_set),
+                reply_to_id=m.reply_to_id,
+                reply_to_text=m.reply_to_text,
+                reply_to_sender_name=reply_sender_name,
+                photo_urls=m.photo_urls or [],
+                video_urls=m.video_urls or [],
             )
         )
     return PaginatedDMMessages(items=response_items, total=total, limit=limit, offset=offset)
@@ -516,24 +537,125 @@ async def send_message(
     if other_state and getattr(other_state, "blocked", False):
         raise HTTPException(
             status_code=403, detail="You are blocked by this user")
-    msg = DMMessage(thread_id=thread_id,
-                    sender_id=current_user.id, text=payload.text)
+
+    # Handle reply functionality
+    reply_to_text = None
+    if payload.reply_to_id:
+        # Validate the reply_to_id exists and is in the same thread
+        reply_msg_result = await db.execute(
+            select(DMMessage).where(
+                DMMessage.id == payload.reply_to_id,
+                DMMessage.thread_id == thread_id,
+                DMMessage.deleted_at.is_(None)
+            )
+        )
+        reply_msg = reply_msg_result.scalars().first()
+        if not reply_msg:
+            raise HTTPException(
+                status_code=400,
+                detail="Reply message not found or not in this thread"
+            )
+        # Store preview text of the message being replied to
+        reply_to_text = reply_msg.text[:200] + \
+            "..." if len(reply_msg.text) > 200 else reply_msg.text
+
+           msg = DMMessage(
+           thread_id=thread_id,
+           sender_id=current_user.id,
+           text=payload.text,
+           reply_to_id=payload.reply_to_id,
+           reply_to_text=reply_to_text,
+           photo_urls=payload.photo_urls,
+           video_urls=payload.video_urls
+       )
     db.add(msg)
     # bump thread updated_at
     thread.updated_at = func.now()
     await db.commit()
     await db.refresh(msg)
-    # decorate response with defaults
-    return DMMessageResponse(
-        id=msg.id,
-        thread_id=msg.thread_id,
-        sender_id=msg.sender_id,
-        text=msg.text,
-        created_at=msg.created_at,
-        seen=None,
-        heart_count=0,
-        liked_by_me=False,
-    )
+    # Get reply sender name if this is a reply
+    reply_sender_name = None
+    if msg.reply_to_id and msg.reply_to:
+        reply_sender_name = msg.reply_to.sender.name
+
+           # decorate response with defaults
+       return DMMessageResponse(
+           id=msg.id,
+           thread_id=msg.thread_id,
+           sender_id=msg.sender_id,
+           text=msg.text,
+           created_at=msg.created_at,
+           seen=None,
+           heart_count=0,
+           liked_by_me=False,
+           reply_to_id=msg.reply_to_id,
+           reply_to_text=msg.reply_to_text,
+           reply_to_sender_name=reply_sender_name,
+           photo_urls=msg.photo_urls,
+           video_urls=msg.video_urls,
+       )
+
+
+@router.post("/upload/media", response_model=dict)
+async def upload_dm_media(
+    file: UploadFile = File(...),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    """
+    Upload media files for DM messages (photos/videos)
+    """
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "video/mp4", "video/quicktime"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type {file.content_type} not allowed. Allowed: {', '.join(allowed_types)}"
+        )
+
+    # Validate file size (10MB for images, 50MB for videos)
+    max_size = 50 * 1024 * 1024 if file.content_type.startswith("video") else 10 * 1024 * 1024
+    file_content = await file.read()
+    if len(file_content) > max_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Max size: {max_size // (1024*1024)}MB"
+        )
+
+    # Determine upload path
+    file_ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
+    media_type = "videos" if file.content_type.startswith("video") else "photos"
+    upload_path = f"dm_media/{current_user.id}/{media_type}/{file.filename}"
+
+    try:
+        # Upload to storage
+        if settings.storage_backend == "s3":
+            file_url = await StorageService.upload_file_from_bytes(
+                file_content,
+                upload_path,
+                content_type=file.content_type
+            )
+        else:
+            # Local storage - save to media directory
+            import os
+            from pathlib import Path
+
+            media_dir = Path("media") / "dm_media" / str(current_user.id) / media_type
+            media_dir.mkdir(parents=True, exist_ok=True)
+
+            file_path = media_dir / file.filename
+            with open(file_path, "wb") as f:
+                f.write(file_content)
+
+            file_url = f"/media/dm_media/{current_user.id}/{media_type}/{file.filename}"
+
+        return {
+            "url": file_url,
+            "media_type": media_type,
+            "file_size": len(file_content),
+            "content_type": file.content_type
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
 @router.delete("/threads/{thread_id}/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)

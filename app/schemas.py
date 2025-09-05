@@ -435,6 +435,10 @@ class DMRequestDecision(BaseModel):
 
 class DMMessageCreate(BaseModel):
     text: str = Field(..., min_length=1, max_length=2000)
+    reply_to_id: Optional[int] = None
+    # Media attachments
+    photo_urls: list[str] = Field(default_factory=list, max_length=10)
+    video_urls: list[str] = Field(default_factory=list, max_length=5)
 
 
 class DMMessageResponse(BaseModel):
@@ -447,6 +451,13 @@ class DMMessageResponse(BaseModel):
     seen: Optional[bool] = None
     heart_count: int = 0
     liked_by_me: bool = False
+    # Reply functionality
+    reply_to_id: Optional[int] = None
+    reply_to_text: Optional[str] = None
+    reply_to_sender_name: Optional[str] = None
+    # Media attachments
+    photo_urls: list[str] = Field(default_factory=list)
+    video_urls: list[str] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
 
