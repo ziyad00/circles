@@ -98,6 +98,31 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 - Pinned threads appear first
 - Ordered by most recent activity
 
+**Response**:
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "user_a_id": 123,
+      "user_b_id": 456,
+      "initiator_id": 123,
+      "status": "accepted",
+      "created_at": "2025-09-05T19:33:40Z",
+      "updated_at": "2025-09-05T19:33:40Z",
+      "other_user_name": "John Doe",
+      "other_user_username": "johndoe",
+      "other_user_avatar": "https://...AWSAccessKeyId=...",
+      "last_message": "Hey, how are you?",
+      "last_message_time": "2025-09-05T19:35:20Z"
+    }
+  ],
+  "total": 25,
+  "limit": 20,
+  "offset": 0
+}
+```
+
 ### `GET /dms/threads/{thread_id}/messages` - List Messages
 
 **Purpose**: Get messages in a DM thread
