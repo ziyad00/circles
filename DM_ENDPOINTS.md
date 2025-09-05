@@ -192,8 +192,8 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 ```json
 {
   "text": "Your message here",
-  "reply_to_id": 123,  // Optional: ID of message being replied to
-  "photo_urls": ["https://..."],  // Optional: Array of photo URLs
+  "reply_to_id": 123, // Optional: ID of message being replied to
+  "photo_urls": ["https://..."], // Optional: Array of photo URLs
   "video_urls": ["https://..."], // Optional: Array of video URLs
   "caption": "Optional caption for media" // Optional: Caption for media messages
 }
@@ -236,14 +236,16 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 ```
 
 **Reply to Media Message Example**:
+
 ```json
 {
   "text": "Love this photo!",
-  "reply_to_id": 999  // Can reply to media-only messages
+  "reply_to_id": 999 // Can reply to media-only messages
 }
 ```
 
 **Media with Caption Example**:
+
 ```json
 {
   "text": "Check this out",
@@ -274,6 +276,7 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 **Body**: Form data with file
 
 **Security Features**:
+
 - ✅ **Authentication Required**: JWT token validation
 - ✅ **User Isolation**: Files stored in user-specific directories
 - ✅ **File Type Validation**: Only allowed image/video formats

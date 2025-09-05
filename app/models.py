@@ -275,7 +275,8 @@ class DMMessage(Base):
     # Media attachments
     photo_urls = Column(JSON, default=list)
     video_urls = Column(JSON, default=list)
-    caption = Column(Text, nullable=True)  # Optional caption for media messages
+    # Optional caption for media messages
+    caption = Column(Text, nullable=True)
 
     sender = relationship("User", back_populates="dm_messages")
     # Self-referencing relationship for replies
