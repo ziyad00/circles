@@ -107,7 +107,11 @@ async def search_users(
     )
     if filters.q:
         like = f"%{filters.q}%"
-        stmt = stmt.where(User.name.ilike(like) | User.username.ilike(like))
+        stmt = stmt.where(
+            User.name.ilike(like) |
+            User.username.ilike(like) |
+            User.bio.ilike(like)
+        )
     if filters.has_avatar is not None:
         if filters.has_avatar:
             stmt = stmt.where(User.avatar_url.is_not(None))
