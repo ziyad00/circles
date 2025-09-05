@@ -439,7 +439,8 @@ class DMMessageCreate(BaseModel):
     # Media attachments
     photo_urls: list[str] = Field(default_factory=list, max_length=10)
     video_urls: list[str] = Field(default_factory=list, max_length=5)
-    caption: Optional[str] = Field(None, max_length=500)  # Optional caption for media
+    # Optional caption for media
+    caption: Optional[str] = Field(None, max_length=500)
 
 
 class DMMessageResponse(BaseModel):
