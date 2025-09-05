@@ -479,6 +479,107 @@ The DM system provides a comprehensive messaging platform with privacy controls,
 }
 ```
 
+### `POST /dms/threads/{thread_id}/messages/{message_id}/reactions` - Add Reaction
+
+**Purpose**: Add an emoji reaction to a DM message
+
+**Authentication**: Required
+**Body**:
+```json
+{
+  "emoji": "👍"
+}
+```
+
+**Features**:
+- ✅ One reaction per emoji per user per message
+- ✅ Real-time reaction updates via WebSocket
+- ✅ Automatic duplicate prevention
+
+**Response**:
+```json
+{
+  "id": 123,
+  "message_id": 456,
+  "user_id": 789,
+  "emoji": "👍",
+  "created_at": "2025-09-06T00:12:00Z"
+}
+```
+
+### `DELETE /dms/threads/{thread_id}/messages/{message_id}/reactions/{emoji}` - Remove Reaction
+
+**Purpose**: Remove an emoji reaction from a DM message
+
+**Authentication**: Required
+**URL Parameters**: `emoji` (URL-encoded emoji, e.g., `%F0%9F%91%8D` for 👍)
+
+**Response**:
+```json
+{
+  "success": true
+}
+```
+
+### `GET /dms/threads/{thread_id}/messages/{message_id}/reactions` - Get Reactions
+
+**Purpose**: Get all reactions for a DM message
+
+**Authentication**: Required
+
+**Response**:
+```json
+{
+  "👍": [
+    {"user_id": 123, "user_name": "Alice"},
+    {"user_id": 456, "user_name": "Bob"}
+  ],
+  "❤️": [
+    {"user_id": 789, "user_name": "Charlie"}
+  ]
+}
+```
+
+---
+
+## 🔔 **Real-time Notifications**
+
+The DM system now includes comprehensive real-time notifications:
+
+### **WebSocket Events**
+- `dm_message`: New message received
+- `dm_reply`: Reply to your message
+- `dm_media`: Media message received
+- `dm_request`: New DM request received
+- `reaction_update`: Message reaction added/removed
+
+### **Notification Payload Example**
+```json
+{
+  "type": "dm_notification",
+  "thread_id": 123,
+  "message": {
+    "sender_id": 456,
+    "sender_name": "Alice",
+    "message_text": "Hey there!",
+    "has_media": false,
+    "is_reply": false,
+    "timestamp": "2025-09-06T00:12:00Z"
+  }
+}
+```
+
+### **Smart Notification Types**
+- **Text Messages**: `"Alice: Hey there!"`
+- **Media Messages**: `"Alice sent you 2 photos"`
+- **Replies**: `"Alice replied to your message"`
+- **Captions**: Include caption in preview when available
+
+### **Mute Support**
+- ✅ Respect thread mute settings
+- ✅ No notifications for muted threads
+- ✅ User preferences honored
+
 ---
 
 ## 🌐 WebSocket Endpoints

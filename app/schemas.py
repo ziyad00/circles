@@ -556,6 +556,19 @@ class HeartResponse(BaseModel):
     heart_count: int
 
 
+class ReactionCreate(BaseModel):
+    emoji: str = Field(..., min_length=1, max_length=10, examples=["👍", "❤️", "😂"])
+
+
+class ReactionResponse(BaseModel):
+    id: int
+    message_id: int
+    user_id: int
+    emoji: str
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 # Users / Profiles
 
 

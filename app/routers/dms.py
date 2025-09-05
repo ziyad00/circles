@@ -5,9 +5,10 @@ from sqlalchemy import select, or_, and_, func, desc, nullslast
 from typing import Optional
 
 from ..database import get_db
-from ..models import User, DMThread, DMMessage, DMParticipantState, DMMessageLike, Follow
+from ..models import User, DMThread, DMMessage, DMParticipantState, DMMessageLike, DMMessageReaction, Follow
 from ..config import settings
 from ..services.storage import StorageService
+from ..services.websocket_service import WebSocketService
 from ..schemas import (
     DMThreadResponse,
     PaginatedDMThreads,
@@ -179,6 +180,24 @@ async def send_dm_request(
     db.add(msg)
     await db.commit()
     await db.refresh(thread)
+
+    # Send DM request notification if status is pending
+    if thread.status == "pending":
+        try:
+            await WebSocketService.send_dm_request_notification(
+                recipient.id,
+                {
+                    "sender_id": current_user.id,
+                    "sender_name": current_user.name,
+                    "sender_username": current_user.username,
+                    "thread_id": thread.id,
+                    "message_text": payload.text[:100] + ("..." if len(payload.text) > 100 else ""),
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+            )
+        except Exception as e:
+            print(f"Failed to send DM request notification: {e}")
+
     return thread
 
 
@@ -582,10 +601,72 @@ async def send_message(
     thread.updated_at = func.now()
     await db.commit()
     await db.refresh(msg)
+
     # Get reply sender name if this is a reply
     reply_sender_name = None
     if msg.reply_to_id and msg.reply_to:
         reply_sender_name = msg.reply_to.sender.name
+
+    # Send real-time notifications
+    try:
+        # Get the other participant
+        other_user_id = thread.user_a_id if thread.user_b_id == current_user.id else thread.user_b_id
+
+        # Check if the recipient has muted this thread
+        participant_state_result = await db.execute(
+            select(DMParticipantState).where(
+                DMParticipantState.thread_id == thread_id,
+                DMParticipantState.user_id == other_user_id
+            )
+        )
+        participant_state = participant_state_result.scalars().first()
+
+        # Only send notification if not muted
+        if not participant_state or not participant_state.muted:
+            # Prepare notification data
+            notification_data = {
+                "sender_id": current_user.id,
+                "sender_name": current_user.name,
+                "sender_username": current_user.username,
+                "thread_id": thread_id,
+                "message_id": msg.id,
+                "message_text": msg.text[:100] + ("..." if len(msg.text) > 100 else ""),
+                "has_media": bool(msg.photo_urls or msg.video_urls),
+                "media_count": len(msg.photo_urls or []) + len(msg.video_urls or []),
+                "is_reply": bool(msg.reply_to_id),
+                "timestamp": msg.created_at.isoformat()
+            }
+
+            # Add caption if exists
+            if msg.caption:
+                notification_data["caption"] = msg.caption
+
+            # Determine notification type
+            if msg.reply_to_id:
+                notification_type = "dm_reply"
+                message = f"{current_user.name} replied to your message"
+            elif msg.photo_urls or msg.video_urls:
+                notification_type = "dm_media"
+                media_type = "photo" if msg.photo_urls else "video"
+                count = len(msg.photo_urls or msg.video_urls)
+                message = f"{current_user.name} sent you {count} {media_type}{'s' if count > 1 else ''}"
+            else:
+                notification_type = "dm_message"
+                message = f"{current_user.name}: {msg.text[:50]}{'...' if len(msg.text) > 50 else ''}"
+
+            # Send WebSocket notification
+            await WebSocketService.send_dm_notification(
+                other_user_id,
+                thread_id,
+                {
+                    **notification_data,
+                    "message": message
+                }
+            )
+
+    except Exception as e:
+        # Log error but don't fail the message send
+        print(f"Failed to send DM notification: {e}")
 
            # decorate response with defaults
        return DMMessageResponse(
@@ -1007,3 +1088,209 @@ async def heart_message(
     # count
     count = (await db.execute(select(func.count(DMMessageLike.id)).where(DMMessageLike.message_id == message_id))).scalar_one()
     return HeartResponse(liked=liked, heart_count=count)
+
+
+@router.post("/threads/{thread_id}/messages/{message_id}/reactions", response_model=ReactionResponse)
+async def add_message_reaction(
+    thread_id: int,
+    message_id: int,
+    payload: ReactionCreate,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Add an emoji reaction to a DM message.
+
+    **Authentication Required:** Yes
+
+    **Rate Limiting:** None (reactions are lightweight)
+
+    **Features:**
+    - Add emoji reactions to messages
+    - One reaction per emoji per user per message
+    - Real-time reaction updates via WebSocket
+    - Automatic duplicate prevention
+    """
+    # Validate message exists and user has access
+    msg_result = await db.execute(
+        select(DMMessage).where(DMMessage.id == message_id)
+    )
+    msg = msg_result.scalars().first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    thread_result = await db.execute(select(DMThread).where(DMThread.id == thread_id))
+    thread = thread_result.scalars().first()
+    if not thread or msg.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    if not _is_participant(thread, current_user.id):
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    # Check if reaction already exists
+    existing_result = await db.execute(
+        select(DMMessageReaction).where(
+            DMMessageReaction.message_id == message_id,
+            DMMessageReaction.user_id == current_user.id,
+            DMMessageReaction.emoji == payload.emoji
+        )
+    )
+    existing = existing_result.scalars().first()
+
+    if existing:
+        # Reaction already exists, return it
+        return ReactionResponse(
+            id=existing.id,
+            message_id=existing.message_id,
+            user_id=existing.user_id,
+            emoji=existing.emoji,
+            created_at=existing.created_at
+        )
+
+    # Create new reaction
+    reaction = DMMessageReaction(
+        message_id=message_id,
+        user_id=current_user.id,
+        emoji=payload.emoji
+    )
+    db.add(reaction)
+    await db.commit()
+    await db.refresh(reaction)
+
+    # Send real-time reaction update
+    try:
+        await WebSocketService.send_message_reaction(
+            thread_id, message_id, current_user.id, payload.emoji
+        )
+    except Exception as e:
+        print(f"Failed to send reaction notification: {e}")
+
+    return ReactionResponse(
+        id=reaction.id,
+        message_id=reaction.message_id,
+        user_id=reaction.user_id,
+        emoji=reaction.emoji,
+        created_at=reaction.created_at
+    )
+
+
+@router.delete("/threads/{thread_id}/messages/{message_id}/reactions/{emoji}")
+async def remove_message_reaction(
+    thread_id: int,
+    message_id: int,
+    emoji: str,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Remove an emoji reaction from a DM message.
+
+    **Authentication Required:** Yes
+
+    **URL Parameters:**
+    - `emoji`: URL-encoded emoji to remove (e.g., %F0%9F%91%8D for 👍)
+    """
+    # Validate message exists and user has access
+    msg_result = await db.execute(
+        select(DMMessage).where(DMMessage.id == message_id)
+    )
+    msg = msg_result.scalars().first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    thread_result = await db.execute(select(DMThread).where(DMThread.id == thread_id))
+    thread = thread_result.scalars().first()
+    if not thread or msg.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    if not _is_participant(thread, current_user.id):
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    # Find and remove reaction
+    reaction_result = await db.execute(
+        select(DMMessageReaction).where(
+            DMMessageReaction.message_id == message_id,
+            DMMessageReaction.user_id == current_user.id,
+            DMMessageReaction.emoji == emoji
+        )
+    )
+    reaction = reaction_result.scalars().first()
+
+    if not reaction:
+        raise HTTPException(status_code=404, detail="Reaction not found")
+
+    await db.delete(reaction)
+    await db.commit()
+
+    # Send real-time reaction removal update
+    try:
+        await WebSocketService.send_message_reaction(
+            thread_id, message_id, current_user.id, f"remove:{emoji}"
+        )
+    except Exception as e:
+        print(f"Failed to send reaction removal notification: {e}")
+
+    return {"success": True}
+
+
+@router.get("/threads/{thread_id}/messages/{message_id}/reactions")
+async def get_message_reactions(
+    thread_id: int,
+    message_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get all reactions for a DM message.
+
+    **Authentication Required:** Yes
+
+    **Response:**
+    ```json
+    {
+      "👍": [
+        {"user_id": 123, "user_name": "Alice"},
+        {"user_id": 456, "user_name": "Bob"}
+      ],
+      "❤️": [
+        {"user_id": 789, "user_name": "Charlie"}
+      ]
+    }
+    ```
+    """
+    # Validate message exists and user has access
+    msg_result = await db.execute(
+        select(DMMessage).where(DMMessage.id == message_id)
+    )
+    msg = msg_result.scalars().first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    thread_result = await db.execute(select(DMThread).where(DMThread.id == thread_id))
+    thread = thread_result.scalars().first()
+    if not thread or msg.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    if not _is_participant(thread, current_user.id):
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    # Get reactions with user info
+    reactions_result = await db.execute(
+        select(DMMessageReaction, User.name.label("user_name")).join(
+            User, DMMessageReaction.user_id == User.id
+        ).where(DMMessageReaction.message_id == message_id)
+    )
+
+    # Group reactions by emoji
+    reactions_by_emoji = {}
+    for reaction, user_name in reactions_result:
+        emoji = reaction.emoji
+        if emoji not in reactions_by_emoji:
+            reactions_by_emoji[emoji] = []
+
+        reactions_by_emoji[emoji].append({
+            "user_id": reaction.user_id,
+            "user_name": user_name
+        })
+
+    return reactions_by_emoji
