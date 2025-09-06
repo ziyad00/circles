@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, U
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_, func, desc, nullslast
+from sqlalchemy.orm import aliased
 from sqlalchemy.sql import expression as sql_expr
 from typing import Optional
 
@@ -302,6 +303,7 @@ async def inbox(
             DMMessage.text.label("last_message_text"),
             DMMessage.reply_to_text.label("reply_preview"),
             DMMessage.created_at.label("last_message_time"),
+            DMMessage.sender_id.label("last_sender_id"),
             func.row_number().over(
                 partition_by=DMMessage.thread_id,
                 order_by=DMMessage.created_at.desc(),
@@ -313,15 +315,20 @@ async def inbox(
     last_msg_subq = select(last_msg_ranked).where(
         last_msg_ranked.c.rn == 1).subquery()
 
+    sender_user = aliased(User)
+
     base = (
         select(
             DMThread,
             User.name.label("other_user_name"),
             User.username.label("other_user_username"),
             User.avatar_url.label("other_user_avatar"),
+            DMParticipantState.muted.label("is_muted"),
+            DMParticipantState.blocked.label("is_blocked"),
             last_msg_subq.c.last_message_text.label("last_message"),
             last_msg_subq.c.last_message_time.label("last_message_time"),
             last_msg_subq.c.reply_preview.label("reply_preview"),
+            sender_user.avatar_url.label("sender_photo_url"),
         )
         .join(
             DMParticipantState,
@@ -341,6 +348,12 @@ async def inbox(
             and_(
                 last_msg_subq.c.thread_id == DMThread.id,
             ),
+            isouter=True,
+        )
+        # Join sender_user via self-join on users using last_sender_id
+        .join(
+            sender_user,
+            sender_user.id == last_msg_subq.c.last_sender_id,
             isouter=True,
         )
         .where(
@@ -387,9 +400,12 @@ async def inbox(
         other_user_name = result[1]
         other_user_username = result[2]
         other_user_avatar = result[3]
-        last_message = result[4]
-        last_message_time = result[5]
-        reply_preview = result[6]
+        is_muted = result[4]
+        is_blocked = result[5]
+        last_message = result[6]
+        last_message_time = result[7]
+        reply_preview = result[8]
+        sender_photo_url = result[9] if len(result) > 9 else None
 
         # Handle reply preview in last message
         if reply_preview and last_message:
@@ -416,8 +432,11 @@ async def inbox(
             other_user_name=other_user_name,
             other_user_username=other_user_username,
             other_user_avatar=other_user_avatar,
+            is_muted=bool(is_muted) if is_muted is not None else None,
+            is_blocked=bool(is_blocked) if is_blocked is not None else None,
             last_message=last_message,
             last_message_time=last_message_time,
+            sender_photo_url=sender_photo_url,
         )
         items.append(response_item)
 

@@ -5,7 +5,7 @@ from ..database import get_db
 from ..schemas import PhoneOTPRequest, PhoneOTPVerify, OTPResponse, AuthResponse, UserResponse
 from ..services.otp_service import OTPService
 from ..services.jwt_service import JWTService, security
-from ..models import User, Follow
+from ..models import User, Follow, CheckIn
 from sqlalchemy import select, func
 from ..config import settings
 from datetime import datetime, timedelta, timezone
@@ -121,6 +121,11 @@ async def get_current_user(
                 Follow.follower_id == current_user.id)
         )
 
+        check_in_count = await db.scalar(
+            select(func.count(CheckIn.id)).where(
+                CheckIn.user_id == current_user.id)
+        )
+
         return UserResponse(
             id=current_user.id,
             phone=current_user.phone,
@@ -129,6 +134,7 @@ async def get_current_user(
             created_at=current_user.created_at,
             followers_count=followers_count or 0,
             following_count=following_count or 0,
+            check_in_count=check_in_count or 0,
         )
     except Exception as e:
         raise HTTPException(
