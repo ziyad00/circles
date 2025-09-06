@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, U
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_, func, desc, nullslast
+from sqlalchemy.sql import expression as sql_expr
 from typing import Optional
 
 from ..database import get_db
@@ -27,6 +28,8 @@ from ..schemas import (
     TypingStatusResponse,
     PresenceResponse,
     HeartResponse,
+    ReactionCreate,
+    ReactionResponse,
 )
 from ..services.jwt_service import JWTService
 from ..routers.users import _convert_single_to_signed_url
@@ -287,13 +290,13 @@ async def inbox(
     - Organize important threads
     """
     # Get other user's info and last message in one query
-    other_user_id = func.case(
+    other_user_id = sql_expr.case(
         (DMThread.user_a_id == current_user.id, DMThread.user_b_id),
         else_=DMThread.user_a_id,
     )
 
-    # Subquery for last message with reply handling
-    last_msg_subq = (
+    # Subquery for last message with reply handling (decoupled from outer query)
+    last_msg_ranked = (
         select(
             DMMessage.thread_id,
             DMMessage.text.label("last_message_text"),
@@ -301,15 +304,14 @@ async def inbox(
             DMMessage.created_at.label("last_message_time"),
             func.row_number().over(
                 partition_by=DMMessage.thread_id,
-                order_by=DMMessage.created_at.desc()
-            ).label("rn")
+                order_by=DMMessage.created_at.desc(),
+            ).label("rn"),
         )
-        .where(
-            DMMessage.thread_id == DMThread.id,
-            DMMessage.deleted_at.is_(None)
-        )
+        .where(DMMessage.deleted_at.is_(None))
         .subquery()
     )
+    last_msg_subq = select(last_msg_ranked).where(
+        last_msg_ranked.c.rn == 1).subquery()
 
     base = (
         select(
@@ -338,7 +340,6 @@ async def inbox(
             last_msg_subq,
             and_(
                 last_msg_subq.c.thread_id == DMThread.id,
-                last_msg_subq.c.rn == 1,
             ),
             isouter=True,
         )
@@ -348,15 +349,19 @@ async def inbox(
                 DMThread.user_b_id == current_user.id),
         )
     )
+
     # archived filter
     if not include_archived:
         base = base.where(
             or_(DMParticipantState.archived.is_(False),
                 DMParticipantState.archived.is_(None))
         )
+
     # pinned filter
     if only_pinned:
         base = base.where(DMParticipantState.pinned.is_(True))
+
+    # search filter
     if q:
         like = f"%{q}%"
         base = base.where(
@@ -366,7 +371,9 @@ async def inbox(
                 User.username.ilike(like)
             )
         )
+
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+
     # order: pinned first (treat NULL as false), then updated_at desc
     pinned_first = func.coalesce(DMParticipantState.pinned, False).desc()
     stmt = base.order_by(pinned_first, desc(
@@ -385,10 +392,10 @@ async def inbox(
         reply_preview = result[6]
 
         # Handle reply preview in last message
-        if reply_preview:
+        if reply_preview and last_message:
             # If it's a reply, show a shortened version
             last_message = last_message[:100] + \
-                "..." if len(last_message) > 100 else last_message
+                ("..." if len(last_message) > 100 else "")
 
         # Convert avatar URL to signed URL if needed
         if other_user_avatar and not other_user_avatar.startswith('http'):
@@ -586,16 +593,16 @@ async def send_message(
         else:
             reply_to_text = "[Media message]"
 
-           msg = DMMessage(
-           thread_id=thread_id,
-           sender_id=current_user.id,
-           text=payload.text,
-           reply_to_id=payload.reply_to_id,
-           reply_to_text=reply_to_text,
-           photo_urls=payload.photo_urls,
-           video_urls=payload.video_urls,
-           caption=payload.caption
-       )
+    msg = DMMessage(
+        thread_id=thread_id,
+        sender_id=current_user.id,
+        text=payload.text,
+        reply_to_id=payload.reply_to_id,
+        reply_to_text=reply_to_text,
+        photo_urls=payload.photo_urls,
+        video_urls=payload.video_urls,
+        caption=payload.caption
+    )
     db.add(msg)
     # bump thread updated_at
     thread.updated_at = func.now()
@@ -668,23 +675,23 @@ async def send_message(
         # Log error but don't fail the message send
         print(f"Failed to send DM notification: {e}")
 
-           # decorate response with defaults
-       return DMMessageResponse(
-           id=msg.id,
-           thread_id=msg.thread_id,
-           sender_id=msg.sender_id,
-           text=msg.text,
-           created_at=msg.created_at,
-           seen=None,
-           heart_count=0,
-           liked_by_me=False,
-           reply_to_id=msg.reply_to_id,
-           reply_to_text=msg.reply_to_text,
-           reply_to_sender_name=reply_sender_name,
-           photo_urls=msg.photo_urls,
-           video_urls=msg.video_urls,
-           caption=msg.caption,
-       )
+    # decorate response with defaults
+    return DMMessageResponse(
+        id=msg.id,
+        thread_id=msg.thread_id,
+        sender_id=msg.sender_id,
+        text=msg.text,
+        created_at=msg.created_at,
+        seen=None,
+        heart_count=0,
+        liked_by_me=False,
+        reply_to_id=msg.reply_to_id,
+        reply_to_text=msg.reply_to_text,
+        reply_to_sender_name=reply_sender_name,
+        photo_urls=msg.photo_urls,
+        video_urls=msg.video_urls,
+        caption=msg.caption,
+    )
 
 
 @router.post("/upload/media", response_model=dict)
@@ -696,7 +703,8 @@ async def upload_dm_media(
     Upload media files for DM messages (photos/videos)
     """
     # Validate file type
-    allowed_types = ["image/jpeg", "image/png", "image/gif", "video/mp4", "video/quicktime"]
+    allowed_types = ["image/jpeg", "image/png",
+                     "image/gif", "video/mp4", "video/quicktime"]
     if file.content_type not in allowed_types:
         raise HTTPException(
             status_code=400,
@@ -704,7 +712,8 @@ async def upload_dm_media(
         )
 
     # Validate file size (10MB for images, 50MB for videos)
-    max_size = 50 * 1024 * 1024 if file.content_type.startswith("video") else 10 * 1024 * 1024
+    max_size = 50 * 1024 * \
+        1024 if file.content_type.startswith("video") else 10 * 1024 * 1024
     file_content = await file.read()
     if len(file_content) > max_size:
         raise HTTPException(
@@ -714,7 +723,8 @@ async def upload_dm_media(
 
     # Determine upload path
     file_ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
-    media_type = "videos" if file.content_type.startswith("video") else "photos"
+    media_type = "videos" if file.content_type.startswith(
+        "video") else "photos"
     upload_path = f"dm_media/{current_user.id}/{media_type}/{file.filename}"
 
     try:
@@ -730,7 +740,8 @@ async def upload_dm_media(
             import os
             from pathlib import Path
 
-            media_dir = Path("media") / "dm_media" / str(current_user.id) / media_type
+            media_dir = Path("media") / "dm_media" / \
+                str(current_user.id) / media_type
             media_dir.mkdir(parents=True, exist_ok=True)
 
             file_path = media_dir / file.filename

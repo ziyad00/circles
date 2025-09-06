@@ -3,17 +3,24 @@ from sqlalchemy import URL, make_url
 from .config import settings
 from .models import Base
 
-# Create async engine with explicit asyncpg driver
-# Parse the database URL and force asyncpg driver
+# Create async engine with appropriate driver based on URL scheme
 parsed_url = make_url(settings.database_url)
-database_url = URL.create(
-    drivername="postgresql+asyncpg",
-    username=parsed_url.username,
-    password=parsed_url.password,
-    host=parsed_url.host,
-    port=parsed_url.port,
-    database=parsed_url.database
-)
+if parsed_url.drivername and parsed_url.drivername.startswith('sqlite'):
+    # For SQLite, use aiosqlite driver
+    database_url = URL.create(
+        drivername="sqlite+aiosqlite",
+        database=parsed_url.database
+    )
+else:
+    # For PostgreSQL, use asyncpg driver
+    database_url = URL.create(
+        drivername="postgresql+asyncpg",
+        username=parsed_url.username,
+        password=parsed_url.password,
+        host=parsed_url.host,
+        port=parsed_url.port,
+        database=parsed_url.database
+    )
 
 engine = create_async_engine(
     database_url,
