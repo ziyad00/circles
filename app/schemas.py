@@ -22,6 +22,7 @@ class UserResponse(UserBase):
     created_at: datetime
     followers_count: Optional[int] = None
     following_count: Optional[int] = None
+    check_in_count: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -412,8 +413,13 @@ class DMThreadResponse(BaseModel):
     other_user_name: Optional[str] = None
     other_user_username: Optional[str] = None
     other_user_avatar: Optional[str] = None
+    # Participant state for current user
+    is_muted: Optional[bool] = None
+    is_blocked: Optional[bool] = None
     last_message: Optional[str] = None
     last_message_time: Optional[datetime] = None
+    # Last message sender avatar (for quick context)
+    sender_photo_url: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 
