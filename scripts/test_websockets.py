@@ -200,7 +200,8 @@ async def test_place_ws() -> None:
 
     except Exception as e:
         if "403" in str(e):
-            print("[PLACE] ERROR: 403 Forbidden - User may need to check-in to this place first")
+            print(
+                "[PLACE] ERROR: 403 Forbidden - User may need to check-in to this place first")
             print("[PLACE] This is expected behavior for place chat security")
         else:
             print("[PLACE] ERROR:", e)
@@ -229,7 +230,8 @@ async def main() -> None:
 
     if TEST_MODE == "full":
         print("\n📋 COMPREHENSIVE TEST SUMMARY:")
-        print("✓ DM WebSocket: Connection, ping/pong, typing, message sending, read receipts")
+        print(
+            "✓ DM WebSocket: Connection, ping/pong, typing, message sending, read receipts")
         print("✓ User WebSocket: Connection, ping/pong, stability testing")
         print("✓ Place Chat: Connection, ping/pong, messages, typing (if check-in exists)")
         print("✓ Real-time broadcasting and notifications")
