@@ -174,7 +174,8 @@ async def send_dm_request(
     res = await db.execute(select(DMThread).where(DMThread.user_a_id == a, DMThread.user_b_id == b))
     thread = res.scalars().first()
     if not thread:
-        auto = settings.dm_allow_direct or (bool(follows) and (dm_priv in ("everyone", "followers")))
+        auto = settings.dm_allow_direct or (
+            bool(follows) and (dm_priv in ("everyone", "followers")))
         thread = DMThread(user_a_id=a, user_b_id=b,
                           initiator_id=current_user.id, status=("accepted" if auto else "pending"))
         db.add(thread)
