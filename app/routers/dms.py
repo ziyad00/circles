@@ -131,17 +131,18 @@ async def send_dm_request(
     recipient = res.scalars().first()
     if not recipient:
         raise HTTPException(status_code=404, detail="Recipient not found")
-    # enforce recipient dm_privacy strictly
+    # Enforce recipient privacy unless direct DMs are globally allowed
     # everyone | followers | no_one
     dm_priv = recipient.dm_privacy or "everyone"
-    if dm_priv == "no_one":
-        raise HTTPException(
-            status_code=403, detail="Recipient does not accept DMs")
-    if dm_priv == "followers":
-        resf = await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == recipient.id))
-        if resf.scalars().first() is None:
+    if not settings.dm_allow_direct:
+        if dm_priv == "no_one":
             raise HTTPException(
-                status_code=403, detail="Recipient accepts DMs from followers only")
+                status_code=403, detail="Recipient does not accept DMs")
+        if dm_priv == "followers":
+            resf = await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == recipient.id))
+            if resf.scalars().first() is None:
+                raise HTTPException(
+                    status_code=403, detail="Recipient accepts DMs from followers only")
 
     # Check if recipient has blocked the sender
     from ..models import DMParticipantState
@@ -166,14 +167,14 @@ async def send_dm_request(
             status_code=403, detail="Cannot send DM request to user who has blocked you")
 
     a, b = _normalize_pair(current_user.id, recipient.id)
-    # if sender follows recipient and recipient allows followers DMs, auto-accept; else pending
+    # Determine auto-accept policy
     res_follow = await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == recipient.id))
     follows = res_follow.scalars().first()
     # existing thread
     res = await db.execute(select(DMThread).where(DMThread.user_a_id == a, DMThread.user_b_id == b))
     thread = res.scalars().first()
     if not thread:
-        auto = bool(follows) and (dm_priv in ("everyone", "followers"))
+        auto = settings.dm_allow_direct or (bool(follows) and (dm_priv in ("everyone", "followers")))
         thread = DMThread(user_a_id=a, user_b_id=b,
                           initiator_id=current_user.id, status=("accepted" if auto else "pending"))
         db.add(thread)
@@ -185,7 +186,7 @@ async def send_dm_request(
     await db.commit()
     await db.refresh(thread)
 
-    # Send DM request notification if status is pending
+    # Send DM request notification if status is pending (still possible when allow_direct is False)
     if thread.status == "pending":
         try:
             await WebSocketService.send_dm_request_notification(

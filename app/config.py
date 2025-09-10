@@ -87,6 +87,10 @@ class Settings(BaseSettings):
     dm_requests_per_min: int = Field(default=5, env="DM_REQUESTS_PER_MIN")
     dm_messages_per_min: int = Field(default=20, env="DM_MESSAGES_PER_MIN")
 
+    # DM behavior
+    # If true, bypass DM request gate and auto-accept new threads (still respects blocks)
+    dm_allow_direct: bool = Field(default=True, env="DM_ALLOW_DIRECT")
+
     # Timeouts
     http_timeout_seconds: int = Field(default=30, env="HTTP_TIMEOUT_SECONDS")
     overpass_timeout_seconds: int = Field(
