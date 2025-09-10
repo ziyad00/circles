@@ -19,6 +19,8 @@ dependencies = [
     "prometheus-client>=0.20.0",
     "pillow>=10.4.0",
     "aiosqlite>=0.21.0",
+    "websockets>=15.0.1",
+    "httpx>=0.28.1",
 ]
 
 [dependency-groups]
