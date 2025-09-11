@@ -6,7 +6,7 @@ from sqlalchemy import select, func, case
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService, _validate_image_or_raise
-from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, CheckInCollection, CheckInLike, CheckInComment, Review
+from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, CheckInCollection, CheckInCollectionItem, CheckInLike, CheckInComment, Review
 from ..schemas import (
     UserUpdate,
     PublicUserResponse,
@@ -600,4 +600,62 @@ async def get_random_place_photos(
     urls = [row[0] for row in photos_res.all()]
 
     # Convert S3 keys to signed URLs when applicable
+    return _convert_to_signed_urls(urls)
+
+
+@router.get("/{user_id}/collections/{collection_id}/random-place-photos", response_model=list[str])
+async def get_collection_random_place_photos(
+    user_id: int,
+    collection_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(4, ge=1, le=4, description="Max 4 random photos")
+):
+    """Return up to 4 random photos from places included in a user's collection.
+
+    - Filters photos to only those whose place_ids appear in the collection's check-ins.
+    - Respects visibility of each check-in for the current viewer.
+    """
+    # Ensure the collection belongs to the requested user and is visible
+    col_res = await db.execute(select(CheckInCollection).where(CheckInCollection.id == collection_id, CheckInCollection.user_id == user_id))
+    collection = col_res.scalar_one_or_none()
+    if not collection:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    # Visibility gate for collection (public/friends/private)
+    if current_user.id != user_id:
+        # If not owner, enforce visibility: if 'private' deny; if 'friends' require follow
+        if collection.visibility == "private":
+            raise HTTPException(status_code=403, detail="Collection is private")
+        if collection.visibility == "friends":
+            is_follower = (await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == user_id))).scalars().first() is not None
+            if not is_follower:
+                raise HTTPException(status_code=403, detail="Collection is followers-only")
+
+    # Gather check-ins in the collection
+    item_rows = (await db.execute(select(CheckInCollectionItem).where(CheckInCollectionItem.collection_id == collection_id))).scalars().all()
+    if not item_rows:
+        return []
+
+    checkin_ids = [it.check_in_id for it in item_rows]
+
+    # Fetch those check-ins and apply visibility filtering
+    from ..utils import can_view_checkin
+    ci_rows = (await db.execute(select(CheckIn).where(CheckIn.id.in_(checkin_ids)))).scalars().all()
+    visible_place_ids: list[int] = []
+    for ci in ci_rows:
+        if await can_view_checkin(db, ci.user_id, current_user.id, ci.visibility):
+            visible_place_ids.append(ci.place_id)
+
+    if not visible_place_ids:
+        return []
+
+    # Random photos restricted to those places
+    photos_res = await db.execute(
+        select(Photo.url)
+        .where(Photo.place_id.in_(visible_place_ids))
+        .order_by(func.random())
+        .limit(limit)
+    )
+    urls = [row[0] for row in photos_res.all()]
     return _convert_to_signed_urls(urls)
