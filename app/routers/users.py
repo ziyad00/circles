@@ -569,7 +569,8 @@ async def get_random_place_photos(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
     limit: int = Query(4, ge=1, le=4, description="Max 4 random photos"),
-    collection_id: int | None = Query(None, description="If provided, restrict to this collection's places")
+    collection_id: int | None = Query(
+        None, description="If provided, restrict to this collection's places")
 ):
     """Return up to 4 random photos from places the user has checked in to.
 
@@ -588,11 +589,13 @@ async def get_random_place_photos(
             raise HTTPException(status_code=404, detail="Collection not found")
         if current_user.id != user_id:
             if collection.visibility == "private":
-                raise HTTPException(status_code=403, detail="Collection is private")
+                raise HTTPException(
+                    status_code=403, detail="Collection is private")
             if collection.visibility == "friends":
                 is_follower = (await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == user_id))).scalars().first() is not None
                 if not is_follower:
-                    raise HTTPException(status_code=403, detail="Collection is followers-only")
+                    raise HTTPException(
+                        status_code=403, detail="Collection is followers-only")
 
         items = (await db.execute(select(CheckInCollectionItem).where(CheckInCollectionItem.collection_id == collection_id))).scalars().all()
         if not items:
