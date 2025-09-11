@@ -561,3 +561,43 @@ async def get_user_profile_stats(
         total_likes_received=total_likes_received or 0,
         total_comments_received=total_comments_received or 0,
     )
+
+
+@router.get("/{user_id}/random-place-photos", response_model=list[str])
+async def get_random_place_photos(
+    user_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(4, ge=1, le=4, description="Max 4 random photos")
+):
+    """Return up to 4 random photos from places the user has checked in to.
+
+    - Respects visibility (public/friends/private) similarly to the check-ins list.
+    - Photos are taken from the generic `photos` table by matching place_ids.
+    - URLs are converted to signed URLs if needed.
+    """
+    # Determine which of the user's check-ins are visible to the caller
+    from ..utils import can_view_checkin
+
+    all_checkins_res = await db.execute(
+        select(CheckIn).where(CheckIn.user_id == user_id)
+    )
+    visible_place_ids: list[int] = []
+    for ci in all_checkins_res.scalars().all():
+        if await can_view_checkin(db, ci.user_id, current_user.id, ci.visibility):
+            visible_place_ids.append(ci.place_id)
+
+    if not visible_place_ids:
+        return []
+
+    # Fetch random photos for these places
+    photos_res = await db.execute(
+        select(Photo.url)
+        .where(Photo.place_id.in_(visible_place_ids))
+        .order_by(func.random())
+        .limit(limit)
+    )
+    urls = [row[0] for row in photos_res.all()]
+
+    # Convert S3 keys to signed URLs when applicable
+    return _convert_to_signed_urls(urls)
