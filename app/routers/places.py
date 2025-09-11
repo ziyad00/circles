@@ -2602,10 +2602,13 @@ async def save_place(
             await db.refresh(saved)
         return saved
 
+    # Default collection name when not provided
+    default_collection = payload.list_name or "Favorites"
+
     saved_new = SavedPlace(
         user_id=current_user.id,
         place_id=payload.place_id,
-        list_name=payload.list_name,
+        list_name=default_collection,
     )
     db.add(saved_new)
     await db.commit()
@@ -2619,21 +2622,35 @@ async def list_saved_places(
     db: AsyncSession = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    collection: str | None = Query(None, description="Optional collection name (list_name) to filter by"),
 ):
-    total = (
-        await db.execute(
-            select(func.count(SavedPlace.id)).where(
-                SavedPlace.user_id == current_user.id)
-        )
-    ).scalar_one()
-    res = await db.execute(
-        select(SavedPlace)
-        .where(SavedPlace.user_id == current_user.id)
-        .offset(offset)
-        .limit(limit)
-    )
+    base = select(SavedPlace).where(SavedPlace.user_id == current_user.id)
+    count_base = select(func.count(SavedPlace.id)).where(SavedPlace.user_id == current_user.id)
+    if collection:
+        base = base.where(SavedPlace.list_name == collection)
+        count_base = count_base.where(SavedPlace.list_name == collection)
+
+    total = (await db.execute(count_base)).scalar_one()
+    res = await db.execute(base.offset(offset).limit(limit))
     items = res.scalars().all()
     return PaginatedSavedPlaces(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/saved/collections", response_model=list[str])
+async def list_saved_collections(
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the list of distinct collection names (list_name) for the current user's saved places."""
+    res = await db.execute(
+        select(SavedPlace.list_name)
+        .where(SavedPlace.user_id == current_user.id)
+        .group_by(SavedPlace.list_name)
+        .order_by(SavedPlace.list_name.asc())
+    )
+    names = [row[0] or "Favorites" for row in res.all()]
+    # Ensure at least default exists for UX
+    return names or ["Favorites"]
 
 
 @router.delete("/saved/{place_id}", status_code=status.HTTP_204_NO_CONTENT)
