@@ -6,7 +6,7 @@ from sqlalchemy import select, func, case
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService, _validate_image_or_raise
-from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, CheckInCollection, CheckInCollectionItem, CheckInLike, CheckInComment, Review
+from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, CheckInCollection, CheckInCollectionItem, SavedPlace, CheckInLike, CheckInComment, Review
 from ..schemas import (
     UserUpdate,
     PublicUserResponse,
@@ -569,48 +569,19 @@ async def get_random_place_photos(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
     limit: int = Query(4, ge=1, le=4, description="Max 4 random photos"),
-    collection_id: int | None = Query(
-        None, description="If provided, restrict to this collection's places")
+    collection: str | None = Query(None, description="Saved places collection (list_name) to filter by")
 ):
-    """Return up to 4 random photos from places the user has checked in to.
+    """Return up to 4 random photos from places the user saved.
 
-    - If `collection_id` is provided, filter photos to the places referenced by check-ins in that collection.
-    - Respects visibility (public/friends/private) similarly to the check-ins list.
-    - Photos come from the `photos` table (place-scoped images).
+    - Filters by saved places; if `collection` (list_name) is provided, restricts to that saved collection.
+    - Photos come from the `photos` table (place-scoped images), not check-ins.
     """
-    from ..utils import can_view_checkin
+    base = select(SavedPlace.place_id).where(SavedPlace.user_id == user_id)
+    if collection:
+        base = base.where(SavedPlace.list_name == collection)
 
-    place_ids: list[int] = []
-    if collection_id is not None:
-        # Ensure collection exists and is visible
-        col_res = await db.execute(select(CheckInCollection).where(CheckInCollection.id == collection_id, CheckInCollection.user_id == user_id))
-        collection = col_res.scalar_one_or_none()
-        if not collection:
-            raise HTTPException(status_code=404, detail="Collection not found")
-        if current_user.id != user_id:
-            if collection.visibility == "private":
-                raise HTTPException(
-                    status_code=403, detail="Collection is private")
-            if collection.visibility == "friends":
-                is_follower = (await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == user_id))).scalars().first() is not None
-                if not is_follower:
-                    raise HTTPException(
-                        status_code=403, detail="Collection is followers-only")
-
-        items = (await db.execute(select(CheckInCollectionItem).where(CheckInCollectionItem.collection_id == collection_id))).scalars().all()
-        if not items:
-            return []
-        ci_ids = [it.check_in_id for it in items]
-        cis = (await db.execute(select(CheckIn).where(CheckIn.id.in_(ci_ids)))).scalars().all()
-        for ci in cis:
-            if await can_view_checkin(db, ci.user_id, current_user.id, ci.visibility):
-                place_ids.append(ci.place_id)
-    else:
-        # All user check-ins (visibility-aware)
-        all_checkins_res = await db.execute(select(CheckIn).where(CheckIn.user_id == user_id))
-        for ci in all_checkins_res.scalars().all():
-            if await can_view_checkin(db, ci.user_id, current_user.id, ci.visibility):
-                place_ids.append(ci.place_id)
+    res = await db.execute(base)
+    place_ids = [pid for (pid,) in res.all()]
 
     if not place_ids:
         return []
