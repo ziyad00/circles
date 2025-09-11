@@ -568,94 +568,58 @@ async def get_random_place_photos(
     user_id: int,
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
-    limit: int = Query(4, ge=1, le=4, description="Max 4 random photos")
+    limit: int = Query(4, ge=1, le=4, description="Max 4 random photos"),
+    collection_id: int | None = Query(None, description="If provided, restrict to this collection's places")
 ):
     """Return up to 4 random photos from places the user has checked in to.
 
+    - If `collection_id` is provided, filter photos to the places referenced by check-ins in that collection.
     - Respects visibility (public/friends/private) similarly to the check-ins list.
-    - Photos are taken from the generic `photos` table by matching place_ids.
-    - URLs are converted to signed URLs if needed.
+    - Photos come from the `photos` table (place-scoped images).
     """
-    # Determine which of the user's check-ins are visible to the caller
     from ..utils import can_view_checkin
 
-    all_checkins_res = await db.execute(
-        select(CheckIn).where(CheckIn.user_id == user_id)
-    )
-    visible_place_ids: list[int] = []
-    for ci in all_checkins_res.scalars().all():
-        if await can_view_checkin(db, ci.user_id, current_user.id, ci.visibility):
-            visible_place_ids.append(ci.place_id)
+    place_ids: list[int] = []
+    if collection_id is not None:
+        # Ensure collection exists and is visible
+        col_res = await db.execute(select(CheckInCollection).where(CheckInCollection.id == collection_id, CheckInCollection.user_id == user_id))
+        collection = col_res.scalar_one_or_none()
+        if not collection:
+            raise HTTPException(status_code=404, detail="Collection not found")
+        if current_user.id != user_id:
+            if collection.visibility == "private":
+                raise HTTPException(status_code=403, detail="Collection is private")
+            if collection.visibility == "friends":
+                is_follower = (await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == user_id))).scalars().first() is not None
+                if not is_follower:
+                    raise HTTPException(status_code=403, detail="Collection is followers-only")
 
-    if not visible_place_ids:
+        items = (await db.execute(select(CheckInCollectionItem).where(CheckInCollectionItem.collection_id == collection_id))).scalars().all()
+        if not items:
+            return []
+        ci_ids = [it.check_in_id for it in items]
+        cis = (await db.execute(select(CheckIn).where(CheckIn.id.in_(ci_ids)))).scalars().all()
+        for ci in cis:
+            if await can_view_checkin(db, ci.user_id, current_user.id, ci.visibility):
+                place_ids.append(ci.place_id)
+    else:
+        # All user check-ins (visibility-aware)
+        all_checkins_res = await db.execute(select(CheckIn).where(CheckIn.user_id == user_id))
+        for ci in all_checkins_res.scalars().all():
+            if await can_view_checkin(db, ci.user_id, current_user.id, ci.visibility):
+                place_ids.append(ci.place_id)
+
+    if not place_ids:
         return []
 
-    # Fetch random photos for these places
     photos_res = await db.execute(
         select(Photo.url)
-        .where(Photo.place_id.in_(visible_place_ids))
-        .order_by(func.random())
-        .limit(limit)
-    )
-    urls = [row[0] for row in photos_res.all()]
-
-    # Convert S3 keys to signed URLs when applicable
-    return _convert_to_signed_urls(urls)
-
-
-@router.get("/{user_id}/collections/{collection_id}/random-place-photos", response_model=list[str])
-async def get_collection_random_place_photos(
-    user_id: int,
-    collection_id: int,
-    current_user: User = Depends(JWTService.get_current_user),
-    db: AsyncSession = Depends(get_db),
-    limit: int = Query(4, ge=1, le=4, description="Max 4 random photos")
-):
-    """Return up to 4 random photos from places included in a user's collection.
-
-    - Filters photos to only those whose place_ids appear in the collection's check-ins.
-    - Respects visibility of each check-in for the current viewer.
-    """
-    # Ensure the collection belongs to the requested user and is visible
-    col_res = await db.execute(select(CheckInCollection).where(CheckInCollection.id == collection_id, CheckInCollection.user_id == user_id))
-    collection = col_res.scalar_one_or_none()
-    if not collection:
-        raise HTTPException(status_code=404, detail="Collection not found")
-
-    # Visibility gate for collection (public/friends/private)
-    if current_user.id != user_id:
-        # If not owner, enforce visibility: if 'private' deny; if 'friends' require follow
-        if collection.visibility == "private":
-            raise HTTPException(status_code=403, detail="Collection is private")
-        if collection.visibility == "friends":
-            is_follower = (await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == user_id))).scalars().first() is not None
-            if not is_follower:
-                raise HTTPException(status_code=403, detail="Collection is followers-only")
-
-    # Gather check-ins in the collection
-    item_rows = (await db.execute(select(CheckInCollectionItem).where(CheckInCollectionItem.collection_id == collection_id))).scalars().all()
-    if not item_rows:
-        return []
-
-    checkin_ids = [it.check_in_id for it in item_rows]
-
-    # Fetch those check-ins and apply visibility filtering
-    from ..utils import can_view_checkin
-    ci_rows = (await db.execute(select(CheckIn).where(CheckIn.id.in_(checkin_ids)))).scalars().all()
-    visible_place_ids: list[int] = []
-    for ci in ci_rows:
-        if await can_view_checkin(db, ci.user_id, current_user.id, ci.visibility):
-            visible_place_ids.append(ci.place_id)
-
-    if not visible_place_ids:
-        return []
-
-    # Random photos restricted to those places
-    photos_res = await db.execute(
-        select(Photo.url)
-        .where(Photo.place_id.in_(visible_place_ids))
+        .where(Photo.place_id.in_(place_ids))
         .order_by(func.random())
         .limit(limit)
     )
     urls = [row[0] for row in photos_res.all()]
     return _convert_to_signed_urls(urls)
+
+
+# Removed the separate collection endpoint; use collection_id query param on /random-place-photos
