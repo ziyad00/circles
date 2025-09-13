@@ -10,6 +10,21 @@ Usage:
     python scripts/populate_sample_data.py
 """
 
+import random
+from typing import List, Optional
+from datetime import datetime, timedelta
+import asyncio
+from app.database import AsyncSessionLocal
+from app.models import (
+    User, Place, CheckIn, CheckInPhoto,
+    DMThread, DMMessage, DMParticipantState, Follow, UserInterest,
+    NotificationPreference, SupportTicket, Activity, CheckInComment,
+    CheckInLike, OTPCode
+)
+from app.services.storage import StorageService
+from app.services.jwt_service import JWTService
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 import sys
 import os
 
@@ -21,22 +36,6 @@ if project_root not in sys.path:
 # Also try current working directory (for ECS container)
 if os.getcwd() not in sys.path:
     sys.path.insert(0, os.getcwd())
-
-from sqlalchemy.orm import selectinload
-from sqlalchemy import select
-from app.services.jwt_service import JWTService
-from app.services.storage import StorageService
-from app.models import (
-    User, Place, CheckIn, CheckInCollection, CheckInCollectionItem, CheckInPhoto,
-    DMThread, DMMessage, DMParticipantState, Follow, UserInterest,
-    NotificationPreference, SupportTicket, Activity, CheckInComment,
-    CheckInLike, OTPCode
-)
-from app.database import AsyncSessionLocal
-import asyncio
-from datetime import datetime, timedelta
-from typing import List, Optional
-import random
 
 
 class SampleDataPopulator:
@@ -283,54 +282,8 @@ class SampleDataPopulator:
         print(f"Created {follows_created} follow relationships")
 
     async def create_collections(self, session, users: List[User], places: List[Place]):
-        """Create sample collections for users."""
-        print("Creating sample collections...")
-        collections_created = 0
-
-        for user in users:
-            # Each user has 2-4 collections
-            num_collections = random.randint(2, 4)
-            collection_names = random.sample(
-                self.sample_collections, num_collections)
-
-            for collection_name in collection_names:
-                collection = CheckInCollection(
-                    name=collection_name,
-                    user_id=user.id,
-                    visibility=user.collections_default_visibility,
-                    created_at=datetime.utcnow() - timedelta(days=random.randint(1, 90))
-                )
-                session.add(collection)
-                collections_created += 1
-
-        await session.commit()
-
-        # Add places to collections
-        collections = await session.execute(select(CheckInCollection))
-        collections = collections.scalars().all()
-
-        for collection in collections:
-            # Add 3-8 random places to each collection
-            num_places = random.randint(3, 8)
-            collection_places = random.sample(
-                places, min(num_places, len(places)))
-
-            # Get some check-ins for this user to add to the collection
-            user_checkins = await session.execute(
-                select(CheckIn).where(CheckIn.user_id ==
-                                      collection.user_id).limit(5)
-            )
-            user_checkins = user_checkins.scalars().all()
-
-            for checkin in user_checkins:
-                item = CheckInCollectionItem(
-                    collection_id=collection.id,
-                    check_in_id=checkin.id
-                )
-                session.add(item)
-
-        await session.commit()
-        print(f"Created {collections_created} collections with items")
+        """Legacy check-in collections removed; skipping sample collections."""
+        print("Skipping legacy collections seeding (removed)")
 
     async def create_checkins(self, session, users: List[User], places: List[Place]):
         """Create sample check-ins."""
