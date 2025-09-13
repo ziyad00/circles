@@ -341,3 +341,83 @@ Response
   "offset": 0
 }
 ```
+
+### Save a place to saved places
+
+Request
+
+```http
+POST /places/saved
+Content-Type: application/json
+
+{
+  "place_id": 2,
+  "list_name": "Coffee Spots"  // optional; defaults to "Favorites"
+}
+```
+
+Response
+
+```json
+{
+  "id": 501,
+  "user_id": 49,
+  "place_id": 2,
+  "list_name": "Coffee Spots",
+  "created_at": "2025-09-13T23:35:00Z"
+}
+```
+
+### Unsave a place
+
+Request
+
+```http
+DELETE /places/saved/2
+```
+
+Response: 204 No Content
+
+---
+
+## User-scoped Collection Helpers
+
+### Get a user's saved collections with random photos (summary)
+
+Request
+
+```http
+GET /users/{user_id}/collections
+```
+
+Response
+
+```json
+[
+  {
+    "name": "Favorites",
+    "count": 10,
+    "photos": [
+      "https://signed.example/photo1.jpg",
+      "https://signed.example/photo2.jpg"
+    ]
+  }
+]
+```
+
+### Get random place photos for a user (from saved places)
+
+Request
+
+```http
+GET /users/{user_id}/random-place-photos?limit=4&collection=Favorites
+```
+
+Response
+
+```json
+[
+  "https://signed.example/photo1.jpg",
+  "https://signed.example/photo2.jpg"
+]
+```
