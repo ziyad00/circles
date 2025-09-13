@@ -33,7 +33,7 @@ from ..schemas import (
     PlaceHourlyStats,
     PlaceCrowdLevel,
 )
-from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto, CheckInCollection, CheckInCollectionItem
+from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto
 from ..dependencies import get_current_admin_user
 from ..database import get_db
 from datetime import datetime, timedelta, timezone
@@ -1984,20 +1984,17 @@ async def create_check_in_full(
     longitude: float = Form(...),
     note: str | None = Form(None),
     visibility: str | None = Form(None),
-    # JSON array ("[1,2]") or comma-separated string
-    collection_ids: str | None = Form(None),
     files: list[UploadFile] | None = File(None),
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Create a check-in with optional photos and collection assignments in one request.
+    Create a check-in with optional photos in one request.
 
     **Authentication Required:** Yes
 
     **Features:**
     - One-shot check-in creation with multiple photos
-    - Automatic collection assignment
     - Proximity enforcement (500m default)
     - Rate limiting (5-minute cooldown per place)
 
@@ -2013,11 +2010,6 @@ async def create_check_in_full(
     - Max size: 10MB per photo
     - Stored in S3 with signed URLs for secure access
 
-    **Collection Assignment:**
-    - `collection_ids`: JSON array or comma-separated string
-    - Only user's own collections allowed
-    - Automatic validation of ownership
-
     **Rate Limiting:**
     - 5-minute cooldown between check-ins at same place
     - Prevents spam and duplicate check-ins
@@ -2028,7 +2020,7 @@ async def create_check_in_full(
 
     **Use Cases:**
     - Quick check-in with photos
-    - Social sharing with collections
+    - Social sharing
     - Location-based social updates
     """
     # Rate limit: prevent duplicate check-ins for same user/place within 5 minutes
@@ -2117,30 +2109,7 @@ async def create_check_in_full(
             # keep backward-compatible single photo_url set to last uploaded
             check_in.photo_url = url_path
 
-    # Add to collections if provided
-    if collection_ids:
-        import json
-        ids: list[int] = []
-        try:
-            parsed = json.loads(collection_ids)
-            if isinstance(parsed, list):
-                ids = [int(x) for x in parsed]
-        except Exception:
-            # fallback: comma-separated
-            parts = [p.strip() for p in collection_ids.split(",") if p.strip()]
-            ids = [int(p) for p in parts if p.isdigit()]
-        if ids:
-            # verify ownership of collections
-            owned_q = await db.execute(
-                select(CheckInCollection.id).where(
-                    CheckInCollection.user_id == current_user.id,
-                    CheckInCollection.id.in_(ids),
-                )
-            )
-            owned = {row[0] for row in owned_q.fetchall()}
-            for cid in owned:
-                db.add(CheckInCollectionItem(
-                    collection_id=cid, check_in_id=check_in.id))
+    # Note: Collection assignment removed - using saved places collections instead
 
     await db.commit()
     await db.refresh(check_in)
@@ -2622,13 +2591,20 @@ async def list_saved_places(
     db: AsyncSession = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    collection: str | None = Query(None, description="Optional collection name (list_name) to filter by"),
+    collection: str | None = Query(
+        None, description="Optional collection name (list_name) to filter by"),
 ):
     base = select(SavedPlace).where(SavedPlace.user_id == current_user.id)
-    count_base = select(func.count(SavedPlace.id)).where(SavedPlace.user_id == current_user.id)
+    count_base = select(func.count(SavedPlace.id)).where(
+        SavedPlace.user_id == current_user.id)
     if collection:
-        base = base.where(SavedPlace.list_name == collection)
-        count_base = count_base.where(SavedPlace.list_name == collection)
+        # Normalize: trim and lowercase; treat NULL/empty as "Favorites"
+        norm = collection.strip().lower()
+        coalesced = func.coalesce(func.nullif(
+            SavedPlace.list_name, ''), literal("Favorites"))
+        normalized = func.lower(func.trim(coalesced))
+        base = base.where(normalized == norm)
+        count_base = count_base.where(normalized == norm)
 
     total = (await db.execute(count_base)).scalar_one()
     res = await db.execute(base.offset(offset).limit(limit))
@@ -2651,6 +2627,139 @@ async def list_saved_collections(
     names = [row[0] or "Favorites" for row in res.all()]
     # Ensure at least default exists for UX
     return names or ["Favorites"]
+
+
+@router.get("/saved/collections/{collection_name}", response_model=dict)
+async def get_saved_collection(
+    collection_name: str,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get details of a specific saved place collection."""
+    # Get collection info
+    collection_query = (
+        select(
+            SavedPlace.list_name,
+            func.count(SavedPlace.id).label('count'),
+            func.array_agg(SavedPlace.place_id).label('place_ids')
+        )
+        .where(
+            SavedPlace.user_id == current_user.id,
+            func.lower(
+                func.trim(
+                    func.coalesce(func.nullif(
+                        SavedPlace.list_name, ''), literal("Favorites"))
+                )
+            ) == collection_name.strip().lower()
+        )
+        .group_by(SavedPlace.list_name)
+    )
+
+    result = await db.execute(collection_query)
+    collection_data = result.first()
+
+    if not collection_data:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    name, count, place_ids = collection_data
+
+    # Get up to 4 random photos from places in this collection
+    photos: list[str] = []
+    if place_ids and len(place_ids) > 0:
+        # Prefer place photos
+        photos_result = await db.execute(
+            select(Photo.url)
+            .where(Photo.place_id.in_(place_ids))
+            .order_by(func.random())
+            .limit(4)
+        )
+        photo_urls = photos_result.scalars().all()
+        photos = list(photo_urls)
+        # Fallback to general check-in photos if no place photos exist
+        if not photos:
+            ciph_result = await db.execute(
+                select(CheckInPhoto.url)
+                .join(CheckIn, CheckInPhoto.check_in_id == CheckIn.id)
+                .where(CheckIn.place_id.in_(place_ids))
+                .order_by(func.random())
+                .limit(4)
+            )
+            photos = list(ciph_result.scalars().all())
+        photos = _convert_to_signed_urls(photos)
+
+    return {
+        "name": name or "Favorites",
+        "count": count,
+        "photos": photos
+    }
+
+
+@router.get("/saved/collections/{collection_name}/items", response_model=list[dict])
+async def get_saved_collection_items(
+    collection_name: str,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get items in a specific saved place collection."""
+    # Get all places in this collection for the current user
+    places_query = (
+        select(
+            SavedPlace,
+            Place.name,
+            Place.address,
+            Place.city,
+            Place.latitude,
+            Place.longitude,
+            Place.rating,
+            Place.description,
+            Place.categories
+        )
+        .outerjoin(Place, SavedPlace.place_id == Place.id)
+        .where(
+            SavedPlace.user_id == current_user.id,
+            func.lower(
+                func.trim(
+                    func.coalesce(func.nullif(
+                        SavedPlace.list_name, ''), literal("Favorites"))
+                )
+            ) == collection_name.strip().lower()
+        )
+        .order_by(SavedPlace.created_at.desc())
+    )
+
+    result = await db.execute(places_query)
+    items = result.all()
+
+    collection_items = []
+    for saved_place, place_name, address, city, latitude, longitude, rating, description, categories in items:
+        # Get photos for this place
+        photos_query = (
+            select(Photo.url)
+            .where(Photo.place_id == saved_place.place_id)
+            .order_by(Photo.created_at.desc())
+            .limit(10)  # Limit to prevent too many photos
+        )
+        photos_result = await db.execute(photos_query)
+        photo_urls = photos_result.scalars().all()
+        photos = _convert_to_signed_urls(list(photo_urls))
+
+        collection_items.append({
+            "saved_place_id": saved_place.id,
+            "place_id": saved_place.place_id,
+            "place_name": place_name,
+            "address": address,
+            "city": city,
+            "latitude": latitude,
+            "longitude": longitude,
+            "rating": rating,
+            "description": description,
+            "categories": categories,
+            "photos": photos,
+            "saved_at": saved_place.created_at
+        })
+
+    return collection_items
 
 
 @router.delete("/saved/{place_id}", status_code=status.HTTP_204_NO_CONTENT)
