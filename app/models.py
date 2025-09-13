@@ -41,6 +41,7 @@ class User(Base):
     dm_messages = relationship("DMMessage", back_populates="sender")
     support_tickets = relationship("SupportTicket", back_populates="user")
     activities = relationship("Activity", back_populates="user")
+    collections = relationship("UserCollection", back_populates="user")
 
 
 class OTPCode(Base):
@@ -337,33 +338,7 @@ class DMParticipantState(Base):
                         server_default=func.now(), onupdate=func.now())
 
 
-class CheckInCollection(Base):
-    __tablename__ = "check_in_collections"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"),
-                     nullable=False, index=True)
-    name = Column(String, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True),
-                        server_default=func.now(), onupdate=func.now())
-    visibility = Column(String, nullable=False, server_default="public")
-
-    items = relationship("CheckInCollectionItem",
-                         back_populates="collection", cascade="all, delete-orphan")
-
-
-class CheckInCollectionItem(Base):
-    __tablename__ = "check_in_collection_items"
-
-    id = Column(Integer, primary_key=True, index=True)
-    collection_id = Column(Integer, ForeignKey(
-        "check_in_collections.id"), nullable=False, index=True)
-    check_in_id = Column(Integer, ForeignKey(
-        "check_ins.id"), nullable=False, index=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    collection = relationship("CheckInCollection", back_populates="items")
+# Legacy check-in collections removed in favor of place-based user collections
 
 
 class SupportTicket(Base):
@@ -381,6 +356,36 @@ class SupportTicket(Base):
                         server_default=func.now(), onupdate=func.now())
 
     user = relationship("User", back_populates="support_tickets")
+
+
+class UserCollection(Base):
+    __tablename__ = "user_collections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"),
+                     nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    is_public = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    user = relationship("User", back_populates="collections")
+    places = relationship("UserCollectionPlace", back_populates="collection")
+
+
+class UserCollectionPlace(Base):
+    __tablename__ = "user_collection_places"
+
+    id = Column(Integer, primary_key=True, index=True)
+    collection_id = Column(Integer, ForeignKey(
+        "user_collections.id"), nullable=False, index=True)
+    place_id = Column(Integer, ForeignKey("places.id"),
+                      nullable=False, index=True)
+    added_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    collection = relationship("UserCollection", back_populates="places")
+    place = relationship("Place")
 
 
 class Activity(Base):

@@ -4,7 +4,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.main import app
 from app.database import AsyncSessionLocal
-from app.models import User, Place, CheckIn, DMMessage, DMParticipantState, CheckInCollection, Activity, SupportTicket
+from app.models import User, Place, CheckIn, DMMessage, DMParticipantState, Activity, SupportTicket
 from app.services.jwt_service import JWTService
 import json
 

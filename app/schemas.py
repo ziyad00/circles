@@ -635,39 +635,6 @@ class PaginatedMedia(BaseModel):
     offset: int
 
 
-# Check-in Collections
-
-
-class CollectionCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=200)
-    visibility: Optional[VisibilityEnum] = None
-
-
-class CollectionResponse(BaseModel):
-    id: int
-    user_id: int
-    name: str
-    visibility: VisibilityEnum
-    created_at: datetime
-    updated_at: datetime
-    model_config = ConfigDict(from_attributes=True)
-
-
-class PaginatedCollections(BaseModel):
-    items: list[CollectionResponse]
-    total: int
-    limit: int
-    offset: int
-
-
-class CollectionItemResponse(BaseModel):
-    id: int
-    collection_id: int
-    check_in_id: int
-    created_at: datetime
-    model_config = ConfigDict(from_attributes=True)
-
-
 class PrivacySettingsUpdate(BaseModel):
     dm_privacy: Optional[str] = Field(
         None, pattern="^(everyone|followers|no_one)$")
@@ -812,3 +779,54 @@ class EnhancedPlaceStats(BaseModel):
     crowd_level: PlaceCrowdLevel
     recent_activity: dict  # Last 24h, 7d, 30d activity
     model_config = ConfigDict(from_attributes=True)
+
+
+# User Collections (Custom collections created by users)
+
+
+class CollectionCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    is_public: bool = True
+
+
+class CollectionResponse(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    description: Optional[str] = None
+    is_public: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CollectionPlaceResponse(BaseModel):
+    id: int
+    collection_id: int
+    place_id: int
+    place_name: str
+    place_address: Optional[str] = None
+    place_city: Optional[str] = None
+    place_latitude: Optional[float] = None
+    place_longitude: Optional[float] = None
+    place_rating: Optional[float] = None
+    place_photo_url: Optional[str] = None
+    checkin_count: int = 0
+    user_checkin_photos: list[str] = []
+    added_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedCollections(BaseModel):
+    items: list[CollectionResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class PaginatedCollectionPlaces(BaseModel):
+    items: list[CollectionPlaceResponse]
+    total: int
+    limit: int
+    offset: int

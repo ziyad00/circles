@@ -226,6 +226,56 @@ class StorageService:
         return key
 
     @staticmethod
+    async def _save_avatar_local(user_id: int, filename: str, content: bytes) -> str:
+        media_root = os.path.abspath(os.path.join(os.getcwd(), "media"))
+        target_dir = os.path.join(media_root, "avatars", str(user_id))
+        os.makedirs(target_dir, exist_ok=True)
+        target_path = os.path.join(target_dir, filename)
+        with open(target_path, "wb") as f:
+            f.write(content)
+        return f"/media/avatars/{user_id}/{filename}"
+
+    @staticmethod
+    async def _save_avatar_s3(user_id: int, filename: str, content: bytes) -> str:
+        import boto3
+        from botocore.config import Config as BotoConfig
+        import asyncio
+
+        cfg = StorageService._resolved_s3_config()
+
+        if not cfg["bucket"]:
+            raise ValueError(
+                "S3 bucket is not configured. Set S3_BUCKET or APP_S3_BUCKET.")
+
+        def _upload_avatar_to_s3():
+            session = boto3.session.Session(
+                aws_access_key_id=settings.s3_access_key_id,
+                aws_secret_access_key=settings.s3_secret_access_key,
+                region_name=cfg["region"],
+            )
+            s3 = session.client(
+                "s3",
+                endpoint_url=cfg["endpoint"],
+                config=BotoConfig(
+                    s3={"addressing_style": "path" if cfg["use_path_style"] else "auto"}),
+            )
+            key = f"avatars/{user_id}/{filename}"
+            bucket_name = cfg["bucket"] or "circles-media-259c"
+            s3.put_object(Bucket=bucket_name, Key=key,
+                          Body=content, ContentType=_guess_content_type(filename))
+            return key
+
+        key = await asyncio.to_thread(_upload_avatar_to_s3)
+        return key
+
+    @staticmethod
+    async def save_avatar(user_id: int, filename: str, content: bytes) -> str:
+        _validate_image_or_raise(filename, content)
+        if settings.storage_backend == "s3":
+            return await StorageService._save_avatar_s3(user_id, filename, content)
+        return await StorageService._save_avatar_local(user_id, filename, content)
+
+    @staticmethod
     def generate_signed_url(s3_key: str, expiration: int = 3600) -> str:
         """
         Generate a signed URL for accessing an S3 object.
@@ -275,10 +325,16 @@ def _validate_image_or_raise(filename: str, content: bytes) -> None:
     max_bytes = int(settings.photo_max_mb) * 1024 * 1024
     if len(content) > max_bytes:
         raise ValueError("File too large; max 10MB")
-    # Content type by extension must be image
+    # Content type by extension should be image; if not, try to validate by content
     ctype = _guess_content_type(filename)
     if not ctype.startswith("image/"):
-        raise ValueError("Unsupported file type")
+        # Fallback: trust actual bytes if Pillow can verify
+        try:
+            from PIL import Image
+            import io
+            Image.open(io.BytesIO(content)).verify()
+        except Exception:
+            raise ValueError("Unsupported file type")
     # Attempt to open with Pillow to validate image
     try:
         from PIL import Image
@@ -293,7 +349,12 @@ def _guess_content_type(filename: str) -> str:
     return {
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
+        ".jpe": "image/jpeg",
+        ".jfif": "image/jpeg",
+        ".pjpeg": "image/jpeg",
+        ".pjp": "image/jpeg",
         ".png": "image/png",
         ".gif": "image/gif",
         ".webp": "image/webp",
+        ".heic": "image/heic",
     }.get(ext, "application/octet-stream")

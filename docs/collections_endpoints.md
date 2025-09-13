@@ -416,8 +416,5 @@ GET /users/{user_id}/random-place-photos?limit=4&collection=Favorites
 Response
 
 ```json
-[
-  "https://signed.example/photo1.jpg",
-  "https://signed.example/photo2.jpg"
-]
+["https://signed.example/photo1.jpg", "https://signed.example/photo2.jpg"]
 ```

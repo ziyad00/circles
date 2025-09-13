@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import json
 
 from ..database import get_db
-from ..models import Activity, User, Follow, CheckIn, CheckInLike, CheckInComment, Review, CheckInCollection
+from ..models import Activity, User, Follow, CheckIn, CheckInLike, CheckInComment, Review
 from ..utils import can_view_checkin
 from ..schemas import (
     ActivityItem,

@@ -6,7 +6,7 @@ from sqlalchemy import select, func, case
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService, _validate_image_or_raise
-from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, CheckInCollection, CheckInCollectionItem, SavedPlace, CheckInLike, CheckInComment, Review
+from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, SavedPlace, CheckInLike, CheckInComment, Review, Place
 from ..schemas import (
     UserUpdate,
     PublicUserResponse,
@@ -263,32 +263,22 @@ async def upload_avatar(
         ext = ".jpg"
     filename = f"{uuid4().hex}{ext}"
 
-    # Store avatar using configured storage backend
-    if settings.storage_backend == "s3":
-        # S3 storage
-        url_path = await StorageService._save_checkin_s3(current_user.id, filename, content)
-    else:
-        # Local storage
-        media_root = os.path.abspath(os.path.join(os.getcwd(), "media"))
-        target_dir = os.path.join(media_root, "avatars", str(current_user.id))
-        os.makedirs(target_dir, exist_ok=True)
-        target_path = os.path.join(target_dir, filename)
-
-        # Write file synchronously to avoid external dependency issues
-        with open(target_path, "wb") as f:
-            f.write(content)
-
-        url_path = f"/media/avatars/{current_user.id}/{filename}"
+    # Store avatar using configured storage backend (avatars path)
+    url_path = await StorageService.save_avatar(current_user.id, filename, content)
 
     # Update user avatar
     current_user.avatar_url = url_path
     await db.commit()
     await db.refresh(current_user)
 
-    # Convert S3 key to signed URL for response
-    if settings.storage_backend == "s3":
-        current_user.avatar_url = _convert_single_to_signed_url(
-            current_user.avatar_url)
+    # Convert to final URL for response (sign S3 keys)
+    if settings.storage_backend == "s3" and current_user.avatar_url and not str(current_user.avatar_url).startswith("http"):
+        try:
+            current_user.avatar_url = StorageService.generate_signed_url(
+                current_user.avatar_url)
+        except Exception:
+            # Fallback: leave S3 key if signing fails
+            pass
 
     return current_user
 
@@ -389,6 +379,8 @@ async def list_user_media(
                 if len(urls) >= limit:
                     break
     total = total_photos  # approximate; not counting CI photos separately here
+    # Convert any S3 keys to signed URLs before returning
+    urls = _convert_to_signed_urls(urls)
     items = urls[:limit]
     return PaginatedMedia(items=items, total=total, limit=limit, offset=offset)
 
@@ -399,21 +391,117 @@ async def list_user_collections(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Owner gets all; others get public or friends (followers-only)
-    base = select(CheckInCollection).where(
-        CheckInCollection.user_id == user_id)
-    if current_user.id != user_id:
-        from ..models import Follow
-        is_follower = (await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == user_id))).scalars().first() is not None
-        if is_follower:
-            base = base.where(
-                CheckInCollection.visibility.in_(["public", "friends"]))
+    """
+    Get user's collections with random photos.
+
+    Returns collections of saved places, each with up to 4 random photos
+    from the places in that collection.
+    """
+    # Get collection names and place IDs
+    collections_query = (
+        select(
+            SavedPlace.list_name,
+            func.count(SavedPlace.id).label('count'),
+            func.array_agg(SavedPlace.place_id).label('place_ids')
+        )
+        .where(SavedPlace.user_id == user_id)
+        .group_by(SavedPlace.list_name)
+        .order_by(SavedPlace.list_name.asc())
+    )
+
+    result = await db.execute(collections_query)
+    collections_data = result.all()
+
+    collections = []
+    for collection_name, count, place_ids in collections_data:
+        # Get up to 4 random photos from places in this collection
+        if place_ids and len(place_ids) > 0:
+            photos_query = (
+                select(Photo.url)
+                .where(Photo.place_id.in_(place_ids))
+                .order_by(func.random())
+                .limit(4)
+            )
+            photos_result = await db.execute(photos_query)
+            photo_urls = photos_result.scalars().all()
+            # Convert to signed URLs
+            photos = _convert_to_signed_urls(list(photo_urls))
         else:
-            base = base.where(CheckInCollection.visibility == "public")
-    res = await db.execute(base.order_by(CheckInCollection.created_at.desc()))
-    cols = res.scalars().all()
-    # return minimal fields
-    return [{"id": c.id, "name": c.name, "visibility": c.visibility, "created_at": c.created_at} for c in cols]
+            photos = []
+
+        collections.append({
+            "name": collection_name or "Favorites",
+            "count": count,
+            "photos": photos
+        })
+
+    return collections
+
+
+@router.get("/collections/{collection_name}/items", response_model=list[dict])
+async def get_collection_items(
+    collection_name: str,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get items in a specific saved place collection.
+
+    Returns the places in the specified collection with their photos and details.
+    """
+    # Get all places in this collection for the current user
+    places_query = (
+        select(
+            SavedPlace,
+            Place.name,
+            Place.address,
+            Place.city,
+            Place.latitude,
+            Place.longitude,
+            Place.rating,
+            Place.description,
+            Place.categories
+        )
+        .join(Place, SavedPlace.place_id == Place.id)
+        .where(
+            SavedPlace.user_id == current_user.id,
+            SavedPlace.list_name == collection_name
+        )
+        .order_by(SavedPlace.created_at.desc())
+    )
+
+    result = await db.execute(places_query)
+    items = result.all()
+
+    collection_items = []
+    for saved_place, place_name, address, city, latitude, longitude, rating, description, categories in items:
+        # Get photos for this place
+        photos_query = (
+            select(Photo.url)
+            .where(Photo.place_id == saved_place.place_id)
+            .order_by(Photo.created_at.desc())
+            .limit(10)  # Limit to prevent too many photos
+        )
+        photos_result = await db.execute(photos_query)
+        photo_urls = photos_result.scalars().all()
+        photos = _convert_to_signed_urls(list(photo_urls))
+
+        collection_items.append({
+            "saved_place_id": saved_place.id,
+            "place_id": saved_place.place_id,
+            "place_name": place_name,
+            "address": address,
+            "city": city,
+            "latitude": latitude,
+            "longitude": longitude,
+            "rating": rating,
+            "description": description,
+            "categories": categories,
+            "photos": photos,
+            "saved_at": saved_place.created_at
+        })
+
+    return collection_items
 
 
 @router.get("/me/interests", response_model=list[InterestResponse])
@@ -498,19 +586,14 @@ async def get_user_profile_stats(
     )
     checkin_row = checkin_stats.fetchone()
 
-    # Get collection counts by visibility
-    collection_stats = await db.execute(
+    # Get saved place collection counts
+    saved_collection_stats = await db.execute(
         select(
-            func.count(CheckInCollection.id).label('total'),
-            func.sum(case((CheckInCollection.visibility ==
-                     'public', 1), else_=0)).label('public'),
-            func.sum(case((CheckInCollection.visibility == 'friends', 1), else_=0)).label(
-                'followers'),
-            func.sum(case((CheckInCollection.visibility ==
-                     'private', 1), else_=0)).label('private')
-        ).where(CheckInCollection.user_id == user_id)
+            func.count(func.distinct(SavedPlace.list_name)).label('total'),
+            func.count(SavedPlace.id).label('total_saved_places')
+        ).where(SavedPlace.user_id == user_id)
     )
-    collection_row = collection_stats.fetchone()
+    saved_collection_row = saved_collection_stats.fetchone()
 
     # Get follower/following counts
     followers_count = await db.scalar(
@@ -550,10 +633,10 @@ async def get_user_profile_stats(
         checkins_public_count=checkin_row.public or 0,
         checkins_followers_count=checkin_row.followers or 0,
         checkins_private_count=checkin_row.private or 0,
-        collections_count=collection_row.total or 0,
-        collections_public_count=collection_row.public or 0,
-        collections_followers_count=collection_row.followers or 0,
-        collections_private_count=collection_row.private or 0,
+        collections_count=saved_collection_row.total or 0,
+        collections_public_count=0,  # Saved places don't have visibility for now
+        collections_followers_count=0,
+        collections_private_count=0,
         followers_count=followers_count or 0,
         following_count=following_count or 0,
         reviews_count=reviews_count or 0,
@@ -569,7 +652,8 @@ async def get_random_place_photos(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
     limit: int = Query(4, ge=1, le=4, description="Max 4 random photos"),
-    collection: str | None = Query(None, description="Saved places collection (list_name) to filter by")
+    collection: str | None = Query(
+        None, description="Saved places collection (list_name) to filter by")
 ):
     """Return up to 4 random photos from places the user saved.
 
