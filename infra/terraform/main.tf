@@ -106,22 +106,35 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
-    type = "redirect"
-    redirect {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
+    # If a certificate is provided, redirect HTTP->HTTPS; otherwise forward to target group
+    type = var.certificate_arn != "" ? "redirect" : "forward"
+    dynamic "redirect" {
+      for_each = var.certificate_arn != "" ? [1] : []
+      content {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+    dynamic "forward" {
+      for_each = var.certificate_arn == "" ? [1] : []
+      content {
+        target_group {
+          arn = aws_lb_target_group.app.arn
+        }
+      }
     }
   }
 }
 
 resource "aws_lb_listener" "https" {
+  count             = var.certificate_arn != "" ? 1 : 0
   load_balancer_arn = aws_lb.app.arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-2016-08"
 
-  certificate_arn = var.certificate_arn != "" ? var.certificate_arn : null
+  certificate_arn = var.certificate_arn
 
   default_action {
     type             = "forward"
@@ -363,7 +376,7 @@ resource "aws_cloudfront_distribution" "alb" {
     custom_origin_config {
       http_port              = 80
       https_port             = 443
-      origin_protocol_policy = "http-only"
+      origin_protocol_policy = "https-only"
       origin_ssl_protocols   = ["TLSv1.2"]
     }
   }
