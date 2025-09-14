@@ -35,7 +35,7 @@ terraform apply -auto-approve
 
 Outputs include:
 
-- alb_dns_name
+- alb_dns_name (HTTP and HTTPS)
 - ecr_repository_url
 - s3_bucket
 - rds_endpoint
@@ -76,6 +76,19 @@ The task sets:
 - S3_BUCKET=<created bucket>
 
 Set remaining env and secrets (e.g., APP_DATABASE_URL, APP_JWT_SECRET_KEY) in the task definition or via Parameters/Secrets Manager. Recommended: use AWS Secrets Manager and map into the task.
+
+## HTTPS
+
+Provide an ACM certificate ARN to enable HTTPS on the ALB (with HTTP -> HTTPS redirect):
+
+```bash
+cd infra/terraform
+export TF_VAR_db_password='strong-password'
+export TF_VAR_certificate_arn='arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+terraform apply -auto-approve
+```
+
+If you don't have a certificate, create one in ACM (in us-east-1) and validate via DNS, then set `TF_VAR_certificate_arn`.
 
 ## Notes
 
