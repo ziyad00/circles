@@ -273,7 +273,7 @@ resource "aws_ecs_task_definition" "app" {
         { name = "APP_METRICS_TOKEN", valueFrom = "${aws_secretsmanager_secret.app.arn}:APP_METRICS_TOKEN::" },
         { name = "APP_DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.app.arn}:APP_DATABASE_URL::" },
       ]
-      command = ["sh", "-c", "uv run alembic upgrade heads && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+      command = ["sh", "-c", "./.venv/bin/alembic upgrade heads && ./.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"]
       logConfiguration = {
         logDriver = "awslogs",
         options = {
@@ -376,7 +376,7 @@ resource "aws_cloudfront_distribution" "alb" {
     custom_origin_config {
       http_port              = 80
       https_port             = 443
-      origin_protocol_policy = "https-only"
+      origin_protocol_policy = "http-only"
       origin_ssl_protocols   = ["TLSv1.2"]
     }
   }
