@@ -74,4 +74,10 @@ variable "subdomain" {
   default     = "api"
 }
 
+variable "certificate_arn" {
+  type        = string
+  description = "Existing ACM certificate ARN to use for HTTPS (optional). If set, HTTPS will use this certificate."
+  default     = ""
+}
+
 
