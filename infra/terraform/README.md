@@ -90,6 +90,13 @@ terraform apply -auto-approve
 
 If you don't have a certificate, create one in ACM (in us-east-1) and validate via DNS, then set `TF_VAR_certificate_arn`.
 
+Alternatively, enable CloudFront (auto-HTTPS, no custom domain required). After apply, use the CloudFront domain output.
+
+```bash
+terraform apply -auto-approve
+# Look for the CloudFront domain in outputs and use https://<cf-domain>/
+```
+
 ## Notes
 
 - ALB listener is HTTP by default; front it with ACM + HTTPS in production.
