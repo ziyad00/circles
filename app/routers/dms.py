@@ -1098,7 +1098,6 @@ async def set_typing(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
-    await _ensure_thread_not_blocked(db, thread, current_user.id)
     state = await _get_or_create_state(db, thread_id, current_user.id)
     # set typing window ~5 seconds
     state.typing_until = (datetime.now(timezone.utc) +
@@ -1378,8 +1377,8 @@ async def get_message_reactions(
 
     thread_result = await db.execute(select(DMThread).where(DMThread.id == thread_id))
     thread = thread_result.scalars().first()
-   if not thread or msg.thread_id != thread_id:
-       raise HTTPException(status_code=404, detail="Thread not found")
+    if not thread or msg.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Thread not found")
 
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
