@@ -1,12 +1,27 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Query
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, case
+from sqlalchemy import select, func, case, and_, or_
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService, _validate_image_or_raise
-from ..models import User, CheckIn, CheckInPhoto, Photo, Follow, UserInterest, SavedPlace, CheckInLike, CheckInComment, Review, Place
+from ..services.block_service import has_block_between
+from ..models import (
+    User,
+    CheckIn,
+    CheckInPhoto,
+    Photo,
+    Follow,
+    UserInterest,
+    SavedPlace,
+    CheckInLike,
+    CheckInComment,
+    Review,
+    Place,
+    DMThread,
+    DMParticipantState,
+)
 from ..schemas import (
     UserUpdate,
     PublicUserResponse,
@@ -105,6 +120,18 @@ async def search_users(
         )
         .outerjoin(followed_subq, User.id == followed_subq.c.followee_id)
     )
+    blocked_subq = (
+        select(DMParticipantState.id)
+        .join(DMThread, DMThread.id == DMParticipantState.thread_id)
+        .where(
+            DMParticipantState.blocked.is_(True),
+            or_(
+                and_(DMThread.user_a_id == current_user.id, DMThread.user_b_id == User.id),
+                and_(DMThread.user_b_id == current_user.id, DMThread.user_a_id == User.id),
+            ),
+        )
+    )
+    stmt = stmt.where(~blocked_subq.exists())
     if filters.q:
         like = f"%{filters.q}%"
         stmt = stmt.where(
@@ -155,6 +182,10 @@ async def get_user_profile(
     user = res.scalars().first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    if current_user and current_user.id != user.id:
+        if await has_block_between(db, current_user.id, user.id):
+            raise HTTPException(status_code=404, detail="User not found")
 
     followers_count = await db.scalar(
         select(func.count()).where(Follow.followee_id == user.id)
