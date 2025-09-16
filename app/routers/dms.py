@@ -10,12 +10,14 @@ from ..database import get_db
 from ..models import User, DMThread, DMMessage, DMParticipantState, DMMessageLike, DMMessageReaction, Follow
 from ..config import settings
 from ..services.storage import StorageService
+from ..services.block_service import has_block_between
 from ..services.websocket_service import WebSocketService
 from ..schemas import (
     DMThreadResponse,
     PaginatedDMThreads,
     DMRequestCreate,
     DMRequestDecision,
+    DMOpenCreate,
     DMMessageCreate,
     DMMessageResponse,
     PaginatedDMMessages,
@@ -83,6 +85,50 @@ def _normalize_pair(user_id: int, other_id: int) -> tuple[int, int]:
     return (user_id, other_id) if user_id < other_id else (other_id, user_id)
 
 
+@router.post("/open", response_model=DMThreadResponse)
+async def open_or_get_thread(
+    payload: DMOpenCreate,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Open (or return) a one-to-one chat thread between the current user and `other_user_id`.
+
+    - If a thread already exists (any status), return it.
+    - If not, create a new thread with status "accepted".
+    - Returns the thread id to be used as chat_id.
+    """
+    if payload.other_user_id == current_user.id:
+        raise HTTPException(
+            status_code=400, detail="Cannot open chat with yourself")
+
+    # Validate other user exists
+    res_user = await db.execute(select(User).where(User.id == payload.other_user_id))
+    other = res_user.scalars().first()
+    if not other:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    a, b = _normalize_pair(current_user.id, payload.other_user_id)
+    res = await db.execute(select(DMThread).where(DMThread.user_a_id == a, DMThread.user_b_id == b))
+    thread = res.scalars().first()
+
+    if thread and await has_block_between(db, current_user.id, other.id):
+        raise HTTPException(status_code=403, detail="This conversation is blocked")
+
+    if not thread:
+        thread = DMThread(
+            user_a_id=a,
+            user_b_id=b,
+            initiator_id=current_user.id,
+            status="accepted",
+        )
+        db.add(thread)
+        await db.commit()
+        await db.refresh(thread)
+
+    return thread
+
+
 @router.post("/requests", response_model=DMThreadResponse)
 async def send_dm_request(
     payload: DMRequestCreate,
@@ -144,27 +190,12 @@ async def send_dm_request(
                 raise HTTPException(
                     status_code=403, detail="Recipient accepts DMs from followers only")
 
-    # Check if recipient has blocked the sender
-    from ..models import DMParticipantState
-    block_check = await db.execute(
-        select(DMParticipantState).where(
-            DMParticipantState.user_id == recipient.id,
-            DMParticipantState.thread_id.in_(
-                select(DMThread.id).where(
-                    or_(
-                        and_(DMThread.user_a_id == current_user.id,
-                             DMThread.user_b_id == recipient.id),
-                        and_(DMThread.user_a_id == recipient.id,
-                             DMThread.user_b_id == current_user.id)
-                    )
-                )
-            ),
-            DMParticipantState.blocked == True
-        )
-    )
-    if block_check.scalar_one_or_none():
+    # Do not allow DM requests when either user has blocked the other
+    if await has_block_between(db, current_user.id, recipient.id):
         raise HTTPException(
-            status_code=403, detail="Cannot send DM request to user who has blocked you")
+            status_code=403,
+            detail="Cannot send DM request while a block is in place",
+        )
 
     a, b = _normalize_pair(current_user.id, recipient.id)
     # Determine auto-accept policy
@@ -221,6 +252,14 @@ async def list_dm_requests(
             DMThread.user_b_id == current_user.id),
         DMThread.initiator_id != current_user.id,
     )
+    blocked_subq = (
+        select(DMParticipantState.id)
+        .where(
+            DMParticipantState.thread_id == DMThread.id,
+            DMParticipantState.blocked.is_(True),
+        )
+    )
+    base = base.where(~blocked_subq.exists())
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     stmt = base.order_by(desc(DMThread.updated_at)).offset(offset).limit(limit)
     items = (await db.execute(stmt)).scalars().all()
@@ -240,6 +279,7 @@ async def respond_dm_request(
         raise HTTPException(status_code=404, detail="Thread not found")
     if current_user.id not in (thread.user_a_id, thread.user_b_id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
     if thread.initiator_id == current_user.id:
         raise HTTPException(
             status_code=400, detail="Initiator cannot decide their own request")
@@ -365,6 +405,16 @@ async def inbox(
         )
     )
 
+    blocked_state = aliased(DMParticipantState)
+    blocked_threads_subq = (
+        select(blocked_state.id)
+        .where(
+            blocked_state.thread_id == DMThread.id,
+            blocked_state.blocked.is_(True),
+        )
+    )
+    base = base.where(~blocked_threads_subq.exists())
+
     # archived filter
     if not include_archived:
         base = base.where(
@@ -449,6 +499,19 @@ def _is_participant(thread: DMThread, user_id: int) -> bool:
     return user_id in (thread.user_a_id, thread.user_b_id)
 
 
+async def _ensure_thread_not_blocked(
+    db: AsyncSession, thread: DMThread, current_user_id: int
+) -> int:
+    """Raise if either participant has blocked the other; return the other user's id."""
+    other_id = thread.user_a_id if thread.user_b_id == current_user_id else thread.user_b_id
+    if await has_block_between(db, current_user_id, other_id):
+        raise HTTPException(
+            status_code=403,
+            detail="This conversation is unavailable because a block is in effect",
+        )
+    return other_id
+
+
 @router.get("/threads/{thread_id}/messages", response_model=PaginatedDMMessages)
 async def list_messages(
     thread_id: int,
@@ -463,6 +526,7 @@ async def list_messages(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    other_id = await _ensure_thread_not_blocked(db, thread, current_user.id)
     base = select(DMMessage).where(
         DMMessage.thread_id == thread_id,
         DMMessage.deleted_at.is_(None)
@@ -472,7 +536,6 @@ async def list_messages(
                          ).offset(offset).limit(limit)
     messages = (await db.execute(stmt)).scalars().all()
     # compute 'seen' for messages sent by current_user
-    other_id = thread.user_a_id if current_user.id == thread.user_b_id else thread.user_b_id
     res_other = await db.execute(select(DMParticipantState).where(_participant_state_base(thread_id, other_id)))
     other_state = res_other.scalars().first()
     other_last_read = other_state.last_read_at if other_state else None
@@ -579,12 +642,7 @@ async def send_message(
         raise HTTPException(status_code=403, detail="Not allowed")
     if thread.status != "accepted":
         raise HTTPException(status_code=400, detail="Thread not accepted")
-    # prevent sending if the other participant has blocked current user
-    other_id = thread.user_a_id if current_user.id == thread.user_b_id else thread.user_b_id
-    other_state = await _get_or_create_state(db, thread_id, other_id)
-    if other_state and getattr(other_state, "blocked", False):
-        raise HTTPException(
-            status_code=403, detail="You are blocked by this user")
+    other_id = await _ensure_thread_not_blocked(db, thread, current_user.id)
 
     # Handle reply functionality
     reply_to_text = None
@@ -638,13 +696,11 @@ async def send_message(
     # Send real-time notifications
     try:
         # Get the other participant
-        other_user_id = thread.user_a_id if thread.user_b_id == current_user.id else thread.user_b_id
-
         # Check if the recipient has muted this thread
         participant_state_result = await db.execute(
             select(DMParticipantState).where(
                 DMParticipantState.thread_id == thread_id,
-                DMParticipantState.user_id == other_user_id
+                DMParticipantState.user_id == other_id
             )
         )
         participant_state = participant_state_result.scalars().first()
@@ -684,7 +740,7 @@ async def send_message(
 
             # Send WebSocket notification
             await WebSocketService.send_dm_notification(
-                other_user_id,
+                other_id,
                 thread_id,
                 {
                     **notification_data,
@@ -816,6 +872,7 @@ async def delete_message(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
 
     # Find and verify the message
     message_result = await db.execute(
@@ -885,6 +942,15 @@ async def unread_count(
                 DMMessage.created_at > DMParticipantState.last_read_at),
         )
     )
+    blocked_state = aliased(DMParticipantState)
+    blocked_exists = (
+        select(blocked_state.id)
+        .where(
+            blocked_state.thread_id == DMThread.id,
+            blocked_state.blocked.is_(True),
+        )
+    )
+    base = base.where(~blocked_exists.exists())
     total = (await db.execute(base)).scalar_one()
     return UnreadCountResponse(unread=total)
 
@@ -901,6 +967,7 @@ async def thread_unread_count(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
     q = (
         select(func.count(DMMessage.id))
         .where(
@@ -931,6 +998,7 @@ async def mark_read(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
     state = await _get_or_create_state(db, thread_id, current_user.id)
     state.last_read_at = func.now()
     await db.commit()
@@ -950,6 +1018,7 @@ async def mute_thread(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
     state = await _get_or_create_state(db, thread_id, current_user.id)
     state.muted = payload.muted
     await db.commit()
@@ -969,6 +1038,7 @@ async def pin_thread(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
     state = await _get_or_create_state(db, thread_id, current_user.id)
     state.pinned = payload.pinned
     await db.commit()
@@ -988,6 +1058,7 @@ async def archive_thread(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
     state = await _get_or_create_state(db, thread_id, current_user.id)
     state.archived = payload.archived
     await db.commit()
@@ -1007,6 +1078,7 @@ async def block_thread(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
     state = await _get_or_create_state(db, thread_id, current_user.id)
     state.blocked = payload.blocked
     await db.commit()
@@ -1026,6 +1098,7 @@ async def set_typing(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
     state = await _get_or_create_state(db, thread_id, current_user.id)
     # set typing window ~5 seconds
     state.typing_until = (datetime.now(timezone.utc) +
@@ -1046,6 +1119,7 @@ async def get_typing(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
     other_id = thread.user_a_id if current_user.id == thread.user_b_id else thread.user_b_id
     res = await db.execute(select(DMParticipantState).where(_participant_state_base(thread_id, other_id)))
     other = res.scalars().first()
@@ -1069,6 +1143,7 @@ async def get_presence(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
     other_id = thread.user_a_id if current_user.id == thread.user_b_id else thread.user_b_id
     res = await db.execute(select(DMParticipantState).where(_participant_state_base(thread_id, other_id)))
     other = res.scalars().first()
@@ -1106,6 +1181,7 @@ async def heart_message(
         raise HTTPException(status_code=404, detail="Thread not found")
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
     # toggle like
     existing = await db.execute(select(DMMessageLike).where(DMMessageLike.message_id == message_id, DMMessageLike.user_id == current_user.id))
     like = existing.scalars().first()
@@ -1158,6 +1234,7 @@ async def add_message_reaction(
 
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
 
     # Check if reaction already exists
     existing_result = await db.execute(
@@ -1237,6 +1314,7 @@ async def remove_message_reaction(
 
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
 
     # Find and remove reaction
     reaction_result = await db.execute(
@@ -1300,11 +1378,12 @@ async def get_message_reactions(
 
     thread_result = await db.execute(select(DMThread).where(DMThread.id == thread_id))
     thread = thread_result.scalars().first()
-    if not thread or msg.thread_id != thread_id:
-        raise HTTPException(status_code=404, detail="Thread not found")
+   if not thread or msg.thread_id != thread_id:
+       raise HTTPException(status_code=404, detail="Thread not found")
 
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
 
     # Get reactions with user info
     reactions_result = await db.execute(
