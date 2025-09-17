@@ -15,7 +15,7 @@ class ImageTooLargeError(ImageValidationError):
 class UnsupportedImageFormatError(ImageValidationError):
     """Raised when uploaded file is not a valid image format"""
     def __init__(self):
-        super().__init__("The uploaded file is not a valid image. Please upload a JPG, PNG, or HEIC image.")
+        super().__init__("The uploaded file is not a valid image. Please upload a JPG, PNG, or HEIC image. If you're using an iPhone, try taking a new photo or selecting from your gallery.")
 
 class CorruptedImageError(ImageValidationError):
     """Raised when image file is corrupted or unreadable"""
