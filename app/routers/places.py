@@ -13,6 +13,7 @@ from ..schemas import (
     PlaceCreate,
     PlaceResponse,
     CheckInCreate,
+    CheckInUpdate,
     CheckInResponse,
     # for check-in photo upload
 
@@ -2139,8 +2140,8 @@ async def whos_here(
 
     **Privacy Enforcement:**
     - Only shows check-ins user has permission to see
-    - Respects `public`, `friends` (followers-only), `private` visibility
-    - Followers can see followers-only (`friends`) check-ins
+    - Respects `public`, `followers`, `private` visibility
+    - Followers can see followers-only check-ins
 
     **Response Data:**
     - User ID, name, and avatar
@@ -2334,7 +2335,7 @@ async def create_check_in(
 
     **Visibility Options:**
     - `public`: Visible to everyone
-    - `friends`: Visible to followers only
+    - `followers`: Visible to followers only
     - `private`: Visible only to user
 
     **Rate Limiting:**
@@ -2471,7 +2472,7 @@ async def create_check_in_full(
 
     **Visibility:**
     - Uses user's default if not specified
-    - Options: public, friends (followers), private
+    - Options: public, followers, private
 
     **Use Cases:**
     - Quick check-in with photos
@@ -2738,6 +2739,66 @@ async def delete_checkin_photo_item(
     await db.delete(photo)
     await db.commit()
     return None
+
+
+@router.put("/check-ins/{check_in_id}", response_model=CheckInResponse)
+async def update_check_in(
+    check_in_id: int,
+    payload: CheckInUpdate,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Update check-in details including privacy settings.
+
+    Allows users to:
+    - Change check-in privacy (public/followers/private)
+    - Update the note/description
+    """
+    # Find the check-in
+    res = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
+    check_in = res.scalars().first()
+    if not check_in:
+        raise HTTPException(status_code=404, detail="Check-in not found")
+
+    # Verify ownership
+    if check_in.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403, detail="Not allowed to edit this check-in")
+
+    # Update fields if provided
+    if payload.note is not None:
+        check_in.note = payload.note
+
+    if payload.visibility is not None:
+        check_in.visibility = payload.visibility.value
+
+    await db.commit()
+    await db.refresh(check_in)
+
+    # Get the photos for the response
+    photos_result = await db.execute(
+        select(CheckInPhoto).where(CheckInPhoto.check_in_id == check_in.id)
+    )
+    photos = photos_result.scalars().all()
+    photo_urls = [photo.url for photo in photos]
+
+    # Check if user can still chat (within time window)
+    time_limit = timedelta(hours=6)
+    allowed_to_chat = (datetime.now(timezone.utc) - check_in.created_at) < time_limit
+
+    return CheckInResponse(
+        id=check_in.id,
+        user_id=check_in.user_id,
+        place_id=check_in.place_id,
+        note=check_in.note,
+        visibility=VisibilityEnum(check_in.visibility),
+        created_at=check_in.created_at,
+        expires_at=check_in.expires_at,
+        photo_url=photo_urls[0] if photo_urls else None,  # Backward compatibility
+        photo_urls=photo_urls,
+        allowed_to_chat=allowed_to_chat,
+    )
 
 
 @router.delete("/check-ins/{check_in_id}", status_code=status.HTTP_204_NO_CONTENT)

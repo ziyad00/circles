@@ -29,6 +29,15 @@ class User(Base):
         String, nullable=False, server_default="private")
     collections_default_visibility = Column(
         String, nullable=False, server_default="public")
+
+    # Comprehensive privacy controls (public|followers|private)
+    profile_visibility = Column(String, nullable=False, server_default="public")
+    follower_list_visibility = Column(String, nullable=False, server_default="public")
+    following_list_visibility = Column(String, nullable=False, server_default="public")
+    stats_visibility = Column(String, nullable=False, server_default="public")
+    media_default_visibility = Column(String, nullable=False, server_default="public")
+    search_visibility = Column(String, nullable=False, server_default="public")
+
     availability_status = Column(String, nullable=False,
                                  server_default="not_available")
     availability_mode = Column(String, nullable=False,
@@ -434,7 +443,9 @@ class UserCollection(Base):
                      nullable=False, index=True)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
+    # Keep is_public for backward compatibility, but add standardized visibility
     is_public = Column(Boolean, default=True)
+    visibility = Column(String, nullable=False, server_default="public")  # public|followers|private
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

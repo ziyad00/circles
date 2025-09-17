@@ -5,6 +5,7 @@ from sqlalchemy import select, func, desc
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
+from ..utils import can_view_collection
 from ..services.collection_sync import (
     ensure_saved_place_entry,
     remove_saved_place_membership,
@@ -137,11 +138,20 @@ async def create_collection(
             detail="Collection with this name already exists"
         )
 
+    # Handle backward compatibility: visibility overrides is_public if provided
+    if payload.visibility is not None:
+        visibility = payload.visibility.value
+        is_public = (visibility == "public")
+    else:
+        visibility = "public" if payload.is_public else "private"
+        is_public = payload.is_public
+
     collection = UserCollection(
         user_id=current_user.id,
         name=payload.name,
         description=payload.description,
-        is_public=payload.is_public
+        is_public=is_public,
+        visibility=visibility
     )
     db.add(collection)
     await db.commit()
@@ -209,9 +219,12 @@ async def get_collection(
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    # Check ownership or public visibility
-    if collection.user_id != current_user.id and not collection.is_public:
-        raise HTTPException(status_code=403, detail="Collection is private")
+    # Check ownership or visibility permissions
+    if collection.user_id != current_user.id:
+        visibility = getattr(collection, 'visibility', 'public' if collection.is_public else 'private')
+        can_view = await can_view_collection(db, collection.user_id, current_user.id, visibility)
+        if not can_view:
+            raise HTTPException(status_code=403, detail="Collection is private")
 
     return collection
 
@@ -259,7 +272,17 @@ async def update_collection(
 
     collection.name = payload.name
     collection.description = payload.description
-    collection.is_public = payload.is_public
+
+    # Handle backward compatibility: visibility overrides is_public if provided
+    if payload.visibility is not None:
+        visibility = payload.visibility.value
+        is_public = (visibility == "public")
+    else:
+        visibility = "public" if payload.is_public else "private"
+        is_public = payload.is_public
+
+    collection.is_public = is_public
+    collection.visibility = visibility
 
     await db.commit()
     await db.refresh(collection)
@@ -452,8 +475,11 @@ async def get_collection_places(
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    if collection.user_id != current_user.id and not collection.is_public:
-        raise HTTPException(status_code=403, detail="Collection is private")
+    if collection.user_id != current_user.id:
+        visibility = getattr(collection, 'visibility', 'public' if collection.is_public else 'private')
+        can_view = await can_view_collection(db, collection.user_id, current_user.id, visibility)
+        if not can_view:
+            raise HTTPException(status_code=403, detail="Collection is private")
 
     # Get total count
     total = (
@@ -594,8 +620,11 @@ async def get_collection_items_list(
     collection = col_res.scalar_one_or_none()
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
-    if collection.user_id != current_user.id and not collection.is_public:
-        raise HTTPException(status_code=403, detail="Collection is private")
+    if collection.user_id != current_user.id:
+        visibility = getattr(collection, 'visibility', 'public' if collection.is_public else 'private')
+        can_view = await can_view_collection(db, collection.user_id, current_user.id, visibility)
+        if not can_view:
+            raise HTTPException(status_code=403, detail="Collection is private")
 
     # Fetch places in this collection (no pagination)
     places_query = (

@@ -116,6 +116,16 @@ class CheckInCreate(BaseModel):
     )
 
 
+class CheckInUpdate(BaseModel):
+    note: Optional[str] = Field(None, max_length=500, examples=["Updated note"])
+    visibility: Optional[VisibilityEnum] = Field(
+        None,
+        examples=[VisibilityEnum.public,
+                  VisibilityEnum.friends, VisibilityEnum.private],
+        description="Update privacy setting for this check-in"
+    )
+
+
 class CheckInResponse(BaseModel):
     id: int
     user_id: int
@@ -642,6 +652,7 @@ class FollowUserResponse(BaseModel):
     followed_at: datetime
     # Whether the current user follows this user
     followed: bool = False
+    is_blocked: Optional[bool] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -674,6 +685,7 @@ class PublicUserSearchResponse(BaseModel):
     availability_status: AvailabilityStatus = AvailabilityStatus.not_available
     availability_mode: AvailabilityMode = AvailabilityMode.auto
     followed: bool = False
+    is_blocked: Optional[bool] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -775,6 +787,7 @@ class PublicUserResponse(BaseModel):
     following_count: Optional[int] = None
     check_ins_count: Optional[int] = None
     is_followed: Optional[bool] = None
+    is_blocked: Optional[bool] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -815,16 +828,35 @@ class PaginatedMedia(BaseModel):
 
 
 class PrivacySettingsUpdate(BaseModel):
+    # Legacy DM privacy (everyone|followers|no_one)
     dm_privacy: Optional[str] = Field(
         None, pattern="^(everyone|followers|no_one)$")
+    # Legacy default visibility settings
     checkins_default_visibility: Optional[VisibilityEnum] = None
     collections_default_visibility: Optional[VisibilityEnum] = None
 
+    # Comprehensive privacy controls (public|followers|private)
+    profile_visibility: Optional[VisibilityEnum] = None
+    follower_list_visibility: Optional[VisibilityEnum] = None
+    following_list_visibility: Optional[VisibilityEnum] = None
+    stats_visibility: Optional[VisibilityEnum] = None
+    media_default_visibility: Optional[VisibilityEnum] = None
+    search_visibility: Optional[VisibilityEnum] = None
+
 
 class PrivacySettingsResponse(BaseModel):
+    # Legacy settings (maintained for backward compatibility)
     dm_privacy: str
     checkins_default_visibility: VisibilityEnum
     collections_default_visibility: VisibilityEnum
+
+    # Comprehensive privacy controls
+    profile_visibility: VisibilityEnum
+    follower_list_visibility: VisibilityEnum
+    following_list_visibility: VisibilityEnum
+    stats_visibility: VisibilityEnum
+    media_default_visibility: VisibilityEnum
+    search_visibility: VisibilityEnum
 
 
 class NotificationPreferencesUpdate(BaseModel):
@@ -966,7 +998,9 @@ class EnhancedPlaceStats(BaseModel):
 class CollectionCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
+    # Backward compatibility: support both is_public and visibility
     is_public: bool = True
+    visibility: Optional[VisibilityEnum] = Field(None, description="Standardized privacy control (overrides is_public if provided)")
 
 
 class CollectionResponse(BaseModel):
@@ -974,7 +1008,9 @@ class CollectionResponse(BaseModel):
     user_id: int
     name: str
     description: Optional[str] = None
+    # Backward compatibility: return both is_public and visibility
     is_public: bool
+    visibility: VisibilityEnum
     created_at: datetime
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)

@@ -16,9 +16,17 @@ async def get_privacy_settings(
     current_user: User = Depends(JWTService.get_current_user),
 ):
     return PrivacySettingsResponse(
+        # Legacy settings (backward compatibility)
         dm_privacy=current_user.dm_privacy,
         checkins_default_visibility=current_user.checkins_default_visibility,
         collections_default_visibility=current_user.collections_default_visibility,
+        # Comprehensive privacy controls
+        profile_visibility=getattr(current_user, 'profile_visibility', 'public'),
+        follower_list_visibility=getattr(current_user, 'follower_list_visibility', 'public'),
+        following_list_visibility=getattr(current_user, 'following_list_visibility', 'public'),
+        stats_visibility=getattr(current_user, 'stats_visibility', 'public'),
+        media_default_visibility=getattr(current_user, 'media_default_visibility', 'public'),
+        search_visibility=getattr(current_user, 'search_visibility', 'public'),
     )
 
 
@@ -28,18 +36,42 @@ async def update_privacy_settings(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Legacy settings (backward compatibility)
     if payload.dm_privacy is not None:
         current_user.dm_privacy = payload.dm_privacy
     if payload.checkins_default_visibility is not None:
         current_user.checkins_default_visibility = payload.checkins_default_visibility
     if payload.collections_default_visibility is not None:
         current_user.collections_default_visibility = payload.collections_default_visibility
+
+    # Comprehensive privacy controls
+    if payload.profile_visibility is not None:
+        current_user.profile_visibility = payload.profile_visibility.value
+    if payload.follower_list_visibility is not None:
+        current_user.follower_list_visibility = payload.follower_list_visibility.value
+    if payload.following_list_visibility is not None:
+        current_user.following_list_visibility = payload.following_list_visibility.value
+    if payload.stats_visibility is not None:
+        current_user.stats_visibility = payload.stats_visibility.value
+    if payload.media_default_visibility is not None:
+        current_user.media_default_visibility = payload.media_default_visibility.value
+    if payload.search_visibility is not None:
+        current_user.search_visibility = payload.search_visibility.value
+
     await db.commit()
     await db.refresh(current_user)
     return PrivacySettingsResponse(
+        # Legacy settings
         dm_privacy=current_user.dm_privacy,
         checkins_default_visibility=current_user.checkins_default_visibility,
         collections_default_visibility=current_user.collections_default_visibility,
+        # Comprehensive privacy controls
+        profile_visibility=current_user.profile_visibility,
+        follower_list_visibility=current_user.follower_list_visibility,
+        following_list_visibility=current_user.following_list_visibility,
+        stats_visibility=current_user.stats_visibility,
+        media_default_visibility=current_user.media_default_visibility,
+        search_visibility=current_user.search_visibility,
     )
 
 

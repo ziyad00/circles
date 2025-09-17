@@ -6,7 +6,7 @@ from sqlalchemy import select, func, case, and_, or_
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService, _validate_image_or_raise
-from ..services.block_service import has_block_between
+from ..services.block_service import has_block_between, has_user_blocked
 from ..utils import (
     can_view_checkin,
     haversine_distance,
@@ -172,9 +172,16 @@ async def search_users(
     res = await db.execute(stmt)
     items = []
     for user, followed in res.all():
+        # Check directional blocking - if the target user has blocked current user, skip them
+        if await has_user_blocked(db, user.id, current_user.id):
+            continue  # Skip users who have blocked the current user
+
         # Check if user should appear in search results
         if not await should_appear_in_search(db, user, current_user.id):
             continue  # Skip users who don't want to appear in search
+
+        # Check if current user has blocked this user
+        is_blocked = await has_user_blocked(db, current_user.id, user.id)
 
         items.append(
             PublicUserSearchResponse(
@@ -188,6 +195,7 @@ async def search_users(
                 availability_mode=getattr(
                     user, "availability_mode", AvailabilityMode.auto.value),
                 followed=bool(followed),
+                is_blocked=is_blocked,
             )
         )
     return items
@@ -213,25 +221,28 @@ async def get_user_profile(
 
         logging.info(f"Found user: {user.id}, name: {user.name}")
 
-        # Check for blocks only if there's a current user and it's not the same user
+        # Check for directional blocks only if there's a current user and it's not the same user
         if current_user and current_user.id != user.id:
             logging.info(
-                f"Checking blocks between current_user {current_user.id} and target user {user.id}")
-            if await has_block_between(db, current_user.id, user.id):
+                f"Checking if target user {user.id} has blocked current_user {current_user.id}")
+            # If the target user has blocked the current user, return 404
+            if await has_user_blocked(db, user.id, current_user.id):
                 logging.warning(
-                    f"Block exists between users {current_user.id} and {user.id}")
+                    f"User {user.id} has blocked current_user {current_user.id}")
                 raise HTTPException(status_code=404, detail="User not found")
 
         # Check profile privacy
         if current_user:
             if not await can_view_profile(db, user, current_user.id):
-                logging.warning(f"User {current_user.id} cannot view profile of user {user.id} due to privacy settings")
+                logging.warning(
+                    f"User {current_user.id} cannot view profile of user {user.id} due to privacy settings")
                 raise HTTPException(status_code=404, detail="User not found")
         else:
             # Anonymous access - only public profiles
             profile_visibility = getattr(user, 'profile_visibility', 'public')
             if profile_visibility != 'public':
-                logging.warning(f"Anonymous user cannot view private profile of user {user.id}")
+                logging.warning(
+                    f"Anonymous user cannot view private profile of user {user.id}")
                 raise HTTPException(status_code=404, detail="User not found")
     except HTTPException:
         raise
@@ -264,8 +275,9 @@ async def get_user_profile(
         following_count = None
         check_ins_count = None
 
-    # Check if current user is following this user
+    # Check if current user is following this user and if current user has blocked this user
     is_followed = None
+    is_blocked = None
     if current_user:
         is_followed_result = await db.scalar(
             select(func.count()).where(
@@ -274,6 +286,10 @@ async def get_user_profile(
             )
         )
         is_followed = is_followed_result > 0
+
+        # Check if current user has blocked the target user
+        if current_user.id != user.id:
+            is_blocked = await has_user_blocked(db, current_user.id, user.id)
 
     return PublicUserResponse(
         id=user.id,
@@ -289,6 +305,7 @@ async def get_user_profile(
         following_count=following_count,
         check_ins_count=check_ins_count,
         is_followed=is_followed,
+        is_blocked=is_blocked,
     )
 
 
