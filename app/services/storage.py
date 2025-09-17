@@ -320,19 +320,28 @@ class StorageService:
 
 
 def _validate_image_or_raise(filename: str, content: bytes) -> None:
+    # Import custom exceptions
+    from ..exceptions import ImageTooLargeError, UnsupportedImageFormatError, CorruptedImageError
+
     # Size cap from settings (photo_max_mb)
     from ..config import settings
     max_bytes = int(settings.photo_max_mb) * 1024 * 1024
     if len(content) > max_bytes:
-        raise ValueError("File too large; max 10MB")
+        raise ImageTooLargeError(int(settings.photo_max_mb))
 
     # Always validate by content first (more reliable for iOS uploads)
     try:
         from PIL import Image
         import io
-        Image.open(io.BytesIO(content)).verify()
-    except Exception:
-        raise ValueError("Invalid image file")
+        img = Image.open(io.BytesIO(content))
+        img.verify()
+    except Exception as e:
+        # Check if it's a format issue vs corruption
+        error_msg = str(e).lower()
+        if any(term in error_msg for term in ['cannot identify', 'format', 'unknown', 'unsupported']):
+            raise UnsupportedImageFormatError()
+        else:
+            raise CorruptedImageError()
 
 
 def _guess_content_type(filename: str) -> str:

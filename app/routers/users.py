@@ -285,7 +285,7 @@ async def upload_avatar(
     except Exception as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid image file: {str(e)}"
+            detail=str(e)
         )
 
     # Generate filename

@@ -214,9 +214,45 @@ async def _nearby_places_python_fallback(
 
 @router.get("/lookups/countries", response_model=list[str])
 async def lookup_countries(db: AsyncSession = Depends(get_db)):
-    # Live query from places table, falling back to reverse geocoding for recent places missing country
+    # First, get existing countries from places table
     res = await db.execute(select(func.distinct(Place.country)).where(Place.country.is_not(None)).order_by(Place.country.asc()))
     countries = [r[0] for r in res.all() if r[0]]
+
+    # If we have very few countries, try to populate some missing data
+    if len(countries) < 5:
+        # Get up to 20 places missing country data but have coordinates
+        places_missing_country = await db.execute(
+            select(Place).where(
+                Place.country.is_(None),
+                Place.latitude.is_not(None),
+                Place.longitude.is_not(None)
+            ).limit(20)
+        )
+        places_to_update = places_missing_country.scalars().all()
+
+        # Populate country data for some places using reverse geocoding
+        for place in places_to_update:
+            try:
+                geo = await enhanced_place_data_service.reverse_geocode_details(
+                    lat=place.latitude,
+                    lon=place.longitude
+                )
+                if geo.get("country"):
+                    place.country = geo.get("country")
+                    # Also populate city and neighborhood if missing
+                    if geo.get("city") and not place.city:
+                        place.city = geo.get("city")
+                    if geo.get("neighborhood") and not place.neighborhood:
+                        place.neighborhood = geo.get("neighborhood")
+            except Exception:
+                # Skip if geocoding fails, continue with other places
+                continue
+
+        # Commit updates and re-query countries
+        await db.commit()
+        res = await db.execute(select(func.distinct(Place.country)).where(Place.country.is_not(None)).order_by(Place.country.asc()))
+        countries = [r[0] for r in res.all() if r[0]]
+
     return countries
 
 
