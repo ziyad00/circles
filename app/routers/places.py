@@ -652,8 +652,10 @@ async def advanced_search_places(
             # Use PostGIS for efficient distance search
             point = func.ST_SetSRID(func.ST_MakePoint(
                 filters.longitude, filters.latitude), 4326)
+            place_point = func.ST_SetSRID(func.ST_MakePoint(
+                Place.longitude, Place.latitude), 4326)
             distance_filter = func.ST_DWithin(
-                Place.__table__.c.location,
+                place_point.cast(text('geography')),
                 point.cast(text('geography')),
                 filters.radius_km * 1000  # Convert km to meters
             )
