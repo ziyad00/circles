@@ -503,6 +503,12 @@ class DMMessageCreate(BaseModel):
     caption: Optional[str] = Field(None, max_length=500)
 
 
+class PlaceChatPrivateReply(BaseModel):
+    target_user_id: int
+    text: str = Field(..., min_length=1, max_length=2000)
+    context_text: Optional[str] = Field(None, max_length=2000)
+
+
 class DMMessageResponse(BaseModel):
     id: int
     thread_id: int
