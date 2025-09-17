@@ -349,7 +349,7 @@ def _validate_image_or_raise(filename: str, content: bytes) -> None:
         print(f"Image validation error: {error_msg}")  # Debug logging
 
         # Special handling for iPhone HEIC images
-        if 'heic' in error_msg or 'cannot identify' in error_msg:
+        if 'heic' in error_msg or 'cannot identify' in error_msg or 'unknown' in error_msg:
             # Try to handle HEIC format specifically
             try:
                 # For HEIC images, we'll be more lenient and just check if it's a valid file
@@ -357,10 +357,23 @@ def _validate_image_or_raise(filename: str, content: bytes) -> None:
                 # HEIC files start with specific byte patterns
                 if len(content) >= 12:
                     # Check for HEIC file signature (ftyp box)
-                    if b'ftyp' in content[:12] and (b'heic' in content[:20] or b'heix' in content[:20]):
-                        # This looks like a HEIC file, allow it
+                    # HEIC files can have different brand identifiers
+                    heic_signatures = [b'heic', b'heix', b'hevc', b'heim', b'heis', b'hevm', b'hevs']
+                    if b'ftyp' in content[:12]:
+                        # Check if any HEIC signature is present in the first 20 bytes
+                        for sig in heic_signatures:
+                            if sig in content[:20]:
+                                print(f"Detected HEIC file with signature: {sig}")  # Debug logging
+                                return
+                    
+                    # Also check for other common iPhone image patterns
+                    # Sometimes iPhone images have different headers
+                    if content.startswith(b'\x00\x00\x00') or content.startswith(b'\xff\xd8\xff'):
+                        # This might be a JPEG with unusual header, allow it
+                        print("Detected potential iPhone image with unusual header")  # Debug logging
                         return
-            except:
+            except Exception as heic_error:
+                print(f"HEIC detection error: {heic_error}")  # Debug logging
                 pass
 
         if any(term in error_msg for term in ['cannot identify', 'format', 'unknown', 'unsupported']):
