@@ -735,19 +735,21 @@ async def advanced_search_places(
 
     # Apply distance filtering for non-PostGIS fallback
     if (filters.latitude is not None and filters.longitude is not None and
-            filters.radius_km is not None and not getattr(app_settings, 'use_postgis', False)):
-        from ..utils import haversine_distance
-        filtered_items = []
-        for place in items:
-            if place.latitude and place.longitude:
-                distance = haversine_distance(
-                    filters.latitude, filters.longitude,
-                    place.latitude, place.longitude
-                )
-                if distance <= filters.radius_km:
-                    filtered_items.append(place)
-        items = filtered_items
-        total = len(filtered_items)  # This is approximate for pagination
+            filters.radius_km is not None):
+        from ..config import settings as app_settings_fallback
+        if not getattr(app_settings_fallback, 'use_postgis', False):
+            from ..utils import haversine_distance
+            filtered_items = []
+            for place in items:
+                if place.latitude and place.longitude:
+                    distance = haversine_distance(
+                        filters.latitude, filters.longitude,
+                        place.latitude, place.longitude
+                    )
+                    if distance <= filters.radius_km:
+                        filtered_items.append(place)
+            items = filtered_items
+            total = len(filtered_items)  # This is approximate for pagination
 
     return PaginatedPlaces(items=items, total=total, limit=filters.limit, offset=filters.offset)
 
