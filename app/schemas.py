@@ -494,13 +494,33 @@ class DMRequestDecision(BaseModel):
 
 
 class DMMessageCreate(BaseModel):
-    text: str = Field(..., min_length=1, max_length=2000)
+    text: str = Field("", max_length=2000)  # Allow empty text for media-only messages
+    message_type: str = Field("text", regex="^(text|photo|video|voice|file|location)$")
     reply_to_id: Optional[int] = None
+
     # Media attachments
     photo_urls: list[str] = Field(default_factory=list, max_length=10)
     video_urls: list[str] = Field(default_factory=list, max_length=5)
+    voice_urls: list[str] = Field(default_factory=list, max_length=1)  # One voice message at a time
+    voice_duration: Optional[int] = Field(None, ge=1, le=300)  # Max 5 minutes
+    file_urls: list[str] = Field(default_factory=list, max_length=5)
+    file_names: list[str] = Field(default_factory=list, max_length=5)
+    file_sizes: list[int] = Field(default_factory=list, max_length=5)
+
     # Optional caption for media
     caption: Optional[str] = Field(None, max_length=500)
+
+    # Location sharing
+    location_latitude: Optional[float] = Field(None, ge=-90, le=90)
+    location_longitude: Optional[float] = Field(None, ge=-180, le=180)
+    location_name: Optional[str] = Field(None, max_length=200)
+    location_address: Optional[str] = Field(None, max_length=500)
+
+    # Disappearing messages
+    auto_delete_duration: Optional[int] = Field(None, ge=5, le=604800)  # 5 seconds to 1 week
+
+    # Forwarding
+    forwarded_from_message_id: Optional[int] = None
 
 
 class PlaceChatPrivateReply(BaseModel):
@@ -514,19 +534,56 @@ class DMMessageResponse(BaseModel):
     thread_id: int
     sender_id: int
     text: str
+    message_type: str = "text"
     created_at: datetime
+
+    # WhatsApp-like delivery status
+    delivery_status: str = "sent"  # sent/delivered/failed/seen
+    delivered_at: Optional[datetime] = None
+    failed_at: Optional[datetime] = None
+    failure_reason: Optional[str] = None
+
     # computed for the requester: True if the other participant has read this message
     seen: Optional[bool] = None
     heart_count: int = 0
     liked_by_me: bool = False
+
     # Reply functionality
     reply_to_id: Optional[int] = None
     reply_to_text: Optional[str] = None
     reply_to_sender_name: Optional[str] = None
+
     # Media attachments
     photo_urls: list[str] = Field(default_factory=list)
     video_urls: list[str] = Field(default_factory=list)
-    caption: Optional[str] = None  # Optional caption for media messages
+    voice_urls: list[str] = Field(default_factory=list)
+    voice_duration: Optional[int] = None
+    file_urls: list[str] = Field(default_factory=list)
+    file_names: list[str] = Field(default_factory=list)
+    file_sizes: list[int] = Field(default_factory=list)
+    caption: Optional[str] = None
+
+    # Location sharing
+    location_latitude: Optional[float] = None
+    location_longitude: Optional[float] = None
+    location_name: Optional[str] = None
+    location_address: Optional[str] = None
+
+    # Disappearing messages
+    expires_at: Optional[datetime] = None
+    auto_delete_duration: Optional[int] = None
+
+    # Forwarding
+    forwarded_from_message_id: Optional[int] = None
+    forwarded_from_user_id: Optional[int] = None
+    forwarded_from_user_name: Optional[str] = None
+    is_forwarded: bool = False
+
+    # Deleted message info
+    deleted_at: Optional[datetime] = None
+    deleted_by_user_id: Optional[int] = None
+    is_deleted_placeholder: bool = False  # True when showing "This message was deleted"
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -637,6 +694,62 @@ class ReactionResponse(BaseModel):
     emoji: str
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+# New schemas for WhatsApp-like features
+
+class MessageForwardRequest(BaseModel):
+    message_id: int
+    target_thread_ids: list[int] = Field(..., min_length=1, max_length=5)  # Limit to 5 threads
+
+
+class MessageSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=100)
+    limit: int = Field(20, ge=1, le=100)
+    offset: int = Field(0, ge=0)
+
+
+class MessageSearchResult(BaseModel):
+    message_id: int
+    thread_id: int
+    sender_id: int
+    sender_name: str
+    text: str
+    created_at: datetime
+    match_preview: str  # Highlighted text showing the match
+
+
+class MessageSearchResponse(BaseModel):
+    results: list[MessageSearchResult]
+    total: int
+    limit: int
+    offset: int
+
+
+class DeliveryStatusUpdate(BaseModel):
+    message_id: int
+    status: str = Field(..., regex="^(delivered|failed)$")
+    failure_reason: Optional[str] = None
+
+
+class VoiceMessageUploadResponse(BaseModel):
+    url: str
+    duration: int  # in seconds
+    file_size: int  # in bytes
+
+
+class FileUploadResponse(BaseModel):
+    url: str
+    filename: str
+    file_size: int  # in bytes
+    content_type: str
+
+
+class LocationShareRequest(BaseModel):
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
+    name: Optional[str] = Field(None, max_length=200)
+    address: Optional[str] = Field(None, max_length=500)
 
 
 # Users / Profiles

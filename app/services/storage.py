@@ -276,6 +276,52 @@ class StorageService:
         return await StorageService._save_avatar_local(user_id, filename, content)
 
     @staticmethod
+    async def upload_file_from_bytes(content: bytes, s3_key: str, content_type: str = "application/octet-stream") -> str:
+        """
+        Upload raw bytes to S3 and return the S3 key.
+
+        Args:
+            content: Raw file content as bytes
+            s3_key: The S3 key (path) where to store the file
+            content_type: MIME type of the content
+
+        Returns:
+            The S3 key of the uploaded file
+        """
+        import boto3
+        from botocore.config import Config as BotoConfig
+        import asyncio
+
+        cfg = StorageService._resolved_s3_config()
+
+        if not cfg["bucket"]:
+            raise ValueError("S3 bucket is not configured")
+
+        def _upload_to_s3():
+            session = boto3.session.Session(
+                aws_access_key_id=cfg["access_key_id"],
+                aws_secret_access_key=cfg["secret_access_key"],
+                region_name=cfg["region"],
+            )
+            s3 = session.client(
+                "s3",
+                endpoint_url=cfg["endpoint"],
+                config=BotoConfig(
+                    s3={"addressing_style": "path" if cfg["use_path_style"] else "auto"}),
+            )
+            bucket_name = cfg["bucket"] or "circles-media-259c"
+            s3.put_object(
+                Bucket=bucket_name,
+                Key=s3_key,
+                Body=content,
+                ContentType=content_type
+            )
+            return s3_key
+
+        # Run S3 upload in thread pool to avoid blocking event loop
+        return await asyncio.to_thread(_upload_to_s3)
+
+    @staticmethod
     def generate_signed_url(s3_key: str, expiration: int = 3600) -> str:
         """
         Generate a signed URL for accessing an S3 object.

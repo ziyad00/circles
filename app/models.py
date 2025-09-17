@@ -297,6 +297,15 @@ class DMMessage(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
+    # WhatsApp-like delivery status
+    delivery_status = Column(String, nullable=False, server_default='sent')  # sent/delivered/failed
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    failed_at = Column(DateTime(timezone=True), nullable=True)
+    failure_reason = Column(String, nullable=True)
+
+    # Message type for better handling
+    message_type = Column(String, nullable=False, server_default='text')  # text/photo/video/voice/file/location
+
     # Reply functionality
     reply_to_id = Column(Integer, ForeignKey(
         "dm_messages.id"), nullable=True, index=True)
@@ -305,12 +314,42 @@ class DMMessage(Base):
     # Media attachments
     photo_urls = Column(JSON, default=list)
     video_urls = Column(JSON, default=list)
+    # Voice messages
+    voice_urls = Column(JSON, default=list)
+    voice_duration = Column(Integer, nullable=True)  # in seconds
+    # File sharing
+    file_urls = Column(JSON, default=list)
+    file_names = Column(JSON, default=list)
+    file_sizes = Column(JSON, default=list)  # in bytes
     # Optional caption for media messages
     caption = Column(Text, nullable=True)
 
-    sender = relationship("User", back_populates="dm_messages")
+    # Location sharing
+    location_latitude = Column(Float, nullable=True)
+    location_longitude = Column(Float, nullable=True)
+    location_name = Column(String, nullable=True)
+    location_address = Column(String, nullable=True)
+
+    # Disappearing messages
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    auto_delete_duration = Column(Integer, nullable=True)  # in seconds
+
+    # Forwarding
+    forwarded_from_message_id = Column(Integer, ForeignKey("dm_messages.id"), nullable=True)
+    forwarded_from_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    is_forwarded = Column(Boolean, nullable=False, server_default='false')
+
+    # Deleted message info (for "This message was deleted" placeholder)
+    deleted_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    # Relationships
+    sender = relationship("User", back_populates="dm_messages", foreign_keys=[sender_id])
     # Self-referencing relationship for replies
-    reply_to = relationship("DMMessage", remote_side=[id], backref="replies")
+    reply_to = relationship("DMMessage", remote_side=[id], backref="replies", foreign_keys=[reply_to_id])
+    # Forwarding relationships
+    forwarded_from_message = relationship("DMMessage", remote_side=[id], foreign_keys=[forwarded_from_message_id])
+    forwarded_from_user = relationship("User", foreign_keys=[forwarded_from_user_id])
+    deleted_by_user = relationship("User", foreign_keys=[deleted_by_user_id])
 
 
 class DMMessageLike(Base):
