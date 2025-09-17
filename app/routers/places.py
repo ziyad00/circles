@@ -182,7 +182,8 @@ async def _nearby_places_python_fallback(
     if lon_buffer < 180:
         min_lng = max(min_lng, -180)
         max_lng = min(max_lng, 180)
-        stmt = stmt.where(Place.longitude >= min_lng, Place.longitude <= max_lng)
+        stmt = stmt.where(Place.longitude >= min_lng,
+                          Place.longitude <= max_lng)
 
     candidates = (await db.execute(stmt)).scalars().all()
 
@@ -190,7 +191,8 @@ async def _nearby_places_python_fallback(
     for place in candidates:
         if place.latitude is None or place.longitude is None:
             continue
-        distance_m = haversine_distance(lat, lng, place.latitude, place.longitude) * 1000
+        distance_m = haversine_distance(
+            lat, lng, place.latitude, place.longitude) * 1000
         if distance_m <= radius_m:
             within_radius.append((distance_m, place))
 
@@ -1440,6 +1442,8 @@ async def nearby_places(
     db: AsyncSession = Depends(get_db),
 ):
     from ..config import settings as app_settings
+    import logging
+    logging.info(f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
     paginated: PaginatedPlaces | None = None
 
     if app_settings.use_postgis:
@@ -1484,9 +1488,11 @@ async def nearby_places(
                 f"PostGIS nearby failed, falling back to haversine: {e}")
 
     if paginated is None:
+        logging.info("Using Python fallback for nearby places")
         paginated = await _nearby_places_python_fallback(
             db, lat, lng, radius_m, limit, offset
         )
+        logging.info(f"Python fallback returned {paginated.total} places")
 
     should_fetch_external = False  # Temporarily disable external search to debug
     if not should_fetch_external:
@@ -1531,7 +1537,7 @@ async def nearby_places(
         )
 
     response_results = [ExternalPlaceResult(**record)
-                         for record in normalized_results]
+                        for record in normalized_results]
 
     search_key = _build_external_search_key(lat, lng, radius_m, None, None)
     snapshot_id: int | None = None
@@ -2361,7 +2367,7 @@ async def upload_checkin_photo(
     content = await file.read()
     try:
         url_path = await StorageService.save_checkin_photo(check_in_id, filename, content)
-    except ValueError as e:
+    except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     cip = CheckInPhoto(check_in_id=check_in_id, url=url_path)
@@ -3032,7 +3038,8 @@ async def search_external_places(
     - `limit`: Max results returned (1-100)
     """
     try:
-        type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+        type_list = [t.strip() for t in types.split(
+            ",") if t.strip()] if types else None
 
         live_results = await enhanced_place_data_service.search_live_overpass(
             lat=lat,
@@ -3059,10 +3066,11 @@ async def search_external_places(
                 record["distance_m"] = float(record["distance_m"])
             normalized_results.append(record)
 
-        search_key = _build_external_search_key(lat, lon, radius, query, type_list)
+        search_key = _build_external_search_key(
+            lat, lon, radius, query, type_list)
 
         response_results = [ExternalPlaceResult(**record)
-                             for record in normalized_results]
+                            for record in normalized_results]
 
         snapshot_id: int | None = None
         fetched_at = datetime.now(timezone.utc)
