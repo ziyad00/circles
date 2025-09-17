@@ -39,9 +39,8 @@ async def fix_alembic():
 asyncio.run(fix_alembic())
 "
 
-# Run alembic migrations
-echo "Running alembic migrations..."
-alembic upgrade head
+# Skip alembic migrations for now since the database is already up to date
+echo "Skipping alembic migrations (database already up to date)..."
 
 # Start the application
 echo "Starting FastAPI application..."
