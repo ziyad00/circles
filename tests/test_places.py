@@ -5,6 +5,7 @@ import httpx
 from app.main import app
 from app.database import get_db
 from app.services.jwt_service import JWTService
+from app.services.place_data_service_v2 import enhanced_place_data_service
 
 
 @pytest.fixture(scope="session")
@@ -297,7 +298,27 @@ async def test_whos_here_count_and_delete_checkin(client: httpx.AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_nearby_places(client: httpx.AsyncClient):
+async def test_nearby_places(client: httpx.AsyncClient, monkeypatch):
+    async def fake_search_live_overpass(*_, **__):
+        return [
+            {
+                "name": "OSM Pop Up",
+                "latitude": 37.7810,
+                "longitude": -122.4095,
+                "categories": "amenity:cafe",
+                "address": "456 Mission St",
+                "city": "San Francisco",
+                "external_id": "osm_node_test",
+                "data_source": "osm_overpass",
+                "distance_m": 75.0,
+            }
+        ]
+
+    monkeypatch.setattr(
+        enhanced_place_data_service,
+        "search_live_overpass",
+        fake_search_live_overpass,
+    )
     # near center (should come first)
     r = await client.post(
         "/places/",
@@ -339,6 +360,10 @@ async def test_nearby_places(client: httpx.AsyncClient):
     assert isinstance(body["items"], list) and len(body["items"]) >= 1
     # near spot should be first result
     assert body["items"][0]["id"] == near_id
+    assert body["external_count"] >= 1
+    assert len(body["external_results"]) == body["external_count"]
+    assert body["external_results"][0]["name"] == "OSM Pop Up"
+    assert body["external_snapshot_id"] is not None
 
 
 @pytest.mark.asyncio

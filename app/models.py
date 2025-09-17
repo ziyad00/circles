@@ -130,6 +130,24 @@ class CheckIn(Base):
         "CheckInLike", back_populates="check_in", cascade="all, delete-orphan")
 
 
+class ExternalSearchSnapshot(Base):
+    """Persist live external search responses for historical analysis."""
+
+    __tablename__ = "external_search_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    search_key = Column(String(255), index=True, nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    radius_m = Column(Integer, nullable=False)
+    query = Column(String, nullable=True)
+    types = Column(String, nullable=True)
+    source = Column(String(64), nullable=False, default="osm_overpass")
+    result_count = Column(Integer, nullable=False, default=0)
+    results = Column(JSON, nullable=False)
+    fetched_at = Column(DateTime(timezone=True),
+                        server_default=func.now(), nullable=False)
+
 class SavedPlace(Base):
     __tablename__ = "saved_places"
 

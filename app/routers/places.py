@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 from ..models import Follow
 from ..routers.activity import create_checkin_activity
 from ..utils import can_view_checkin, haversine_distance
@@ -32,8 +35,10 @@ from ..schemas import (
     EnhancedPlaceStats,
     PlaceHourlyStats,
     PlaceCrowdLevel,
+    ExternalSearchResponse,
+    ExternalPlaceResult,
 )
-from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto
+from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto, ExternalSearchSnapshot
 from ..dependencies import get_current_admin_user
 from ..database import get_db
 from datetime import datetime, timedelta, timezone
@@ -113,6 +118,25 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
         return photo_url
 
 
+def _build_external_search_key(
+    lat: float,
+    lon: float,
+    radius: int,
+    query: str | None,
+    types: list[str] | None,
+) -> str:
+    """Deterministic key for grouping external search snapshots."""
+
+    payload = {
+        "lat": round(lat, 4),
+        "lon": round(lon, 4),
+        "radius": radius,
+        "query": (query or "").strip().lower(),
+        "types": tuple(sorted(t.strip().lower() for t in types or [])),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 router = APIRouter(
     prefix="/places",
     tags=["places"],
@@ -176,7 +200,14 @@ async def _nearby_places_python_fallback(
     sliced = within_radius[offset: offset + limit]
     items = [place for _, place in sliced]
 
-    return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+    return PaginatedPlaces(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        external_results=[],
+        external_count=0,
+    )
 
 
 @router.get("/lookups/countries", response_model=list[str])
@@ -1409,6 +1440,8 @@ async def nearby_places(
     db: AsyncSession = Depends(get_db),
 ):
     from ..config import settings as app_settings
+    paginated: PaginatedPlaces | None = None
+
     if app_settings.use_postgis:
         try:
             # Use spherical distance in meters without geography casts to avoid SQLAlchemy cache issues
@@ -1438,11 +1471,104 @@ async def nearby_places(
                 .limit(limit)
             )
             items = (await db.execute(stmt)).scalars().all()
-            return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+            paginated = PaginatedPlaces(
+                items=items,
+                total=total,
+                limit=limit,
+                offset=offset,
+                external_results=[],
+                external_count=0,
+            )
         except Exception as e:
             logging.warning(
                 f"PostGIS nearby failed, falling back to haversine: {e}")
-    return await _nearby_places_python_fallback(db, lat, lng, radius_m, limit, offset)
+
+    if paginated is None:
+        paginated = await _nearby_places_python_fallback(
+            db, lat, lng, radius_m, limit, offset
+        )
+
+    should_fetch_external = offset == 0 and len(paginated.items) < limit
+    if not should_fetch_external:
+        return paginated
+
+    max_external = max(0, limit - len(paginated.items))
+    live_results = await enhanced_place_data_service.search_live_overpass(
+        lat=lat,
+        lon=lng,
+        radius=radius_m,
+        query=None,
+        types=None,
+        limit=max_external,
+    )
+
+    normalized_results: list[dict] = []
+    for item in live_results[:max_external]:
+        record = dict(item)
+        record.setdefault("data_source", "osm_overpass")
+        lat_val = record.get("latitude")
+        lon_val = record.get("longitude")
+        if lat_val is None or lon_val is None:
+            continue
+        if "distance_m" not in record:
+            record["distance_m"] = round(
+                haversine_distance(lat, lng, lat_val, lon_val) * 1000, 2
+            )
+        else:
+            record["distance_m"] = float(record["distance_m"])
+        normalized_results.append(record)
+
+    if not normalized_results:
+        return paginated.model_copy(
+            update={
+                "external_results": [],
+                "external_count": 0,
+                "external_snapshot_id": None,
+                "external_source": None,
+                "external_search_key": None,
+                "external_fetched_at": None,
+            }
+        )
+
+    response_results = [ExternalPlaceResult(**record)
+                         for record in normalized_results]
+
+    search_key = _build_external_search_key(lat, lng, radius_m, None, None)
+    snapshot_id: int | None = None
+    fetched_at = datetime.now(timezone.utc)
+
+    snapshot = ExternalSearchSnapshot(
+        search_key=search_key,
+        latitude=lat,
+        longitude=lng,
+        radius_m=radius_m,
+        query=None,
+        types=None,
+        source="osm_overpass",
+        result_count=len(normalized_results),
+        results=normalized_results,
+    )
+
+    try:
+        db.add(snapshot)
+        await db.commit()
+        await db.refresh(snapshot)
+        snapshot_id = snapshot.id
+        fetched_at = snapshot.fetched_at
+    except Exception as exc:  # pragma: no cover - defensive logging only
+        await db.rollback()
+        logger.warning("Failed to persist nearby external snapshot: %s", exc)
+
+    return paginated.model_copy(
+        update={
+            "external_results": response_results,
+            "external_count": len(response_results),
+            "external_snapshot_id": snapshot_id,
+            "external_source": "osm_overpass",
+            "external_search_key": search_key,
+            "external_fetched_at": fetched_at,
+        }
+    )
 
 
 @router.get("/{place_id}", response_model=EnhancedPlaceResponse)
@@ -2875,7 +3001,7 @@ async def test_external_endpoint():
     return {"message": "External endpoints are working!"}
 
 
-@router.get("/external/search", response_model=list[dict])
+@router.get("/external/search", response_model=ExternalSearchResponse)
 async def search_external_places(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
@@ -2888,81 +3014,99 @@ async def search_external_places(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Search for places using external data sources (Google Places, OpenStreetMap).
+    Search live OpenStreetMap (Overpass) data and keep a history snapshot.
 
     **Authentication Required:** No (public endpoint)
 
     **Features:**
-    - Searches multiple external data sources
-    - Google Places API (if configured)
-    - OpenStreetMap fallback (free)
-    - Automatic deduplication
-    - Database synchronization
+    - Live queries against free OSM/Overpass data
+    - Optional text and type filtering
+    - Results ranked by proximity
+    - Every response persisted for historical analysis (no place seeding)
 
     **Parameters:**
     - `lat`/`lon`: Search center coordinates
     - `radius`: Search radius in meters (100-50000)
-    - `query`: Optional search term
-    - `types`: Optional place type filters
-
-    **Data Sources:**
-    - Google Places API (rich data, requires API key)
-    - OpenStreetMap (free, basic data)
-    - Automatic fallback if primary source fails
-
-    **Response:**
-    - List of places with external data
-    - Places automatically synced to database
-    - Includes ratings, categories, contact info
-
-    **Use Cases:**
-    - Discover new places near user location
-    - Enrich place database with external data
-    - Provide comprehensive place search
+    - `query`: Optional case-insensitive name fragment
+    - `types`: Optional comma-separated list of desired categories
+    - `limit`: Max results returned (1-100)
     """
     try:
-        # Parse types parameter
-        type_list = None
-        if types:
-            type_list = [t.strip() for t in types.split(",")]
+        type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
 
-        # Search external sources
-        places = await enhanced_place_data_service._search_places_in_db(
+        live_results = await enhanced_place_data_service.search_live_overpass(
             lat=lat,
             lon=lon,
             radius=radius,
             query=query,
+            types=type_list,
             limit=limit,
-            db=db
         )
 
-        # Sync places to database
-        synced_places = []
-        for place_data in places:
-            synced_place = await enhanced_place_data_service._create_place_from_osm(db, place_data) or (
-                await db.execute(select(Place).where(Place.external_id == place_data.get('external_id')))
-            )
-            synced_places.append({
-                "id": synced_place.id,
-                "name": synced_place.name,
-                "address": synced_place.address,
-                "latitude": synced_place.latitude,
-                "longitude": synced_place.longitude,
-                "rating": synced_place.rating,
-                "categories": synced_place.categories,
-                "external_id": synced_place.external_id,
-                "data_source": synced_place.data_source,
-                "website": synced_place.website,
-                "phone": synced_place.phone
-            })
+        normalized_results: list[dict] = []
+        for item in live_results[:limit]:
+            record = dict(item)
+            record.setdefault("data_source", "osm_overpass")
+            lat_val = record.get("latitude")
+            lon_val = record.get("longitude")
+            if lat_val is None or lon_val is None:
+                continue
+            if "distance_m" not in record:
+                record["distance_m"] = round(
+                    haversine_distance(lat, lon, lat_val, lon_val) * 1000, 2
+                )
+            else:
+                record["distance_m"] = float(record["distance_m"])
+            normalized_results.append(record)
 
-        return synced_places
+        search_key = _build_external_search_key(lat, lon, radius, query, type_list)
 
-    except Exception as e:
+        response_results = [ExternalPlaceResult(**record)
+                             for record in normalized_results]
+
+        snapshot_id: int | None = None
+        fetched_at = datetime.now(timezone.utc)
+
+        snapshot = ExternalSearchSnapshot(
+            search_key=search_key,
+            latitude=lat,
+            longitude=lon,
+            radius_m=radius,
+            query=query,
+            types=",".join(type_list) if type_list else None,
+            source="osm_overpass",
+            result_count=len(normalized_results),
+            results=normalized_results,
+        )
+
+        try:
+            db.add(snapshot)
+            await db.commit()
+            await db.refresh(snapshot)
+            snapshot_id = snapshot.id
+            fetched_at = snapshot.fetched_at
+        except Exception as exc:  # pragma: no cover - logging only
+            await db.rollback()
+            logger.warning(
+                "Failed to persist external search snapshot: %s", exc)
+
+        return ExternalSearchResponse(
+            source="osm_overpass",
+            count=len(response_results),
+            fetched_at=fetched_at,
+            snapshot_id=snapshot_id,
+            search_key=search_key,
+            results=response_results,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:  # pragma: no cover - defensive path
+        logger.error("Failed to search external places: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to search external places: {str(e)}"
-        )
+            detail="Failed to search external places",
+        ) from e
 
 
 @router.get("/{place_id}/enrich", response_model=dict)
