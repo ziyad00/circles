@@ -1130,9 +1130,13 @@ async def get_trending_places(
             status_code=400, detail="lat and lng are required for local trending")
 
     # Derive geo details via reverse geocoding (Nominatim)
+    import logging
+    logging.info(f"Reverse geocoding coordinates: lat={lat}, lng={lng}")
     geo = await enhanced_place_data_service.reverse_geocode_details(lat=lat, lon=lng)
+    logging.info(f"Reverse geocoding result: {geo}")
     inferred_city = city or geo.get("city")
     inferred_neighborhood = geo.get("neighborhood")
+    logging.info(f"Inferred city: {inferred_city}, neighborhood: {inferred_neighborhood}")
 
     # FSQ override: use Foursquare-based trending by inferred city if enabled
     from ..config import settings as app_settings
@@ -1199,8 +1203,42 @@ async def get_trending_places(
     window_start = now - time_windows[time_window]
 
     if not inferred_city:
-        raise HTTPException(
-            status_code=404, detail="Could not infer city from provided coordinates")
+        logging.warning(f"Could not infer city from coordinates: lat={lat}, lng={lng}, geo={geo}")
+        # Try to use Foursquare directly with coordinates if city inference fails
+        if app_settings.fsq_trending_override:
+            logging.info("Using Foursquare trending with coordinates as fallback")
+            fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
+            now_ts = datetime.now(timezone.utc)
+            items = []
+            for idx, p in enumerate(fsq):
+                photo_url = None
+                md = p.get("metadata") or {}
+                photos = md.get("photos") or []
+                if photos and isinstance(photos, list):
+                    first = photos[0]
+                    photo_url = first if isinstance(first, str) else first.get("url")
+                items.append(
+                    PlaceResponse(
+                        id=-(idx + 1),
+                        name=p.get("name"),
+                        address=None,
+                        city=None,
+                        neighborhood=None,
+                        latitude=p.get("latitude"),
+                        longitude=p.get("longitude"),
+                        categories=p.get("categories"),
+                        rating=p.get("rating"),
+                        price_tier=p.get("price_tier"),
+                        created_at=now_ts,
+                        recent_checkins_count=0,
+                        external_results=[],
+                        external_count=0,
+                    )
+                )
+            return PaginatedPlaces(items=items, total=len(items), limit=limit, offset=0)
+        else:
+            raise HTTPException(
+                status_code=404, detail="Could not infer city from provided coordinates")
 
     # Build trending score query filtered by inferred city
     # Score = (check-ins * 3) + (reviews * 2) + (photos * 1) + (unique users * 2)
