@@ -118,6 +118,38 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
         return photo_url
 
 
+async def _attach_recent_checkins(
+    db: AsyncSession,
+    places: list[Place],
+    window_hours: int,
+) -> None:
+    """Populate recent check-in counts on each place."""
+    if not places:
+        return
+
+    place_ids = [p.id for p in places if getattr(p, "id", None)]
+    if not place_ids:
+        return
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+
+    result = await db.execute(
+        select(CheckIn.place_id, func.count())
+        .where(
+            CheckIn.place_id.in_(place_ids),
+            CheckIn.created_at >= cutoff,
+        )
+        .group_by(CheckIn.place_id)
+    )
+
+    counts = dict(result.all())
+    for place in places:
+        place_id = getattr(place, "id", None)
+        if not place_id:
+            continue
+        setattr(place, "recent_checkins_count", counts.get(place_id, 0))
+
+
 def _build_external_search_key(
     lat: float,
     lon: float,
@@ -186,7 +218,8 @@ async def _nearby_places_python_fallback(
                           Place.longitude <= max_lng)
 
     candidates = (await db.execute(stmt)).scalars().all()
-    logging.info(f"Found {len(candidates)} candidates in bounding box for lat={lat}, lng={lng}, radius={radius_m}m")
+    logging.info(
+        f"Found {len(candidates)} candidates in bounding box for lat={lat}, lng={lng}, radius={radius_m}m")
 
     within_radius: list[tuple[float, Place]] = []
     for place in candidates:
@@ -196,8 +229,9 @@ async def _nearby_places_python_fallback(
             lat, lng, place.latitude, place.longitude) * 1000
         if distance_m <= radius_m:
             within_radius.append((distance_m, place))
-    
-    logging.info(f"Found {len(within_radius)} places within {radius_m}m radius")
+
+    logging.info(
+        f"Found {len(within_radius)} places within {radius_m}m radius")
 
     within_radius.sort(key=lambda item: item[0])
 
@@ -646,14 +680,16 @@ async def advanced_search_places(
 
                 stmt = stmt.where(distance_filter)
                 count_stmt = count_stmt.where(distance_filter)
-                logger.info("Using PostGIS distance filtering for advanced search")
+                logger.info(
+                    "Using PostGIS distance filtering for advanced search")
             except Exception as e:
                 logger.warning(
                     f"PostGIS query failed, falling back to Haversine: {e}")
                 use_postgis = False  # Force fallback below
 
         if not use_postgis:
-            logger.info("Using fallback distance filtering (PostGIS not available)")
+            logger.info(
+                "Using fallback distance filtering (PostGIS not available)")
 
     # Sorting
     if filters.sort_by:
@@ -719,8 +755,10 @@ async def advanced_search_places(
             categories=p.categories,
             rating=p.rating,
             description=getattr(p, 'description', None),
+            price_tier=p.price_tier,
             created_at=p.created_at,
             photo_url=photo_url,
+            recent_checkins_count=getattr(p, 'recent_checkins_count', 0),
         ))
 
     # Apply distance filtering for non-PostGIS fallback
@@ -1122,8 +1160,10 @@ async def get_trending_places(
                     longitude=p.get("longitude"),
                     categories=p.get("categories"),
                     rating=p.get("rating"),
+                    price_tier=p.get("price_tier"),
                     created_at=now_ts,
                     photo_url=photo_url,
+                    recent_checkins_count=0,
                 )
             )
         # client-side like filters server-applied on FSQ set
@@ -1282,6 +1322,9 @@ async def get_trending_places(
     total = (await db.execute(count_stmt)).scalar_one()
     items = (await db.execute(stmt)).scalars().all()
 
+    await _attach_recent_checkins(
+        db, items, app_settings.place_chat_window_hours)
+
     # Optional: re-rank by proximity (we have lat/lng)
     from ..utils import haversine_distance
 
@@ -1306,7 +1349,9 @@ async def get_trending_places(
                 longitude=p.get("longitude"),
                 categories=p.get("categories"),
                 rating=p.get("rating"),
+                price_tier=p.get("price_tier"),
                 created_at=now_ts,
+                recent_checkins_count=0,
             )
             for idx, p in enumerate(fsq)
         ]
@@ -1350,7 +1395,9 @@ async def get_global_trending_places(
                 longitude=p.get("longitude"),
                 categories=p.get("categories"),
                 rating=p.get("rating"),
+                price_tier=p.get("price_tier"),
                 created_at=now_ts,
+                recent_checkins_count=0,
             )
             for idx, p in enumerate(fsq)
         ]
@@ -1446,6 +1493,9 @@ async def get_global_trending_places(
     total = (await db.execute(count_stmt)).scalar_one()
     items = (await db.execute(stmt)).scalars().all()
 
+    await _attach_recent_checkins(
+        db, items, app_settings.place_chat_window_hours)
+
     # Optional: re-rank by proximity if coordinates provided
     if lat is not None and lng is not None:
         from ..utils import haversine_distance
@@ -1526,6 +1576,9 @@ async def nearby_places(
         )
         logging.info(f"Python fallback returned {paginated.total} places")
 
+    await _attach_recent_checkins(
+        db, paginated.items, app_settings.place_chat_window_hours)
+
     # Check if we should fetch external results (Foursquare + OSM)
     should_fetch_external = len(paginated.items) < limit
     if not should_fetch_external:
@@ -1543,7 +1596,8 @@ async def nearby_places(
                 lon=lng,
                 limit=max_external
             )
-            logging.info(f"Foursquare returned {len(fsq_results)} nearby places")
+            logging.info(
+                f"Foursquare returned {len(fsq_results)} nearby places")
         except Exception as e:
             logging.warning(f"Foursquare nearby search failed: {e}")
 
@@ -1569,7 +1623,8 @@ async def nearby_places(
         record = dict(item)
         # Set data source if not already set
         if "data_source" not in record:
-            record["data_source"] = "osm_overpass"  # OSM results won't have this set
+            # OSM results won't have this set
+            record["data_source"] = "osm_overpass"
 
         lat_val = record.get("latitude")
         lon_val = record.get("longitude")
