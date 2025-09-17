@@ -25,3 +25,32 @@ async def has_block_between(db: AsyncSession, user_a_id: int, user_b_id: int) ->
 
     result = await db.execute(stmt)
     return result.scalar_one_or_none() is not None
+
+
+async def has_user_blocked(
+    db: AsyncSession,
+    blocker_id: int,
+    target_id: int,
+) -> bool:
+    """Return True if `blocker_id` has blocked `target_id`."""
+    if blocker_id == target_id:
+        return False
+
+    pair_condition = or_(
+        and_(DMThread.user_a_id == blocker_id, DMThread.user_b_id == target_id),
+        and_(DMThread.user_a_id == target_id, DMThread.user_b_id == blocker_id),
+    )
+
+    stmt = (
+        select(DMParticipantState.id)
+        .join(DMThread, DMThread.id == DMParticipantState.thread_id)
+        .where(
+            pair_condition,
+            DMParticipantState.user_id == blocker_id,
+            DMParticipantState.blocked.is_(True),
+        )
+        .limit(1)
+    )
+
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None

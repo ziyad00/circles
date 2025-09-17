@@ -379,7 +379,7 @@ def _validate_image_or_raise(filename: str, content: bytes) -> None:
     # Just ensure it's not empty
     if len(content) == 0:
         raise ValueError("File cannot be empty")
-    
+
     # Basic check for minimum file size (avoid empty or corrupted files)
     if len(content) < 10:
         raise ValueError("File appears to be too small or corrupted")

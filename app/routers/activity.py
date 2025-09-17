@@ -152,8 +152,8 @@ async def get_activity_feed(
 
     **Privacy Enforcement:**
     - Only shows content user has permission to see
-    - Respects visibility settings (public, friends, private)
-    - Followers can see friends-only content
+    - Respects visibility settings (public, followers, private)
+    - Followers can see followers-only content
 
     **Response Format:**
     - Activity type and timestamp

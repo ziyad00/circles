@@ -72,7 +72,7 @@ app = FastAPI(
     description="""
 # Circles API Documentation
 
-Circles is a social location-based application that allows users to discover places, check-in, share experiences, and connect with friends.
+Circles is a social location-based application that allows users to discover places, check-in, share experiences, and connect with followers.
 
 ## 🚀 Quick Start
 
