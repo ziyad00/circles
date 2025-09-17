@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Fix the alembic migration state by updating to the latest migration.
+This script should be run to fix the database state after removing a migration.
 """
 import os
 import asyncio
@@ -24,11 +25,16 @@ async def fix_alembic():
             current_version = result.scalar()
             print(f"Current alembic version: {current_version}")
             
-            # Update to the latest migration
-            latest_version = "add_user_collections_tables"
-            await conn.execute(text("UPDATE alembic_version SET version_num = :version"), 
-                             {"version": latest_version})
-            print(f"Updated alembic version to: {latest_version}")
+            # If it's the problematic version, update to the latest
+            if current_version == "499278ad9251":
+                print("Found problematic migration version, updating to latest...")
+                # Update to the latest migration
+                latest_version = "add_user_collections_tables"
+                await conn.execute(text("UPDATE alembic_version SET version_num = :version"), 
+                                 {"version": latest_version})
+                print(f"Updated alembic version to: {latest_version}")
+            else:
+                print(f"Current version {current_version} is not the problematic one")
                 
     except Exception as e:
         print(f"Error fixing migration: {e}")
