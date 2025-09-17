@@ -24,7 +24,32 @@ async def fix_alembic():
             current_version = result.scalar()
             print(f'Current alembic version: {current_version}')
             
-            if current_version == '499278ad9251':
+            if current_version == 'add_user_collections_tables':
+                print('Found conflicting migration version add_user_collections_tables')
+                # Check if the migration tables actually exist
+                result = await conn.execute(text('''
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                        AND table_name = 'user_collections'
+                    );
+                '''))
+                tables_exist = result.scalar()
+                print(f'User collections tables exist: {tables_exist}')
+
+                if tables_exist:
+                    # Tables exist, so the migration was already applied, update to correct version
+                    print('Tables exist, updating to correct migration version')
+                    await conn.execute(text('UPDATE alembic_version SET version_num = :version'),
+                                     {'version': '499278ad9251'})
+                    print('Updated alembic version to: 499278ad9251 (correct version)')
+                else:
+                    # Tables don't exist, rollback to previous version and let alembic rerun
+                    print('Tables missing, rolling back to previous version')
+                    await conn.execute(text('UPDATE alembic_version SET version_num = :version'),
+                                     {'version': 'fdeec55cbdb7'})
+                    print('Rollback: Updated alembic version to: fdeec55cbdb7')
+            elif current_version == '499278ad9251':
                 print('Found problematic migration version 499278ad9251')
                 # Check if the migration tables actually exist
                 result = await conn.execute(text('''
