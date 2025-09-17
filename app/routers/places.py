@@ -551,6 +551,8 @@ async def advanced_search_places(
 ):
     """Advanced search with multiple filters, sorting, and distance-based search"""
 
+    logger.info(f"Advanced search called with filters: {filters}")
+
     # Build base query
     stmt = select(Place)
     count_stmt = select(func.count(Place.id))
@@ -652,10 +654,8 @@ async def advanced_search_places(
             # Use PostGIS for efficient distance search
             point = func.ST_SetSRID(func.ST_MakePoint(
                 filters.longitude, filters.latitude), 4326)
-            place_point = func.ST_SetSRID(func.ST_MakePoint(
-                Place.longitude, Place.latitude), 4326)
             distance_filter = func.ST_DWithin(
-                place_point.cast(text('geography')),
+                Place.__table__.c.location,
                 point.cast(text('geography')),
                 filters.radius_km * 1000  # Convert km to meters
             )
@@ -1483,7 +1483,8 @@ async def nearby_places(
 ):
     from ..config import settings as app_settings
     import logging
-    logging.info(f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
+    logging.info(
+        f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
     paginated: PaginatedPlaces | None = None
 
     if app_settings.use_postgis:
