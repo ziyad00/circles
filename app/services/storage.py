@@ -325,17 +325,8 @@ def _validate_image_or_raise(filename: str, content: bytes) -> None:
     max_bytes = int(settings.photo_max_mb) * 1024 * 1024
     if len(content) > max_bytes:
         raise ValueError("File too large; max 10MB")
-    # Content type by extension should be image; if not, try to validate by content
-    ctype = _guess_content_type(filename)
-    if not ctype.startswith("image/"):
-        # Fallback: trust actual bytes if Pillow can verify
-        try:
-            from PIL import Image
-            import io
-            Image.open(io.BytesIO(content)).verify()
-        except Exception:
-            raise ValueError("Unsupported file type")
-    # Attempt to open with Pillow to validate image
+
+    # Always validate by content first (more reliable for iOS uploads)
     try:
         from PIL import Image
         import io
