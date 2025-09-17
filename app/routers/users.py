@@ -250,10 +250,11 @@ async def upload_avatar(
     # image validation comes from storage service helpers
 
     # Validate file type and size
-    if not file.content_type or not file.content_type.startswith('image/'):
+    allowed_content_types = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
+    if not file.content_type or file.content_type not in allowed_content_types:
         raise HTTPException(
             status_code=400,
-            detail="File must be an image (JPEG, PNG, WebP)"
+            detail="File must be an image (JPEG, PNG, WebP, HEIC). If you're using an iPhone, try taking a new photo or selecting from your gallery."
         )
 
     # Check file size (configurable max MB for avatars)
