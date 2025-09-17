@@ -1550,24 +1550,51 @@ async def nearby_places(
         )
         logging.info(f"Python fallback returned {paginated.total} places")
 
-    should_fetch_external = False  # Temporarily disable external search to debug
+    # Check if we should fetch external results (Foursquare + OSM)
+    should_fetch_external = len(paginated.items) < limit
     if not should_fetch_external:
         return paginated
 
     max_external = max(0, limit - len(paginated.items))
-    live_results = await enhanced_place_data_service.search_live_overpass(
-        lat=lat,
-        lon=lng,
-        radius=radius_m,
-        query=None,
-        types=None,
-        limit=max_external,
-    )
+
+    # Try Foursquare first for higher quality data
+    from ..config import settings as app_settings
+    fsq_results = []
+    if app_settings.fsq_trending_enabled and enhanced_place_data_service.foursquare_api_key:
+        try:
+            fsq_results = await enhanced_place_data_service.fetch_foursquare_trending(
+                lat=lat,
+                lon=lng,
+                limit=max_external
+            )
+            logging.info(f"Foursquare returned {len(fsq_results)} nearby places")
+        except Exception as e:
+            logging.warning(f"Foursquare nearby search failed: {e}")
+
+    # If we still need more results, try OSM
+    osm_limit = max(0, max_external - len(fsq_results))
+    live_results = []
+    if osm_limit > 0:
+        live_results = await enhanced_place_data_service.search_live_overpass(
+            lat=lat,
+            lon=lng,
+            radius=radius_m,
+            query=None,
+            types=None,
+            limit=osm_limit,
+        )
+        logging.info(f"OSM returned {len(live_results)} nearby places")
+
+    # Combine Foursquare and OSM results
+    all_external_results = fsq_results + live_results
 
     normalized_results: list[dict] = []
-    for item in live_results[:max_external]:
+    for item in all_external_results[:max_external]:
         record = dict(item)
-        record.setdefault("data_source", "osm_overpass")
+        # Set data source if not already set
+        if "data_source" not in record:
+            record["data_source"] = "osm_overpass"  # OSM results won't have this set
+
         lat_val = record.get("latitude")
         lon_val = record.get("longitude")
         if lat_val is None or lon_val is None:
@@ -1579,6 +1606,9 @@ async def nearby_places(
         else:
             record["distance_m"] = float(record["distance_m"])
         normalized_results.append(record)
+
+    # Sort by distance to ensure nearest places first
+    normalized_results.sort(key=lambda x: x.get("distance_m", float('inf')))
 
     if not normalized_results:
         return paginated.model_copy(
@@ -1599,6 +1629,16 @@ async def nearby_places(
     snapshot_id: int | None = None
     fetched_at = datetime.now(timezone.utc)
 
+    # Determine primary source based on results
+    fsq_count = len(fsq_results)
+    osm_count = len(live_results)
+    if fsq_count > 0 and osm_count > 0:
+        primary_source = "foursquare+osm"
+    elif fsq_count > 0:
+        primary_source = "foursquare"
+    else:
+        primary_source = "osm_overpass"
+
     snapshot = ExternalSearchSnapshot(
         search_key=search_key,
         latitude=lat,
@@ -1606,7 +1646,7 @@ async def nearby_places(
         radius_m=radius_m,
         query=None,
         types=None,
-        source="osm_overpass",
+        source=primary_source,
         result_count=len(normalized_results),
         results=normalized_results,
     )
@@ -1626,7 +1666,7 @@ async def nearby_places(
             "external_results": response_results,
             "external_count": len(response_results),
             "external_snapshot_id": snapshot_id,
-            "external_source": "osm_overpass",
+            "external_source": primary_source,
             "external_search_key": search_key,
             "external_fetched_at": fetched_at,
         }
