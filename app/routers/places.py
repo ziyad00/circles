@@ -1333,23 +1333,68 @@ async def nearby_places(
 ):
     from ..config import settings as app_settings
     if app_settings.use_postgis:
-        # Use ST_DWithin and ST_Distance for efficient geo query
-        point = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
-        # Count
-        total_q = select(func.count(Place.id)).where(
-            Place.latitude.is_not(None), Place.longitude.is_not(None), func.ST_DWithin(
-                Place.__table__.c.location, point.cast(text('geography')), radius_m)
-        )
-        total = (await db.execute(total_q)).scalar_one()
-        stmt = (
-            select(Place)
-            .where(Place.latitude.is_not(None), Place.longitude.is_not(None), func.ST_DWithin(Place.__table__.c.location, point.cast(text('geography')), radius_m))
-            .order_by(func.ST_Distance(Place.__table__.c.location, point.cast(text('geography'))).asc())
-            .offset(offset)
-            .limit(limit)
-        )
-        items = (await db.execute(stmt)).scalars().all()
-        return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+        try:
+            # Use spherical distance in meters without geography casts to avoid SQLAlchemy cache issues
+            user_point = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
+            place_point = func.ST_SetSRID(func.ST_MakePoint(
+                Place.longitude, Place.latitude), 4326)
+            distance_m = func.ST_DistanceSphere(place_point, user_point)
+
+            # Count within radius (meters)
+            total_q = select(func.count(Place.id)).where(
+                Place.latitude.is_not(None),
+                Place.longitude.is_not(None),
+                distance_m <= radius_m,
+            )
+            total = (await db.execute(total_q)).scalar_one()
+
+            # Fetch places ordered by distance (meters)
+            stmt = (
+                select(Place)
+                .where(
+                    Place.latitude.is_not(None),
+                    Place.longitude.is_not(None),
+                    distance_m <= radius_m,
+                )
+                .order_by(distance_m.asc())
+                .offset(offset)
+                .limit(limit)
+            )
+            items = (await db.execute(stmt)).scalars().all()
+            return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+        except Exception as e:
+            logging.warning(
+                f"PostGIS nearby failed, falling back to haversine: {e}")
+            # Haversine fallback
+            lat_rad = func.radians(lat)
+            lng_rad = func.radians(lng)
+            place_lat = func.radians(Place.latitude)
+            place_lng = func.radians(Place.longitude)
+            arg = (
+                func.cos(lat_rad) * func.cos(place_lat) *
+                func.cos(place_lng - lng_rad)
+                + func.sin(lat_rad) * func.sin(place_lat)
+            )
+            arg_clamped = func.greatest(-1.0, func.least(1.0, arg))
+            distance_m = 6371000 * func.acos(arg_clamped)
+
+            total_q = (
+                select(func.count(Place.id))
+                .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
+                .where(distance_m <= radius_m)
+            )
+            total = (await db.execute(total_q)).scalar_one()
+
+            stmt = (
+                select(Place)
+                .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
+                .where(distance_m <= radius_m)
+                .order_by(distance_m.asc())
+                .offset(offset)
+                .limit(limit)
+            )
+            items = (await db.execute(stmt)).scalars().all()
+            return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
     else:
         # Haversine fallback
         lat_rad = func.radians(lat)
