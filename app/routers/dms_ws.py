@@ -1,4 +1,4 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from typing import Dict, Set, Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
@@ -12,6 +12,7 @@ from ..services.jwt_service import JWTService
 from ..models import DMThread, DMParticipantState, DMMessage, User, CheckIn
 from ..config import settings
 from ..services.storage import StorageService
+from ..services.place_chat_service import create_private_reply_from_place_chat
 
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,65 @@ async def place_chat_ws(websocket: WebSocket, place_id: int, db: AsyncSession = 
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 await manager.broadcast(thread_id, user_id, payload)
+                continue
+
+            if msg_type == "reply_private":
+                target_user_id = data.get("target_user_id")
+                context = data.get("context") or {}
+
+                try:
+                    thread, dm_message, place = await create_private_reply_from_place_chat(
+                        db=db,
+                        place_id=place_id,
+                        sender_id=user_id,
+                        target_user_id=target_user_id,
+                        message_text=data.get("text") or "",
+                        context_text=context.get("text"),
+                    )
+                except HTTPException as exc:
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": exc.detail,
+                    })
+                    continue
+
+                try:
+                    from ..services.websocket_service import WebSocketService
+
+                    sender_info = await _get_user_info(db, user_id)
+                    notification_payload = {
+                        "sender_id": user_id,
+                        "sender_name": sender_info.get("name"),
+                        "sender_avatar_url": sender_info.get("avatar_url"),
+                        "thread_id": thread.id,
+                        "message_id": dm_message.id,
+                        "message_text": dm_message.text[:100]
+                        + ("..." if len(dm_message.text) > 100 else ""),
+                        "has_media": False,
+                        "media_count": 0,
+                        "is_reply": False,
+                        "source": "place_chat",
+                        "place_id": place_id,
+                        "timestamp": dm_message.created_at.isoformat(),
+                    }
+                    if place:
+                        notification_payload["place_name"] = place.name
+
+                    await WebSocketService.send_dm_notification(
+                        target_user_id, thread.id, notification_payload
+                    )
+                except Exception as notify_exc:
+                    logger.warning(
+                        "Failed to send DM notification for place chat reply: %s",
+                        notify_exc,
+                    )
+
+                await websocket.send_json({
+                    "type": "private_reply_sent",
+                    "thread_id": thread.id,
+                    "message_id": dm_message.id,
+                    "target_user_id": target_user_id,
+                })
                 continue
 
             # Unknown types ignored

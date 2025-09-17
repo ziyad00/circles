@@ -7,6 +7,7 @@ from ..utils import can_view_checkin, haversine_distance
 from ..services.place_data_service_v2 import enhanced_place_data_service
 from ..services.storage import StorageService
 from ..services.jwt_service import JWTService
+from ..services.place_chat_service import create_private_reply_from_place_chat
 from ..config import settings
 from ..schemas import (
     PlaceCreate,
@@ -44,7 +45,6 @@ from ..schemas import (
 from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto, ExternalSearchSnapshot
 from ..dependencies import get_current_admin_user
 from ..database import get_db
-from .dms_ws import _send_private_reply_from_place_chat
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -2205,7 +2205,9 @@ async def send_place_chat_private_reply(
             detail="You must have a recent check-in at this place to reply privately",
         )
 
-    thread, dm_message = await _send_private_reply_from_place_chat(
+    from ..services.websocket_service import WebSocketService
+
+    thread, dm_message, place = await create_private_reply_from_place_chat(
         db=db,
         place_id=place_id,
         sender_id=current_user.id,
@@ -2213,6 +2215,34 @@ async def send_place_chat_private_reply(
         message_text=payload.text,
         context_text=payload.context_text,
     )
+
+    try:
+        notification_payload = {
+            "sender_id": current_user.id,
+            "sender_name": current_user.name,
+            "sender_avatar_url": _convert_single_to_signed_url(current_user.avatar_url),
+            "thread_id": thread.id,
+            "message_id": dm_message.id,
+            "message_text": dm_message.text[:100]
+            + ("..." if len(dm_message.text) > 100 else ""),
+            "has_media": False,
+            "media_count": 0,
+            "is_reply": False,
+            "source": "place_chat",
+            "place_id": place_id,
+            "timestamp": dm_message.created_at.isoformat(),
+        }
+        if place:
+            notification_payload["place_name"] = place.name
+
+        await WebSocketService.send_dm_notification(
+            payload.target_user_id, thread.id, notification_payload
+        )
+    except Exception as notify_exc:
+        logger.warning(
+            "Failed to send DM notification for place chat reply: %s",
+            notify_exc,
+        )
 
     return DMMessageResponse(
         id=dm_message.id,
