@@ -33,7 +33,10 @@ from ..schemas import (
     PaginatedMedia,
     ProfileStats,
     UserSearchFilters,
+    AvailabilityStatus,
+    AvailabilityMode,
 )
+from .dms_ws import manager
 
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -126,8 +129,10 @@ async def search_users(
         .where(
             DMParticipantState.blocked.is_(True),
             or_(
-                and_(DMThread.user_a_id == current_user.id, DMThread.user_b_id == User.id),
-                and_(DMThread.user_b_id == current_user.id, DMThread.user_a_id == User.id),
+                and_(DMThread.user_a_id == current_user.id,
+                     DMThread.user_b_id == User.id),
+                and_(DMThread.user_b_id == current_user.id,
+                     DMThread.user_a_id == User.id),
             ),
         )
     )
@@ -166,6 +171,8 @@ async def search_users(
                 avatar_url=_convert_single_to_signed_url(user.avatar_url),
                 created_at=user.created_at,
                 username=user.username,
+                availability_status=user.availability_status,
+                availability_mode=getattr(user, "availability_mode", AvailabilityMode.auto.value),
                 followed=bool(followed),
             )
         )
@@ -216,6 +223,8 @@ async def get_user_profile(
         username=user.username,
         bio=user.bio,
         avatar_url=_convert_single_to_signed_url(user.avatar_url),
+        availability_status=user.availability_status,
+        availability_mode=getattr(user, "availability_mode", AvailabilityMode.auto.value),
         created_at=user.created_at,
         followers_count=followers_count,
         following_count=following_count,
@@ -230,13 +239,38 @@ async def update_me(
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    import logging
+    logging.info(f"User {current_user.id} updating profile: name={payload.name}, bio={payload.bio}")
+    
     if payload.name is not None:
         current_user.name = payload.name
+        logging.info(f"Updated name to: {payload.name}")
     if payload.bio is not None:
         current_user.bio = payload.bio
-    await db.commit()
-    await db.refresh(current_user)
-    return current_user
+        logging.info(f"Updated bio to: {payload.bio}")
+    if payload.availability_status is not None:
+        if payload.availability_status == AvailabilityStatus.not_available:
+            current_user.availability_status = AvailabilityStatus.not_available.value
+            current_user.availability_mode = AvailabilityMode.manual.value
+        else:
+            current_user.availability_mode = AvailabilityMode.auto.value
+            is_online = manager.is_user_online(current_user.id)
+            current_user.availability_status = (
+                AvailabilityStatus.available.value
+                if is_online
+                else AvailabilityStatus.not_available.value
+            )
+    
+    try:
+        await db.commit()
+        logging.info(f"Successfully committed changes for user {current_user.id}")
+        await db.refresh(current_user)
+        logging.info(f"Successfully refreshed user {current_user.id}")
+        return current_user
+    except Exception as e:
+        logging.error(f"Error updating user {current_user.id}: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update profile: {str(e)}")
 
 
 @router.post("/me/avatar", response_model=PublicUserResponse)
@@ -249,9 +283,16 @@ async def upload_avatar(
     from uuid import uuid4
     # image validation comes from storage service helpers
 
-    # Validate file type and size
+    # Validate file type and size - be more permissive for iPhone uploads
     allowed_content_types = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
-    if not file.content_type or file.content_type not in allowed_content_types:
+
+    # iPhone HEIC files sometimes come with unexpected content types
+    is_likely_heic = (
+        file.filename and file.filename.lower().endswith(('.heic', '.heif')) or
+        file.content_type in ['image/heic', 'image/heif', 'application/octet-stream']
+    )
+
+    if not file.content_type or (file.content_type not in allowed_content_types and not is_likely_heic):
         raise HTTPException(
             status_code=400,
             detail="File must be an image (JPEG, PNG, WebP, HEIC). If you're using an iPhone, try taking a new photo or selecting from your gallery."
