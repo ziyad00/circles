@@ -252,8 +252,15 @@ class CheckInComment(Base):
     updated_at = Column(DateTime(timezone=True),
                         server_default=func.now(), onupdate=func.now())
 
+    # Reply functionality
+    reply_to_id = Column(Integer, ForeignKey(
+        "check_in_comments.id"), nullable=True, index=True)
+    reply_to_text = Column(Text, nullable=True)
+
     check_in = relationship("CheckIn", back_populates="comments")
     user = relationship("User", back_populates="check_in_comments")
+    # Self-referencing relationship for replies
+    reply_to = relationship("CheckInComment", remote_side=[id], backref="replies")
 
 
 class CheckInLike(Base):

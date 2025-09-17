@@ -333,21 +333,21 @@ def _validate_image_or_raise(filename: str, content: bytes) -> None:
     try:
         from PIL import Image
         import io
-        
+
         # Register HEIF opener for iPhone HEIC support
         try:
             from pillow_heif import register_heif_opener
             register_heif_opener()
         except ImportError:
             pass  # pillow-heif not available, continue without HEIC support
-        
+
         img = Image.open(io.BytesIO(content))
         img.verify()
     except Exception as e:
         # Check if it's a format issue vs corruption
         error_msg = str(e).lower()
         print(f"Image validation error: {error_msg}")  # Debug logging
-        
+
         # Special handling for iPhone HEIC images
         if 'heic' in error_msg or 'cannot identify' in error_msg:
             # Try to handle HEIC format specifically
@@ -362,7 +362,7 @@ def _validate_image_or_raise(filename: str, content: bytes) -> None:
                         return
             except:
                 pass
-        
+
         if any(term in error_msg for term in ['cannot identify', 'format', 'unknown', 'unsupported']):
             raise UnsupportedImageFormatError()
         else:
