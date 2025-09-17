@@ -25,10 +25,18 @@ async def fix_alembic():
             print(f'Current alembic version: {current_version}')
             
             if current_version == '499278ad9251':
-                print('Found problematic migration version, updating to latest...')
-                await conn.execute(text('UPDATE alembic_version SET version_num = :version'), 
-                                 {'version': 'add_user_collections_tables'})
-                print('Updated alembic version to: add_user_collections_tables')
+                print('Found problematic migration version, running alembic upgrade...')
+                # Instead of manually updating, let alembic handle it
+                import subprocess
+                result = subprocess.run(['alembic', 'upgrade', 'head'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    print('Successfully upgraded to latest migration')
+                else:
+                    print(f'Alembic upgrade failed: {result.stderr}')
+                    # Fallback: manually update to a known good version
+                    await conn.execute(text('UPDATE alembic_version SET version_num = :version'), 
+                                     {'version': 'add_user_collections_tables'})
+                    print('Fallback: Updated alembic version to: add_user_collections_tables')
             else:
                 print(f'Current version {current_version} is not the problematic one')
     except Exception as e:
@@ -39,8 +47,9 @@ async def fix_alembic():
 asyncio.run(fix_alembic())
 "
 
-# Skip alembic migrations for now since the database is already up to date
-echo "Skipping alembic migrations (database already up to date)..."
+# Run alembic migrations to ensure database is up to date
+echo "Running alembic migrations..."
+alembic upgrade head
 
 # Start the application
 echo "Starting FastAPI application..."
