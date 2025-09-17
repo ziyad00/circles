@@ -326,32 +326,8 @@ async def create_place(payload: PlaceCreate, db: AsyncSession = Depends(get_db))
     db.add(place)
     await db.commit()
     await db.refresh(place)
-    # If PostGIS enabled and lat/lng present, set geography
-    from ..config import settings as app_settings
-    if app_settings.use_postgis and place.latitude is not None and place.longitude is not None:
-        place_id = place.id
-        try:
-            await db.execute(
-                text(
-                    (
-                        "UPDATE places SET location = ST_SetSRID("
-                        "ST_MakePoint(:lng, :lat), 4326)::geography WHERE id = :id"
-                    )
-                ),
-                {"lng": place.longitude, "lat": place.latitude, "id": place.id},
-            )
-            await db.commit()
-        except SQLAlchemyError as exc:  # pragma: no cover - only triggered without PostGIS
-            await db.rollback()
-            try:
-                await db.refresh(place)
-            except SQLAlchemyError:
-                pass
-            logging.warning(
-                "Skipping PostGIS location update for place %s: %s",
-                place_id,
-                exc,
-            )
+    # PostGIS location column update removed - Place model only has lat/lng columns
+    # The latitude and longitude columns are already updated above, no additional PostGIS update needed
     # Auto-populate country/city/neighborhood if missing using reverse geocoding
     if place.latitude is not None and place.longitude is not None:
         try:
@@ -654,31 +630,30 @@ async def advanced_search_places(
     if filters.latitude is not None and filters.longitude is not None and filters.radius_km is not None:
         from ..config import settings as app_settings
 
-        # For now, disable PostGIS and use fallback to ensure reliability
-        use_postgis = False  # getattr(app_settings, 'use_postgis', False)
+        # Use PostGIS if enabled and available
+        use_postgis = getattr(app_settings, 'use_postgis', False)
 
         if use_postgis:
             try:
                 # Use PostGIS for efficient distance search with lat/lng columns
-                point = func.ST_SetSRID(func.ST_MakePoint(
+                # Note: Using ST_DistanceSphere instead of ST_DWithin for consistency
+                user_point = func.ST_SetSRID(func.ST_MakePoint(
                     filters.longitude, filters.latitude), 4326)
                 place_point = func.ST_SetSRID(func.ST_MakePoint(
                     Place.longitude, Place.latitude), 4326)
-                distance_filter = func.ST_DWithin(
-                    place_point.cast(text('geography')),
-                    point.cast(text('geography')),
-                    filters.radius_km * 1000  # Convert km to meters
-                )
+                distance_m = func.ST_DistanceSphere(place_point, user_point)
+                distance_filter = distance_m <= (filters.radius_km * 1000)
+
                 stmt = stmt.where(distance_filter)
                 count_stmt = count_stmt.where(distance_filter)
-                logger.info("Using PostGIS distance filtering")
+                logger.info("Using PostGIS distance filtering for advanced search")
             except Exception as e:
                 logger.warning(
                     f"PostGIS query failed, falling back to Haversine: {e}")
-                # Continue to fallback below
-        # Always use fallback for now to ensure reliability
-        logger.info(
-            "Using fallback distance filtering (PostGIS disabled for reliability)")
+                use_postgis = False  # Force fallback below
+
+        if not use_postgis:
+            logger.info("Using fallback distance filtering (PostGIS not available)")
 
     # Sorting
     if filters.sort_by:
@@ -749,22 +724,21 @@ async def advanced_search_places(
         ))
 
     # Apply distance filtering for non-PostGIS fallback
+    # This runs when PostGIS was either disabled or failed at runtime
     if (filters.latitude is not None and filters.longitude is not None and
-            filters.radius_km is not None):
-        from ..config import settings as app_settings_fallback
-        if not getattr(app_settings_fallback, 'use_postgis', False):
-            from ..utils import haversine_distance
-            filtered_items = []
-            for place in items:
-                if place.latitude and place.longitude:
-                    distance = haversine_distance(
-                        filters.latitude, filters.longitude,
-                        place.latitude, place.longitude
-                    )
-                    if distance <= filters.radius_km:
-                        filtered_items.append(place)
-            items = filtered_items
-            total = len(filtered_items)  # This is approximate for pagination
+            filters.radius_km is not None and not use_postgis):
+        from ..utils import haversine_distance
+        filtered_items = []
+        for place in items:
+            if place.latitude and place.longitude:
+                distance = haversine_distance(
+                    filters.latitude, filters.longitude,
+                    place.latitude, place.longitude
+                )
+                if distance <= filters.radius_km:
+                    filtered_items.append(place)
+        items = filtered_items
+        total = len(filtered_items)  # This is approximate for pagination
 
     return PaginatedPlaces(items=items, total=total, limit=filters.limit, offset=filters.offset)
 
@@ -1502,6 +1476,8 @@ async def nearby_places(
 
     if app_settings.use_postgis:
         try:
+            # Use PostGIS for efficient distance search with lat/lng columns
+            logging.info("Using PostGIS distance filtering for nearby search")
             # Use spherical distance in meters without geography casts to avoid SQLAlchemy cache issues
             user_point = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
             place_point = func.ST_SetSRID(func.ST_MakePoint(
