@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     metrics_token: Optional[str] = Field(default=None, env="METRICS_TOKEN")
 
     # Geo
-    use_postgis: bool = Field(default=True, env="USE_POSTGIS")
+    use_postgis: bool = Field(default=False, env="USE_POSTGIS")
     # Check-in proximity enforcement
     checkin_enforce_proximity: bool = Field(
         default=True, env="CHECKIN_ENFORCE_PROXIMITY")
