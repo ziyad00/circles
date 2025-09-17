@@ -651,11 +651,13 @@ async def advanced_search_places(
     if filters.latitude is not None and filters.longitude is not None and filters.radius_km is not None:
         from ..config import settings as app_settings
         if app_settings.use_postgis:
-            # Use PostGIS for efficient distance search
+            # Use PostGIS for efficient distance search with lat/lng columns
             point = func.ST_SetSRID(func.ST_MakePoint(
                 filters.longitude, filters.latitude), 4326)
+            place_point = func.ST_SetSRID(func.ST_MakePoint(
+                Place.longitude, Place.latitude), 4326)
             distance_filter = func.ST_DWithin(
-                Place.__table__.c.location,
+                place_point.cast(text('geography')),
                 point.cast(text('geography')),
                 filters.radius_km * 1000  # Convert km to meters
             )
