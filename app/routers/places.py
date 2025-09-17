@@ -40,6 +40,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, text, or_, and_, literal
+from sqlalchemy.exc import SQLAlchemyError
 import httpx
 import logging
 from math import cos, radians
@@ -256,8 +257,29 @@ async def create_place(payload: PlaceCreate, db: AsyncSession = Depends(get_db))
     # If PostGIS enabled and lat/lng present, set geography
     from ..config import settings as app_settings
     if app_settings.use_postgis and place.latitude is not None and place.longitude is not None:
-        await db.execute(text("UPDATE places SET location = ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography WHERE id = :id"), {"lng": place.longitude, "lat": place.latitude, "id": place.id})
-        await db.commit()
+        place_id = place.id
+        try:
+            await db.execute(
+                text(
+                    (
+                        "UPDATE places SET location = ST_SetSRID("
+                        "ST_MakePoint(:lng, :lat), 4326)::geography WHERE id = :id"
+                    )
+                ),
+                {"lng": place.longitude, "lat": place.latitude, "id": place.id},
+            )
+            await db.commit()
+        except SQLAlchemyError as exc:  # pragma: no cover - only triggered without PostGIS
+            await db.rollback()
+            try:
+                await db.refresh(place)
+            except SQLAlchemyError:
+                pass
+            logging.warning(
+                "Skipping PostGIS location update for place %s: %s",
+                place_id,
+                exc,
+            )
     # Auto-populate country/city/neighborhood if missing using reverse geocoding
     if place.latitude is not None and place.longitude is not None:
         try:
