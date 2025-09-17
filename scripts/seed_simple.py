@@ -34,7 +34,7 @@ class User(Base):
     name = Column(String)
     is_verified = Column(Boolean, default=True)
     dm_privacy = Column(String, default="everyone")
-    checkins_default_visibility = Column(String, default="public")
+    checkins_default_visibility = Column(String, default="private")
     collections_default_visibility = Column(String, default="public")
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -59,7 +59,7 @@ class CheckIn(Base):
     user_id = Column(Integer)
     place_id = Column(Integer)
     note = Column(String)
-    visibility = Column(String, default="public")
+    visibility = Column(String, default="private")
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime)
 

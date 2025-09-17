@@ -26,7 +26,7 @@ class User(Base):
     # everyone|followers|no_one
     dm_privacy = Column(String, nullable=False, server_default="everyone")
     checkins_default_visibility = Column(
-        String, nullable=False, server_default="public")
+        String, nullable=False, server_default="private")
     collections_default_visibility = Column(
         String, nullable=False, server_default="public")
 

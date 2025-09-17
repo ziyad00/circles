@@ -29,7 +29,7 @@ async def seed_data():
         for phone, username, name in users:
             await s.execute(text("""
                 INSERT INTO users(phone, username, name, is_verified, dm_privacy, checkins_default_visibility, collections_default_visibility)
-                VALUES(:phone, :username, :name, true, 'everyone', 'public', 'public')
+                VALUES(:phone, :username, :name, true, 'everyone', 'private', 'public')
                 ON CONFLICT(phone) DO NOTHING
             """), {"phone": phone, "username": username, "name": name})
 
