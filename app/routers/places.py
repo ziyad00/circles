@@ -1488,7 +1488,7 @@ async def nearby_places(
             db, lat, lng, radius_m, limit, offset
         )
 
-    should_fetch_external = offset == 0 and len(paginated.items) < limit
+    should_fetch_external = False  # Temporarily disable external search to debug
     if not should_fetch_external:
         return paginated
 
@@ -2121,7 +2121,7 @@ async def create_check_in(
 
     # default visibility from user settings if not provided
     default_vis = getattr(
-        current_user, "checkins_default_visibility", "public")
+        current_user, "checkins_default_visibility", "private")
     check_in = CheckIn(
         user_id=current_user.id,
         place_id=payload.place_id,
@@ -2245,7 +2245,7 @@ async def create_check_in_full(
 
     # default visibility from user settings if not provided
     default_vis = getattr(
-        current_user, "checkins_default_visibility", "public")
+        current_user, "checkins_default_visibility", "private")
     check_in = CheckIn(
         user_id=current_user.id,
         place_id=place_id,
