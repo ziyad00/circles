@@ -1,6 +1,7 @@
 import pytest
 import asyncio
-from httpx import AsyncClient
+import pytest_asyncio
+from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.main import app
@@ -11,7 +12,7 @@ from app.services.jwt_service import JWTService
 from datetime import datetime, timedelta
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def client(test_session):
     """Create test client with overridden database dependency."""
     async def override_get_db():
@@ -19,13 +20,14 @@ async def client(test_session):
 
     app.dependency_overrides = {get_db: override_get_db}
 
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
     app.dependency_overrides = {}
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def db_session(test_session):
     """Create database session for tests."""
     yield test_session

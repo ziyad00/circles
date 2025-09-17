@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.main import app
@@ -9,19 +10,19 @@ from app.services.jwt_service import JWTService
 import json
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def client():
     async with AsyncClient(app=app, base_url="http://test") as ac:
         yield ac
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def db_session():
     async with AsyncSessionLocal() as session:
         yield session
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def test_user(db_session):
     """Create a test user and return their data"""
     user = User(
@@ -46,7 +47,7 @@ async def test_user(db_session):
     }
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def test_user2(db_session):
     """Create a second test user"""
     user = User(
@@ -70,7 +71,7 @@ async def test_user2(db_session):
     }
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def test_place(db_session):
     """Create a test place"""
     place = Place(

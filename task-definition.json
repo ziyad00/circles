@@ -2,7 +2,7 @@
   "containerDefinitions": [
     {
       "name": "app",
-      "image": "704845220483.dkr.ecr.us-east-1.amazonaws.com/circles-app@sha256:1bc9d7bc41573b902bd4756bcb61820551ff13aaae9dccef4d39c7012968e74f",
+      "image": "704845220483.dkr.ecr.us-east-1.amazonaws.com/circles-app@sha256:54d492f30d4083a5f5d900b46580e5d9a0316e9401bca1b4cb0a013186a56872",
       "cpu": 0,
       "portMappings": [
         {
@@ -13,9 +13,7 @@
       ],
       "essential": true,
       "command": [
-        "sh",
-        "-c",
-        "./.venv/bin/python -m alembic upgrade heads && ./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+        "./start.sh"
       ],
       "environment": [
         {
@@ -81,6 +79,10 @@
         {
           "name": "APP_DATABASE_URL",
           "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_DATABASE_URL::"
+        },
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_DATABASE_URL::"
         }
       ],
       "logConfiguration": {
@@ -99,10 +101,6 @@
   "executionRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
   "networkMode": "awsvpc",
   "volumes": [],
-  "runtimePlatform": {
-    "cpuArchitecture": "X86_64",
-    "operatingSystemFamily": "LINUX"
-  },
   "requiresCompatibilities": [
     "FARGATE"
   ],

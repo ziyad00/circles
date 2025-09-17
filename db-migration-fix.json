@@ -1,0 +1,33 @@
+{
+  "family": "circles-db-fix",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
+  "taskRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
+  "containerDefinitions": [
+    {
+      "name": "db-fix",
+      "image": "postgres:15",
+      "essential": true,
+      "environment": [],
+      "secrets": [
+        { "name": "PGPASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_DATABASE_URL::" }
+      ],
+      "command": [
+        "sh",
+        "-c",
+        "apk add --no-cache python3 py3-pip && pip3 install psycopg2-binary && python3 -c \"import psycopg2, os, urllib.parse as up; url = up.urlparse(os.environ['PGPASSWORD']); conn = psycopg2.connect(host=url.hostname, port=url.port, user=url.username, password=url.password, database=url.path[1:]); cur = conn.cursor(); print('Checking database...'); cur.execute('SELECT version_num FROM alembic_version ORDER BY version_num'); print('Current versions:', cur.fetchall()); cur.execute(\\\"INSERT INTO alembic_version (version_num) VALUES ('499278ad9251') ON CONFLICT (version_num) DO NOTHING\\\"); conn.commit(); print('Migration 499278ad9251 inserted successfully'); conn.close()\""
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/circles",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "db-fix"
+        }
+      }
+    }
+  ]
+}

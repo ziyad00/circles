@@ -1,0 +1,33 @@
+{
+  "family": "circles-simple-db-fix",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
+  "taskRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
+  "containerDefinitions": [
+    {
+      "name": "simple-db-fix",
+      "image": "postgres:15-alpine",
+      "essential": true,
+      "environment": [],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_DATABASE_URL::" }
+      ],
+      "command": [
+        "sh",
+        "-c",
+        "echo \"$DATABASE_URL\" | sed 's/postgresql+asyncpg:/postgresql:/' | sed 's/@[^/]*/@/' > /tmp/db_url && export PGURL=$(cat /tmp/db_url) && psql \"$PGURL\" -c \"INSERT INTO alembic_version (version_num) VALUES ('499278ad9251') ON CONFLICT (version_num) DO NOTHING;\" && psql \"$PGURL\" -c \"SELECT version_num FROM alembic_version ORDER BY version_num;\" && echo 'Migration fix completed successfully'"
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/circles",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "simple-db-fix"
+        }
+      }
+    }
+  ]
+}
