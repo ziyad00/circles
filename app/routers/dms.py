@@ -33,6 +33,13 @@ from ..schemas import (
     HeartResponse,
     ReactionCreate,
     ReactionResponse,
+    MessageForwardRequest,
+    MessageSearchRequest,
+    MessageSearchResponse,
+    DeliveryStatusUpdate,
+    VoiceMessageUploadResponse,
+    FileUploadResponse,
+    LocationShareRequest,
 )
 from ..services.jwt_service import JWTService
 from ..routers.users import _convert_single_to_signed_url
@@ -528,10 +535,8 @@ async def list_messages(
     if not _is_participant(thread, current_user.id):
         raise HTTPException(status_code=403, detail="Not allowed")
     other_id = await _ensure_thread_not_blocked(db, thread, current_user.id)
-    base = select(DMMessage).where(
-        DMMessage.thread_id == thread_id,
-        DMMessage.deleted_at.is_(None)
-    )
+    # Include deleted messages but we'll handle them differently in response
+    base = select(DMMessage).where(DMMessage.thread_id == thread_id)
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     stmt = base.order_by(DMMessage.created_at.asc()
                          ).offset(offset).limit(limit)
@@ -563,10 +568,43 @@ async def list_messages(
         if m.sender_id == current_user.id and other_last_read is not None:
             seen = m.created_at <= other_last_read
 
+        # Handle deleted messages - show placeholder
+        is_deleted = m.deleted_at is not None
+        if is_deleted:
+            response_items.append(
+                DMMessageResponse(
+                    id=m.id,
+                    thread_id=m.thread_id,
+                    sender_id=m.sender_id,
+                    text="This message was deleted",
+                    message_type="text",
+                    created_at=m.created_at,
+                    seen=seen,
+                    heart_count=0,  # No interactions on deleted messages
+                    liked_by_me=False,
+                    deleted_at=m.deleted_at,
+                    deleted_by_user_id=getattr(m, 'deleted_by_user_id', None),
+                    is_deleted_placeholder=True,
+                    delivery_status=getattr(m, 'delivery_status', 'sent'),
+                    delivered_at=getattr(m, 'delivered_at', None),
+                )
+            )
+            continue
+
         # Get reply sender name if this is a reply
         reply_sender_name = None
         if m.reply_to_id and m.reply_to:
             reply_sender_name = m.reply_to.sender.name
+
+        # Get forwarded user name if this is a forwarded message
+        forwarded_from_user_name = None
+        if getattr(m, 'forwarded_from_user_id', None) and getattr(m, 'forwarded_from_user', None):
+            forwarded_from_user_name = m.forwarded_from_user.name
+
+        # Calculate delivery status including seen
+        delivery_status = getattr(m, 'delivery_status', 'sent')
+        if delivery_status == 'delivered' and seen:
+            delivery_status = 'seen'
 
         response_items.append(
             DMMessageResponse(
@@ -574,7 +612,12 @@ async def list_messages(
                 thread_id=m.thread_id,
                 sender_id=m.sender_id,
                 text=m.text,
+                message_type=getattr(m, 'message_type', 'text'),
                 created_at=m.created_at,
+                delivery_status=delivery_status,
+                delivered_at=getattr(m, 'delivered_at', None),
+                failed_at=getattr(m, 'failed_at', None),
+                failure_reason=getattr(m, 'failure_reason', None),
                 seen=seen,
                 heart_count=like_counts.get(m.id, 0),
                 liked_by_me=(m.id in liked_by_me_set),
@@ -583,7 +626,22 @@ async def list_messages(
                 reply_to_sender_name=reply_sender_name,
                 photo_urls=m.photo_urls or [],
                 video_urls=m.video_urls or [],
+                voice_urls=getattr(m, 'voice_urls', []) or [],
+                voice_duration=getattr(m, 'voice_duration', None),
+                file_urls=getattr(m, 'file_urls', []) or [],
+                file_names=getattr(m, 'file_names', []) or [],
+                file_sizes=getattr(m, 'file_sizes', []) or [],
                 caption=m.caption,
+                location_latitude=getattr(m, 'location_latitude', None),
+                location_longitude=getattr(m, 'location_longitude', None),
+                location_name=getattr(m, 'location_name', None),
+                location_address=getattr(m, 'location_address', None),
+                expires_at=getattr(m, 'expires_at', None),
+                auto_delete_duration=getattr(m, 'auto_delete_duration', None),
+                forwarded_from_message_id=getattr(m, 'forwarded_from_message_id', None),
+                forwarded_from_user_id=getattr(m, 'forwarded_from_user_id', None),
+                forwarded_from_user_name=forwarded_from_user_name,
+                is_forwarded=getattr(m, 'is_forwarded', False),
             )
         )
     return PaginatedDMMessages(items=response_items, total=total, limit=limit, offset=offset)
@@ -673,15 +731,48 @@ async def send_message(
         else:
             reply_to_text = "[Media message]"
 
+    # Calculate expires_at for disappearing messages
+    expires_at = None
+    if payload.auto_delete_duration:
+        from datetime import timedelta
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=payload.auto_delete_duration)
+
+    # Handle forwarded message
+    forwarded_from_user_id = None
+    if payload.forwarded_from_message_id:
+        # Get the original message to extract the original sender
+        orig_msg_result = await db.execute(
+            select(DMMessage).where(DMMessage.id == payload.forwarded_from_message_id)
+        )
+        orig_msg = orig_msg_result.scalars().first()
+        if orig_msg:
+            forwarded_from_user_id = orig_msg.sender_id
+
     msg = DMMessage(
         thread_id=thread_id,
         sender_id=current_user.id,
         text=payload.text,
+        message_type=payload.message_type,
         reply_to_id=payload.reply_to_id,
         reply_to_text=reply_to_text,
         photo_urls=payload.photo_urls,
         video_urls=payload.video_urls,
-        caption=payload.caption
+        voice_urls=payload.voice_urls,
+        voice_duration=payload.voice_duration,
+        file_urls=payload.file_urls,
+        file_names=payload.file_names,
+        file_sizes=payload.file_sizes,
+        caption=payload.caption,
+        location_latitude=payload.location_latitude,
+        location_longitude=payload.location_longitude,
+        location_name=payload.location_name,
+        location_address=payload.location_address,
+        expires_at=expires_at,
+        auto_delete_duration=payload.auto_delete_duration,
+        forwarded_from_message_id=payload.forwarded_from_message_id,
+        forwarded_from_user_id=forwarded_from_user_id,
+        is_forwarded=bool(payload.forwarded_from_message_id),
+        delivery_status='sent',
     )
     db.add(msg)
     # bump thread updated_at
@@ -894,8 +985,9 @@ async def delete_message(
             detail="You can only delete your own messages"
         )
 
-    # Soft delete the message
+    # Soft delete the message with user info
     message.deleted_at = func.now()
+    message.deleted_by_user_id = current_user.id
     thread.updated_at = func.now()
 
     await db.commit()
@@ -1066,21 +1158,48 @@ async def archive_thread(
     return DMThreadArchiveUpdate(archived=state.archived)
 
 
-@router.put("/threads/{thread_id}/block", response_model=DMThreadBlockUpdate)
-async def block_thread(
-    thread_id: int,
+@router.put("/threads/{user_id}/block", response_model=DMThreadBlockUpdate)
+async def block_user(
+    user_id: int,
     payload: DMThreadBlockUpdate,
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    res = await db.execute(select(DMThread).where(DMThread.id == thread_id))
-    thread = res.scalars().first()
+    """
+    Block or unblock a user completely.
+
+    This endpoint now works with user IDs to block users across all interactions.
+    Uses the same URL structure as before but now expects user IDs instead of thread IDs.
+    """
+    # Validate the other user exists
+    user_res = await db.execute(select(User).where(User.id == user_id))
+    other_user = user_res.scalars().first()
+    if not other_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Cannot block yourself
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot block yourself")
+
+    # Find or create thread between current user and other user
+    a, b = _normalize_pair(current_user.id, user_id)
+    thread_res = await db.execute(select(DMThread).where(DMThread.user_a_id == a, DMThread.user_b_id == b))
+    thread = thread_res.scalars().first()
+
     if not thread:
-        raise HTTPException(status_code=404, detail="Thread not found")
-    if not _is_participant(thread, current_user.id):
-        raise HTTPException(status_code=403, detail="Not allowed")
-    await _ensure_thread_not_blocked(db, thread, current_user.id)
-    state = await _get_or_create_state(db, thread_id, current_user.id)
+        # Create thread if it doesn't exist (for blocking purposes)
+        thread = DMThread(
+            user_a_id=a,
+            user_b_id=b,
+            initiator_id=current_user.id,
+            status="accepted",  # We create as accepted since we're just blocking
+        )
+        db.add(thread)
+        await db.commit()
+        await db.refresh(thread)
+
+    # Create or update the participant state for blocking
+    state = await _get_or_create_state(db, thread.id, current_user.id)
     state.blocked = payload.blocked
     await db.commit()
     return DMThreadBlockUpdate(blocked=state.blocked)
@@ -1405,3 +1524,378 @@ async def get_message_reactions(
         })
 
     return reactions_by_emoji
+
+
+# WhatsApp-like Features
+
+@router.post("/upload/voice", response_model=VoiceMessageUploadResponse)
+async def upload_voice_message(
+    file: UploadFile = File(...),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    """Upload voice messages (audio files)"""
+    # Validate file type
+    allowed_types = ["audio/mpeg", "audio/mp4", "audio/webm", "audio/wav", "audio/ogg"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type {file.content_type} not allowed. Allowed: {', '.join(allowed_types)}"
+        )
+
+    # Validate file size (10MB max for voice messages)
+    max_size = 10 * 1024 * 1024
+    file_content = await file.read()
+    if len(file_content) > max_size:
+        raise HTTPException(
+            status_code=400,
+            detail="Voice message too large. Max size: 10MB"
+        )
+
+    # Generate upload path
+    import uuid
+    file_ext = file.filename.split(".")[-1] if "." in file.filename else "mp3"
+    filename = f"{uuid.uuid4().hex}.{file_ext}"
+    upload_path = f"dm_media/{current_user.id}/voice/{filename}"
+
+    try:
+        # Upload to storage
+        if settings.storage_backend == "s3":
+            file_url = await StorageService.upload_file_from_bytes(
+                file_content,
+                upload_path,
+                content_type=file.content_type
+            )
+        else:
+            # Local storage
+            import os
+            from pathlib import Path
+            media_dir = Path("media") / "dm_media" / str(current_user.id) / "voice"
+            media_dir.mkdir(parents=True, exist_ok=True)
+            file_path = media_dir / filename
+            with open(file_path, "wb") as f:
+                f.write(file_content)
+            file_url = f"/media/dm_media/{current_user.id}/voice/{filename}"
+
+        # Estimate duration (simple approximation based on file size)
+        # This is a rough estimate - in production you'd use audio processing libraries
+        estimated_duration = min(max(len(file_content) // 16000, 1), 300)  # 1-300 seconds
+
+        return VoiceMessageUploadResponse(
+            url=file_url,
+            duration=estimated_duration,
+            file_size=len(file_content)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+
+@router.post("/upload/file", response_model=FileUploadResponse)
+async def upload_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    """Upload files (documents, etc.)"""
+    # Validate file type (documents only)
+    allowed_types = [
+        "application/pdf", "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/plain", "application/zip", "application/x-zip-compressed"
+    ]
+
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type {file.content_type} not allowed for document sharing"
+        )
+
+    # Validate file size (50MB max)
+    max_size = 50 * 1024 * 1024
+    file_content = await file.read()
+    if len(file_content) > max_size:
+        raise HTTPException(
+            status_code=400,
+            detail="File too large. Max size: 50MB"
+        )
+
+    # Generate upload path
+    import uuid
+    file_ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
+    filename = f"{uuid.uuid4().hex}.{file_ext}"
+    upload_path = f"dm_media/{current_user.id}/files/{filename}"
+
+    try:
+        # Upload to storage
+        if settings.storage_backend == "s3":
+            file_url = await StorageService.upload_file_from_bytes(
+                file_content,
+                upload_path,
+                content_type=file.content_type
+            )
+        else:
+            # Local storage
+            import os
+            from pathlib import Path
+            media_dir = Path("media") / "dm_media" / str(current_user.id) / "files"
+            media_dir.mkdir(parents=True, exist_ok=True)
+            file_path = media_dir / filename
+            with open(file_path, "wb") as f:
+                f.write(file_content)
+            file_url = f"/media/dm_media/{current_user.id}/files/{filename}"
+
+        return FileUploadResponse(
+            url=file_url,
+            filename=file.filename or filename,
+            file_size=len(file_content),
+            content_type=file.content_type
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+
+@router.post("/threads/{thread_id}/forward", response_model=dict)
+async def forward_messages(
+    thread_id: int,
+    payload: MessageForwardRequest,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Forward a message to multiple threads"""
+    # Verify source message exists and user has access
+    source_msg_result = await db.execute(
+        select(DMMessage).where(DMMessage.id == payload.message_id)
+    )
+    source_msg = source_msg_result.scalars().first()
+    if not source_msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # Verify user is participant in source thread
+    source_thread_result = await db.execute(
+        select(DMThread).where(DMThread.id == source_msg.thread_id)
+    )
+    source_thread = source_thread_result.scalars().first()
+    if not source_thread or not _is_participant(source_thread, current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied to source message")
+
+    forwarded_count = 0
+    failed_threads = []
+
+    for target_thread_id in payload.target_thread_ids:
+        try:
+            # Verify target thread exists and user is participant
+            target_thread_result = await db.execute(
+                select(DMThread).where(DMThread.id == target_thread_id)
+            )
+            target_thread = target_thread_result.scalars().first()
+            if not target_thread or not _is_participant(target_thread, current_user.id):
+                failed_threads.append(target_thread_id)
+                continue
+
+            # Check for blocks
+            other_id = target_thread.user_a_id if target_thread.user_b_id == current_user.id else target_thread.user_b_id
+            if await has_block_between(db, current_user.id, other_id):
+                failed_threads.append(target_thread_id)
+                continue
+
+            # Create forwarded message
+            forwarded_msg = DMMessage(
+                thread_id=target_thread_id,
+                sender_id=current_user.id,
+                text=source_msg.text,
+                message_type=source_msg.message_type or 'text',
+                photo_urls=source_msg.photo_urls or [],
+                video_urls=source_msg.video_urls or [],
+                voice_urls=getattr(source_msg, 'voice_urls', []) or [],
+                voice_duration=getattr(source_msg, 'voice_duration', None),
+                file_urls=getattr(source_msg, 'file_urls', []) or [],
+                file_names=getattr(source_msg, 'file_names', []) or [],
+                file_sizes=getattr(source_msg, 'file_sizes', []) or [],
+                caption=source_msg.caption,
+                location_latitude=getattr(source_msg, 'location_latitude', None),
+                location_longitude=getattr(source_msg, 'location_longitude', None),
+                location_name=getattr(source_msg, 'location_name', None),
+                location_address=getattr(source_msg, 'location_address', None),
+                forwarded_from_message_id=source_msg.id,
+                forwarded_from_user_id=source_msg.sender_id,
+                is_forwarded=True,
+                delivery_status='sent',
+            )
+            db.add(forwarded_msg)
+            forwarded_count += 1
+
+        except Exception:
+            failed_threads.append(target_thread_id)
+
+    await db.commit()
+
+    return {
+        "forwarded_count": forwarded_count,
+        "failed_threads": failed_threads,
+        "total_requested": len(payload.target_thread_ids)
+    }
+
+
+@router.get("/threads/{thread_id}/search", response_model=MessageSearchResponse)
+async def search_messages(
+    thread_id: int,
+    query: str = Query(..., min_length=1, max_length=100),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Search messages within a conversation"""
+    # Verify thread access
+    thread_result = await db.execute(select(DMThread).where(DMThread.id == thread_id))
+    thread = thread_result.scalars().first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if not _is_participant(thread, current_user.id):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
+
+    # Search messages (excluding deleted ones)
+    search_query = f"%{query}%"
+    base_query = (
+        select(DMMessage, User.name.label("sender_name"))
+        .join(User, DMMessage.sender_id == User.id)
+        .where(
+            DMMessage.thread_id == thread_id,
+            DMMessage.text.ilike(search_query),
+            DMMessage.deleted_at.is_(None)
+        )
+    )
+
+    # Get total count
+    total_query = select(func.count()).select_from(base_query.subquery())
+    total = (await db.execute(total_query)).scalar_one()
+
+    # Get results with pagination
+    results_query = base_query.order_by(
+        DMMessage.created_at.desc()
+    ).offset(offset).limit(limit)
+
+    results = (await db.execute(results_query)).all()
+
+    # Format results
+    search_results = []
+    for message, sender_name in results:
+        # Create preview with highlighted match
+        text = message.text
+        query_lower = query.lower()
+        text_lower = text.lower()
+
+        if query_lower in text_lower:
+            start_idx = text_lower.find(query_lower)
+            preview_start = max(0, start_idx - 20)
+            preview_end = min(len(text), start_idx + len(query) + 20)
+            match_preview = text[preview_start:preview_end]
+            if preview_start > 0:
+                match_preview = "..." + match_preview
+            if preview_end < len(text):
+                match_preview = match_preview + "..."
+        else:
+            match_preview = text[:60] + ("..." if len(text) > 60 else "")
+
+        search_results.append({
+            "message_id": message.id,
+            "thread_id": message.thread_id,
+            "sender_id": message.sender_id,
+            "sender_name": sender_name,
+            "text": text,
+            "created_at": message.created_at,
+            "match_preview": match_preview
+        })
+
+    return MessageSearchResponse(
+        results=search_results,
+        total=total,
+        limit=limit,
+        offset=offset
+    )
+
+
+@router.put("/messages/{message_id}/delivery-status", status_code=status.HTTP_204_NO_CONTENT)
+async def update_delivery_status(
+    message_id: int,
+    payload: DeliveryStatusUpdate,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update message delivery status (for system use)"""
+    # Find the message
+    message_result = await db.execute(
+        select(DMMessage).where(DMMessage.id == message_id)
+    )
+    message = message_result.scalars().first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # Verify the current user sent this message
+    if message.sender_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Can only update status of your own messages")
+
+    # Update delivery status
+    if payload.status == "delivered":
+        message.delivery_status = "delivered"
+        message.delivered_at = func.now()
+    elif payload.status == "failed":
+        message.delivery_status = "failed"
+        message.failed_at = func.now()
+        message.failure_reason = payload.failure_reason
+
+    await db.commit()
+
+
+@router.post("/threads/{thread_id}/share-location", response_model=DMMessageResponse)
+async def share_location(
+    thread_id: int,
+    payload: LocationShareRequest,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Share location in a DM thread"""
+    # Verify thread access
+    thread_result = await db.execute(select(DMThread).where(DMThread.id == thread_id))
+    thread = thread_result.scalars().first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if not _is_participant(thread, current_user.id):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    if thread.status != "accepted":
+        raise HTTPException(status_code=400, detail="Thread not accepted")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
+
+    # Create location message
+    location_msg = DMMessage(
+        thread_id=thread_id,
+        sender_id=current_user.id,
+        text=f"📍 {payload.name or 'Location'}" if payload.name else "📍 Location",
+        message_type="location",
+        location_latitude=payload.latitude,
+        location_longitude=payload.longitude,
+        location_name=payload.name,
+        location_address=payload.address,
+        delivery_status='sent',
+    )
+    db.add(location_msg)
+
+    # Update thread timestamp
+    thread.updated_at = func.now()
+    await db.commit()
+    await db.refresh(location_msg)
+
+    return DMMessageResponse(
+        id=location_msg.id,
+        thread_id=location_msg.thread_id,
+        sender_id=location_msg.sender_id,
+        text=location_msg.text,
+        message_type="location",
+        created_at=location_msg.created_at,
+        delivery_status='sent',
+        location_latitude=location_msg.location_latitude,
+        location_longitude=location_msg.location_longitude,
+        location_name=location_msg.location_name,
+        location_address=location_msg.location_address,
+    )

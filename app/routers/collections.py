@@ -5,7 +5,12 @@ from sqlalchemy import select, func, desc
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
-from ..models import User, UserCollection, UserCollectionPlace, Place, CheckIn, CheckInPhoto, Photo
+from ..services.collection_sync import (
+    ensure_saved_place_entry,
+    remove_saved_place_membership,
+    sync_saved_place_membership,
+)
+from ..models import User, UserCollection, UserCollectionPlace, Place, CheckIn, CheckInPhoto, Photo, SavedPlace
 from ..schemas import (
     CollectionCreate,
     CollectionResponse,
@@ -335,16 +340,33 @@ async def add_place_to_collection(
         raise HTTPException(
             status_code=400, detail="Place already in collection")
 
-    # Add place to collection
-    collection_place = UserCollectionPlace(
-        collection_id=collection_id,
-        place_id=place_id
-    )
-    db.add(collection_place)
-    await db.commit()
-    await db.refresh(collection_place)
+    saved_place = await ensure_saved_place_entry(
+        db, current_user.id, place_id, collection.name)
+    await db.flush()
 
-    return {"message": "Place added to collection", "id": collection_place.id}
+    association_res = await db.execute(
+        select(UserCollectionPlace).where(
+            UserCollectionPlace.collection_id == collection_id,
+            UserCollectionPlace.place_id == place_id
+        )
+    )
+    association = association_res.scalar_one_or_none()
+    if association is None:
+        association = await sync_saved_place_membership(db, saved_place)
+    if association is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to persist collection membership",
+        )
+
+    await db.commit()
+    await db.refresh(saved_place)
+    await db.refresh(association)
+
+    return {
+        "message": "Place added to collection",
+        "id": association.id,
+    }
 
 
 @router.delete("/{collection_id}/places/{place_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -387,7 +409,22 @@ async def remove_place_from_collection(
         raise HTTPException(
             status_code=404, detail="Place not found in collection")
 
-    await db.delete(collection_place)
+    saved_lookup = await db.execute(
+        select(SavedPlace).where(
+            SavedPlace.user_id == current_user.id,
+            SavedPlace.place_id == place_id,
+        )
+    )
+    saved_place = saved_lookup.scalar_one_or_none()
+
+    if saved_place:
+        await remove_saved_place_membership(
+            db, current_user.id, place_id, saved_place.list_name)
+        await db.delete(saved_place)
+    else:
+        await remove_saved_place_membership(
+            db, current_user.id, place_id, collection.name)
+
     await db.commit()
 
 

@@ -43,6 +43,12 @@ from ..schemas import (
     PlaceChatPrivateReply,
 )
 from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto, ExternalSearchSnapshot
+from ..services.collection_sync import (
+    ensure_saved_place_entry,
+    normalize_collection_name,
+    remove_saved_place_membership,
+    sync_saved_place_membership,
+)
 from ..dependencies import get_current_admin_user
 from ..database import get_db
 from datetime import datetime, timedelta, timezone
@@ -1136,7 +1142,8 @@ async def get_trending_places(
     logging.info(f"Reverse geocoding result: {geo}")
     inferred_city = city or geo.get("city")
     inferred_neighborhood = geo.get("neighborhood")
-    logging.info(f"Inferred city: {inferred_city}, neighborhood: {inferred_neighborhood}")
+    logging.info(
+        f"Inferred city: {inferred_city}, neighborhood: {inferred_neighborhood}")
 
     # FSQ override: use Foursquare-based trending by inferred city if enabled
     from ..config import settings as app_settings
@@ -1203,10 +1210,12 @@ async def get_trending_places(
     window_start = now - time_windows[time_window]
 
     if not inferred_city:
-        logging.warning(f"Could not infer city from coordinates: lat={lat}, lng={lng}, geo={geo}")
+        logging.warning(
+            f"Could not infer city from coordinates: lat={lat}, lng={lng}, geo={geo}")
         # Try to use Foursquare directly with coordinates if city inference fails
         if app_settings.fsq_trending_override:
-            logging.info("Using Foursquare trending with coordinates as fallback")
+            logging.info(
+                "Using Foursquare trending with coordinates as fallback")
             fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
             now_ts = datetime.now(timezone.utc)
             items = []
@@ -1216,7 +1225,8 @@ async def get_trending_places(
                 photos = md.get("photos") or []
                 if photos and isinstance(photos, list):
                     first = photos[0]
-                    photo_url = first if isinstance(first, str) else first.get("url")
+                    photo_url = first if isinstance(
+                        first, str) else first.get("url")
                 items.append(
                     PlaceResponse(
                         id=-(idx + 1),
@@ -3009,24 +3019,30 @@ async def save_place(
     )
     saved = existing.scalars().first()
     if saved:
-        # Optionally update list name if provided
-        if payload.list_name is not None and payload.list_name != saved.list_name:
-            saved.list_name = payload.list_name
-            await db.commit()
-            await db.refresh(saved)
+        previous_name = saved.list_name
+        if payload.list_name is not None:
+            saved.list_name = normalize_collection_name(payload.list_name)
+        else:
+            saved.list_name = normalize_collection_name(saved.list_name)
+
+        await db.flush()
+        await sync_saved_place_membership(db, saved, previous_name)
+        await db.commit()
+        await db.refresh(saved)
         return saved
 
-    # Default collection name when not provided
-    default_collection = payload.list_name or "Favorites"
+    collection_name = normalize_collection_name(payload.list_name)
 
     saved_new = SavedPlace(
         user_id=current_user.id,
         place_id=payload.place_id,
-        list_name=default_collection,
+        list_name=collection_name,
     )
     db.add(saved_new)
-    await db.commit()
+    await db.flush()
     await db.refresh(saved_new)
+    await sync_saved_place_membership(db, saved_new)
+    await db.commit()
     return saved_new
 
 
@@ -3222,6 +3238,8 @@ async def unsave_place(
     saved = res.scalars().first()
     if not saved:
         raise HTTPException(status_code=404, detail="Saved place not found")
+    await remove_saved_place_membership(
+        db, current_user.id, place_id, saved.list_name)
     await db.delete(saved)
     await db.commit()
     return None
