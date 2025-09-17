@@ -62,6 +62,12 @@ variable "ecr_image_tag" {
   default     = "latest"
 }
 
+variable "ecr_image_digest" {
+  type        = string
+  description = "If set, pin ECS image to this digest (e.g., sha256:abcd...). Overrides ecr_image_tag."
+  default     = ""
+}
+
 variable "domain_name" {
   type        = string
   description = "Root domain (optional). If set, ACM + Route53 records will be created."
@@ -80,4 +86,15 @@ variable "certificate_arn" {
   default     = ""
 }
 
+variable "github_repository" {
+  type        = string
+  description = "GitHub repository in format 'owner/repo'"
+  default     = "ziyad00/circles"
+}
+
+variable "github_branch" {
+  type        = string
+  description = "GitHub branch to track for CI/CD"
+  default     = "main"
+}
 
