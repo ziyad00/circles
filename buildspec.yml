@@ -4,61 +4,36 @@ phases:
   pre_build:
     commands:
       - echo Logging in to Amazon ECR...
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-      - REPOSITORY_URI=$ECR_REPOSITORY_URI
-      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
-      - IMAGE_TAG=${COMMIT_HASH:=latest}
-      - echo Build started on `date`
-      - echo Building the Docker image...
+      - aws --version
+      - ACCOUNT_URI=$(echo "$ECR_REPOSITORY_URI" | cut -d/ -f1)
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ACCOUNT_URI"
+      - IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION:-latest}
+      - echo Using image tag $IMAGE_TAG
+      - yum -y install jq >/dev/null 2>&1 || true
   build:
     commands:
-      - docker build -t $REPOSITORY_URI:latest .
-      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+      - echo Build and push image $ECR_REPOSITORY_URI:$IMAGE_TAG
+      - docker build --platform linux/amd64 -t "$ECR_REPOSITORY_URI:$IMAGE_TAG" .
+      - docker push "$ECR_REPOSITORY_URI:$IMAGE_TAG"
+      - docker tag "$ECR_REPOSITORY_URI:$IMAGE_TAG" "$ECR_REPOSITORY_URI:latest"
+      - docker push "$ECR_REPOSITORY_URI:latest"
   post_build:
     commands:
-      - echo Build completed on `date`
-      - echo Pushing the Docker images...
-      - docker push $REPOSITORY_URI:latest
-      - docker push $REPOSITORY_URI:$IMAGE_TAG
-      - echo Writing image definitions file...
-      - printf '[{"name":"app","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
-      - echo Updating ECS service...
-      - |
-        # Get current task definition
-        aws ecs describe-task-definition --task-definition $ECS_TASK_DEFINITION --query taskDefinition > task-definition.json
-
-        # Clean up the task definition (remove fields not needed for registration)
-        python3 << 'EOF'
-        import json
-        import sys
-        import os
-
-        # Read the task definition
-        with open('task-definition.json', 'r') as f:
-            task_def = json.load(f)
-
-        # Remove fields that are not needed for registration
-        for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'placementConstraints', 'compatibilities', 'registeredAt', 'registeredBy']:
-            task_def.pop(key, None)
-
-        # Update the image
-        image_uri = os.environ['ECR_REPOSITORY_URI'] + ':' + os.environ['IMAGE_TAG']
-        task_def['containerDefinitions'][0]['image'] = image_uri
-
-        # Write back
-        with open('task-definition.json', 'w') as f:
-            json.dump(task_def, f, indent=2)
-        EOF
-
-        # Register new task definition
-        NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://task-definition.json --query 'taskDefinition.taskDefinitionArn' --output text)
-
-        # Update the service
-        aws ecs update-service --cluster $ECS_CLUSTER_NAME --service $ECS_SERVICE_NAME --task-definition $NEW_TASK_DEF_ARN
-
-        echo "ECS service updated with new task definition: $NEW_TASK_DEF_ARN"
-
+      - echo Resolving image digest from ECR...
+      - REPO_NAME=$(echo "$ECR_REPOSITORY_URI" | awk -F/ '{print $NF}')
+      - IMAGE_DIGEST=$(aws ecr describe-images --repository-name "$REPO_NAME" --image-ids imageTag="$IMAGE_TAG" --query 'imageDetails[0].imageDigest' --output text --region "$AWS_DEFAULT_REGION")
+      - echo Digest is $IMAGE_DIGEST
+      - echo Fetching current task definition $ECS_TASK_DEFINITION
+      - TD_JSON=$(aws ecs describe-task-definition --task-definition "$ECS_TASK_DEFINITION" --query 'taskDefinition' --output json)
+      - echo Patching container image to $ECR_REPOSITORY_URI@$IMAGE_DIGEST
+      - NEW_TD=$(echo "$TD_JSON" | jq --arg IMG "$ECR_REPOSITORY_URI@$IMAGE_DIGEST" '.containerDefinitions |= map(.image=$IMG) | del(.revision,.taskDefinitionArn,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+      - echo Registering new task definition revision...
+      - NEW_TD_ARN=$(aws ecs register-task-definition --cli-input-json "$NEW_TD" --query 'taskDefinition.taskDefinitionArn' --output text)
+      - echo Updating service $ECS_SERVICE_NAME on cluster $ECS_CLUSTER_NAME to $NEW_TD_ARN
+      - aws ecs update-service --cluster "$ECS_CLUSTER_NAME" --service "$ECS_SERVICE_NAME" --task-definition "$NEW_TD_ARN"
+      - echo Waiting for service stability...
+      - aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services "$ECS_SERVICE_NAME"
 artifacts:
   files:
-    - imagedefinitions.json
-    - task-definition.json
+    - "**/*"
+  discard-paths: yes

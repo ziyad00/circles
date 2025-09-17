@@ -113,7 +113,8 @@ async def open_or_get_thread(
     thread = res.scalars().first()
 
     if thread and await has_block_between(db, current_user.id, other.id):
-        raise HTTPException(status_code=403, detail="This conversation is blocked")
+        raise HTTPException(
+            status_code=403, detail="This conversation is blocked")
 
     if not thread:
         thread = DMThread(

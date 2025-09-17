@@ -248,10 +248,15 @@ resource "aws_ecs_task_definition" "app" {
   execution_role_arn       = aws_iam_role.ecs_task.arn
   task_role_arn            = aws_iam_role.ecs_task.arn
 
+  runtime_platform {
+    cpu_architecture        = "X86_64"
+    operating_system_family = "LINUX"
+  }
+
   container_definitions = jsonencode([
     {
       name      = "app"
-      image     = "${aws_ecr_repository.app.repository_url}:${var.ecr_image_tag}"
+      image     = var.ecr_image_digest != "" ? "${aws_ecr_repository.app.repository_url}@${var.ecr_image_digest}" : "${aws_ecr_repository.app.repository_url}:${var.ecr_image_tag}"
       essential = true
       portMappings = [{ containerPort = 8000, hostPort = 8000, protocol = "tcp" }]
       environment = [

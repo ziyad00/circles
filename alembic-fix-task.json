@@ -1,0 +1,36 @@
+{
+  "family": "circles-alembic-fix",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
+  "taskRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
+  "containerDefinitions": [
+    {
+      "name": "alembic-fix",
+      "image": "704845220483.dkr.ecr.us-east-1.amazonaws.com/circles-app:latest",
+      "essential": true,
+      "environment": [
+        { "name": "APP_DEBUG", "value": "true" },
+        { "name": "APP_USE_POSTGIS", "value": "true" }
+      ],
+      "secrets": [
+        { "name": "APP_DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_DATABASE_URL::" }
+      ],
+      "command": [
+        "sh", 
+        "-c", 
+        "./.venv/bin/python -c \"import psycopg; import os; conn = psycopg.connect(os.environ['APP_DATABASE_URL'].replace('asyncpg', 'psycopg')); cur = conn.cursor(); cur.execute('SELECT * FROM alembic_version'); print('Current version:', cur.fetchall()); cur.execute(\\\"INSERT INTO alembic_version (version_num) VALUES ('499278ad9251') ON CONFLICT (version_num) DO NOTHING\\\"); conn.commit(); print('Fixed alembic version'); conn.close()\""
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/circles",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "alembic-fix"
+        }
+      }
+    }
+  ]
+}

@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, text, or_, and_, literal
 import httpx
 import logging
+from math import cos, radians
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -121,6 +122,60 @@ router = APIRouter(
         500: {"description": "Internal server error"}
     }
 )
+
+
+async def _nearby_places_python_fallback(
+    db: AsyncSession,
+    lat: float,
+    lng: float,
+    radius_m: int,
+    limit: int,
+    offset: int,
+) -> PaginatedPlaces:
+    """Fallback nearby query for databases without PostGIS/math functions."""
+    lat_buffer = radius_m / 111_320
+    cos_lat = cos(radians(lat))
+    # Avoid division by zero near the poles
+    if abs(cos_lat) < 1e-6:
+        lon_buffer = 180
+    else:
+        lon_buffer = radius_m / (111_320 * abs(cos_lat))
+
+    min_lat = max(lat - lat_buffer, -90)
+    max_lat = min(lat + lat_buffer, 90)
+    min_lng = lng - lon_buffer
+    max_lng = lng + lon_buffer
+
+    stmt = select(Place).where(
+        Place.latitude.is_not(None),
+        Place.longitude.is_not(None),
+        Place.latitude >= min_lat,
+        Place.latitude <= max_lat,
+    )
+
+    # Only apply longitude bounds when we are not spanning the entire globe
+    if lon_buffer < 180:
+        min_lng = max(min_lng, -180)
+        max_lng = min(max_lng, 180)
+        stmt = stmt.where(Place.longitude >= min_lng, Place.longitude <= max_lng)
+
+    candidates = (await db.execute(stmt)).scalars().all()
+
+    within_radius: list[tuple[float, Place]] = []
+    for place in candidates:
+        if place.latitude is None or place.longitude is None:
+            continue
+        distance_m = haversine_distance(lat, lng, place.latitude, place.longitude) * 1000
+        if distance_m <= radius_m:
+            within_radius.append((distance_m, place))
+
+    within_radius.sort(key=lambda item: item[0])
+
+    total = len(within_radius)
+    sliced = within_radius[offset: offset + limit]
+    items = [place for _, place in sliced]
+
+    return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/lookups/countries", response_model=list[str])
@@ -1365,67 +1420,7 @@ async def nearby_places(
         except Exception as e:
             logging.warning(
                 f"PostGIS nearby failed, falling back to haversine: {e}")
-            # Haversine fallback
-            lat_rad = func.radians(lat)
-            lng_rad = func.radians(lng)
-            place_lat = func.radians(Place.latitude)
-            place_lng = func.radians(Place.longitude)
-            arg = (
-                func.cos(lat_rad) * func.cos(place_lat) *
-                func.cos(place_lng - lng_rad)
-                + func.sin(lat_rad) * func.sin(place_lat)
-            )
-            arg_clamped = func.greatest(-1.0, func.least(1.0, arg))
-            distance_m = 6371000 * func.acos(arg_clamped)
-
-            total_q = (
-                select(func.count(Place.id))
-                .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
-                .where(distance_m <= radius_m)
-            )
-            total = (await db.execute(total_q)).scalar_one()
-
-            stmt = (
-                select(Place)
-                .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
-                .where(distance_m <= radius_m)
-                .order_by(distance_m.asc())
-                .offset(offset)
-                .limit(limit)
-            )
-            items = (await db.execute(stmt)).scalars().all()
-            return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
-    else:
-        # Haversine fallback
-        lat_rad = func.radians(lat)
-        lng_rad = func.radians(lng)
-        place_lat = func.radians(Place.latitude)
-        place_lng = func.radians(Place.longitude)
-        arg = (
-            func.cos(lat_rad) * func.cos(place_lat) *
-            func.cos(place_lng - lng_rad)
-            + func.sin(lat_rad) * func.sin(place_lat)
-        )
-        arg_clamped = func.greatest(-1.0, func.least(1.0, arg))
-        distance_m = 6371000 * func.acos(arg_clamped)
-
-        total_q = (
-            select(func.count(Place.id))
-            .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
-            .where(distance_m <= radius_m)
-        )
-        total = (await db.execute(total_q)).scalar_one()
-
-        stmt = (
-            select(Place)
-            .where(Place.latitude.is_not(None), Place.longitude.is_not(None))
-            .where(distance_m <= radius_m)
-            .order_by(distance_m.asc())
-            .offset(offset)
-            .limit(limit)
-        )
-        items = (await db.execute(stmt)).scalars().all()
-        return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+    return await _nearby_places_python_fallback(db, lat, lng, radius_m, limit, offset)
 
 
 @router.get("/{place_id}", response_model=EnhancedPlaceResponse)
