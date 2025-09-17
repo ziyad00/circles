@@ -435,6 +435,10 @@ class DMRequestCreate(BaseModel):
     text: str = Field(..., min_length=1, max_length=2000)
 
 
+class DMOpenCreate(BaseModel):
+    other_user_id: int
+
+
 class DMRequestDecision(BaseModel):
     status: DMThreadStatus = Field(..., examples=[DMThreadStatus.accepted])
 

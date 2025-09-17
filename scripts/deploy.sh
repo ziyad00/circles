@@ -41,7 +41,7 @@ NEW_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}@${IMAGE_DIGEST}"
 
 echo "📋 Updating ECS task definition..."
 # Download current task definition
-aws ecs describe-task-definition --task-definition ${ECS_TASK_DEFINITION} --query taskDefinition > task-definition.json
+aws ecs describe-task-definition --task-definition ${ECS_TASK_DEFINITION} --region ${AWS_REGION} --query taskDefinition > task-definition.json
 
 # Update the image in task definition
 python3 << EOF
@@ -66,15 +66,15 @@ EOF
 
 # Register new task definition
 echo "📝 Registering new task definition..."
-NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://task-definition.json --query 'taskDefinition.taskDefinitionArn' --output text)
+NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://task-definition.json --region ${AWS_REGION} --query 'taskDefinition.taskDefinitionArn' --output text)
 
 # Update the service
 echo "🔄 Updating ECS service..."
-aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --task-definition ${NEW_TASK_DEF_ARN}
+aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --task-definition ${NEW_TASK_DEF_ARN} --region ${AWS_REGION}
 
 # Wait for deployment to complete
 echo "⏳ Waiting for service to stabilize..."
-aws ecs wait services-stable --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE}
+aws ecs wait services-stable --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --region ${AWS_REGION}
 
 # Clean up
 rm -f task-definition.json

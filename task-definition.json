@@ -1,0 +1,111 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "704845220483.dkr.ecr.us-east-1.amazonaws.com/circles-app@sha256:1bc9d7bc41573b902bd4756bcb61820551ff13aaae9dccef4d39c7012968e74f",
+      "cpu": 0,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": true,
+      "command": [
+        "sh",
+        "-c",
+        "./.venv/bin/python -m alembic upgrade heads && ./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      ],
+      "environment": [
+        {
+          "name": "S3_BUCKET",
+          "value": "circles-media-259c"
+        },
+        {
+          "name": "APP_S3_BUCKET",
+          "value": "circles-media-259c"
+        },
+        {
+          "name": "S3_REGION",
+          "value": "us-east-1"
+        },
+        {
+          "name": "APP_FSQ_TRENDING_OVERRIDE",
+          "value": "false"
+        },
+        {
+          "name": "APP_USE_POSTGIS",
+          "value": "true"
+        },
+        {
+          "name": "APP_JWT_EXPIRY_MINUTES",
+          "value": "20160"
+        },
+        {
+          "name": "APP_FSQ_TRENDING_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "APP_STORAGE_BACKEND",
+          "value": "s3"
+        },
+        {
+          "name": "APP_CHECKIN_MAX_DISTANCE_METERS",
+          "value": "1000"
+        },
+        {
+          "name": "APP_S3_REGION",
+          "value": "us-east-1"
+        },
+        {
+          "name": "APP_DEBUG",
+          "value": "true"
+        }
+      ],
+      "mountPoints": [],
+      "volumesFrom": [],
+      "secrets": [
+        {
+          "name": "APP_JWT_SECRET_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_JWT_SECRET_KEY::"
+        },
+        {
+          "name": "APP_OTP_SECRET_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_OTP_SECRET_KEY::"
+        },
+        {
+          "name": "APP_METRICS_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_METRICS_TOKEN::"
+        },
+        {
+          "name": "APP_DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_DATABASE_URL::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/circles",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "app"
+        }
+      },
+      "systemControls": []
+    }
+  ],
+  "family": "circles-task",
+  "taskRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
+  "executionRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
+  "networkMode": "awsvpc",
+  "volumes": [],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "512",
+  "memory": "1024"
+}
