@@ -351,6 +351,7 @@ class CheckInPhotoResponse(BaseModel):
 class CheckInCommentCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=1000,
                          description="Comment content")
+    reply_to_id: Optional[int] = Field(None, description="ID of the comment being replied to")
 
 
 class CheckInCommentResponse(BaseModel):
@@ -362,6 +363,11 @@ class CheckInCommentResponse(BaseModel):
     content: str
     created_at: datetime
     updated_at: datetime
+    # Reply functionality
+    reply_to_id: Optional[int] = None
+    reply_to_text: Optional[str] = None
+    reply_to_user_name: Optional[str] = None
+    replies: list["CheckInCommentResponse"] = []
     model_config = ConfigDict(from_attributes=True)
 
 

@@ -19,6 +19,31 @@ from ..utils import can_view_checkin
 from ..services.storage import StorageService
 
 
+def _organize_comments_threaded(comments: list[CheckInCommentResponse]) -> list[CheckInCommentResponse]:
+    """Organize flat comment list into threaded structure"""
+    # Create a map for quick lookup
+    comment_map = {comment.id: comment for comment in comments}
+
+    # Separate top-level comments and replies
+    top_level = []
+
+    for comment in comments:
+        if comment.reply_to_id is None:
+            # This is a top-level comment
+            top_level.append(comment)
+        else:
+            # This is a reply, add it to parent's replies list
+            parent = comment_map.get(comment.reply_to_id)
+            if parent:
+                parent.replies.append(comment)
+
+    # Sort replies by creation time
+    for comment in top_level:
+        comment.replies.sort(key=lambda x: x.created_at)
+
+    return top_level
+
+
 def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
     """
     Convert a single S3 key or S3 URL to signed URL for secure access.
@@ -173,6 +198,7 @@ async def get_check_in_comments(
     check_in_id: int,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    threaded: bool = Query(False, description="Return comments in threaded format"),
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -191,10 +217,11 @@ async def get_check_in_comments(
         raise HTTPException(
             status_code=403, detail="You don't have permission to view this check-in")
 
-    # Get comments with user info
+    # Get comments with user info and reply relationships
     stmt = (
         select(CheckInComment)
         .options(selectinload(CheckInComment.user))
+        .options(selectinload(CheckInComment.reply_to).selectinload(CheckInComment.user))
         .where(CheckInComment.check_in_id == check_in_id)
         .order_by(CheckInComment.created_at.asc())
         .offset(offset)
@@ -209,7 +236,8 @@ async def get_check_in_comments(
     total = await db.scalar(count_stmt)
     comments = (await db.execute(stmt)).scalars().all()
 
-    items = [
+    # Convert comments to response objects
+    comment_responses = [
         CheckInCommentResponse(
             id=comment.id,
             check_in_id=comment.check_in_id,
@@ -220,9 +248,19 @@ async def get_check_in_comments(
             content=comment.content,
             created_at=comment.created_at,
             updated_at=comment.updated_at,
+            reply_to_id=comment.reply_to_id,
+            reply_to_text=comment.reply_to_text,
+            reply_to_user_name=comment.reply_to.user.name if comment.reply_to else None,
+            replies=[],
         )
         for comment in comments
     ]
+
+    # If threaded view is requested, organize into threads
+    if threaded:
+        items = _organize_comments_threaded(comment_responses)
+    else:
+        items = comment_responses
 
     return PaginatedCheckInComments(items=items, total=total, limit=limit, offset=offset)
 
@@ -249,16 +287,44 @@ async def add_check_in_comment(
         raise HTTPException(
             status_code=403, detail="You don't have permission to comment on this check-in")
 
+    # Validate reply_to_id if provided
+    reply_to_text = None
+    if comment_data.reply_to_id:
+        reply_comment_result = await db.execute(
+            select(CheckInComment)
+            .options(selectinload(CheckInComment.user))
+            .where(
+                CheckInComment.id == comment_data.reply_to_id,
+                CheckInComment.check_in_id == check_in_id
+            )
+        )
+        reply_comment = reply_comment_result.scalar_one_or_none()
+        if not reply_comment:
+            raise HTTPException(
+                status_code=404,
+                detail="Reply target comment not found or doesn't belong to this check-in"
+            )
+        # Store quoted text for reply context
+        reply_to_text = reply_comment.content[:200] + ("..." if len(reply_comment.content) > 200 else "")
+
     # Create comment
     comment = CheckInComment(
         check_in_id=check_in_id,
         user_id=current_user.id,
         content=comment_data.content,
+        reply_to_id=comment_data.reply_to_id,
+        reply_to_text=reply_to_text,
     )
 
     db.add(comment)
     await db.commit()
-    await db.refresh(comment, ['user'])
+    await db.refresh(comment, ['user', 'reply_to'])
+
+    # Get reply_to_user_name if this is a reply
+    reply_to_user_name = None
+    if comment.reply_to:
+        await db.refresh(comment.reply_to, ['user'])
+        reply_to_user_name = comment.reply_to.user.name or f"User {comment.reply_to.user.id}"
 
     return CheckInCommentResponse(
         id=comment.id,
@@ -269,6 +335,10 @@ async def add_check_in_comment(
         content=comment.content,
         created_at=comment.created_at,
         updated_at=comment.updated_at,
+        reply_to_id=comment.reply_to_id,
+        reply_to_text=comment.reply_to_text,
+        reply_to_user_name=reply_to_user_name,
+        replies=[],
     )
 
 
