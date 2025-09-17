@@ -186,14 +186,31 @@ async def get_user_profile(
     current_user: User = Depends(JWTService.get_current_user_optional),
     db: AsyncSession = Depends(get_db)
 ):
-    res = await db.execute(select(User).where(User.id == user_id))
-    user = res.scalars().first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Add logging for debugging
+    import logging
+    logging.info(f"Getting user profile for user_id: {user_id}")
 
-    if current_user and current_user.id != user.id:
-        if await has_block_between(db, current_user.id, user.id):
+    try:
+        res = await db.execute(select(User).where(User.id == user_id))
+        user = res.scalars().first()
+
+        if not user:
+            logging.warning(f"User with ID {user_id} not found in database")
             raise HTTPException(status_code=404, detail="User not found")
+
+        logging.info(f"Found user: {user.id}, name: {user.name}")
+
+        # Check for blocks only if there's a current user and it's not the same user
+        if current_user and current_user.id != user.id:
+            logging.info(f"Checking blocks between current_user {current_user.id} and target user {user.id}")
+            if await has_block_between(db, current_user.id, user.id):
+                logging.warning(f"Block exists between users {current_user.id} and {user.id}")
+                raise HTTPException(status_code=404, detail="User not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Unexpected error in get_user_profile: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     followers_count = await db.scalar(
         select(func.count()).where(Follow.followee_id == user.id)
@@ -242,13 +259,16 @@ async def update_me(
     db: AsyncSession = Depends(get_db),
 ):
     import logging
-    logging.info(f"User {current_user.id} updating profile: name={payload.name}, bio={payload.bio}")
-    
+    logging.info(
+        f"User {current_user.id} updating profile: name={payload.name}, bio={payload.bio}")
+
     # Check if user is verified
     if not current_user.is_verified:
-        logging.warning(f"User {current_user.id} is not verified, blocking profile update")
-        raise HTTPException(status_code=403, detail="Account must be verified to update profile")
-    
+        logging.warning(
+            f"User {current_user.id} is not verified, blocking profile update")
+        raise HTTPException(
+            status_code=403, detail="Account must be verified to update profile")
+
     try:
         if payload.name is not None:
             current_user.name = payload.name
@@ -270,7 +290,8 @@ async def update_me(
                 )
 
         await db.commit()
-        logging.info(f"Successfully committed changes for user {current_user.id}")
+        logging.info(
+            f"Successfully committed changes for user {current_user.id}")
         await db.refresh(current_user)
         logging.info(f"Successfully refreshed user {current_user.id}")
 
@@ -282,7 +303,8 @@ async def update_me(
             bio=current_user.bio,
             avatar_url=_convert_single_to_signed_url(current_user.avatar_url),
             availability_status=current_user.availability_status,
-            availability_mode=getattr(current_user, "availability_mode", AvailabilityMode.auto.value),
+            availability_mode=getattr(
+                current_user, "availability_mode", AvailabilityMode.auto.value),
             created_at=current_user.created_at,
             followers_count=None,  # Not needed for self update
             following_count=None,  # Not needed for self update
