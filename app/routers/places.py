@@ -1535,6 +1535,8 @@ async def nearby_places(
         except Exception as e:
             logging.warning(
                 f"PostGIS nearby failed, falling back to haversine: {e}")
+            # Rollback the failed transaction to clean up the connection
+            await db.rollback()
 
     if paginated is None:
         logging.info("Using Python fallback for nearby places")
