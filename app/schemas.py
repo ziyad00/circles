@@ -133,11 +133,41 @@ class SavedPlaceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ExternalPlaceResult(BaseModel):
+    name: str
+    latitude: float
+    longitude: float
+    categories: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    external_id: Optional[str] = None
+    data_source: str = "osm_overpass"
+    distance_m: float
+    model_config = ConfigDict(from_attributes=False)
+
+
+class ExternalSearchResponse(BaseModel):
+    source: str
+    count: int
+    fetched_at: datetime
+    snapshot_id: Optional[int] = None
+    search_key: str
+    results: list[ExternalPlaceResult]
+
+
 class PaginatedPlaces(BaseModel):
     items: list[PlaceResponse]
     total: int
     limit: int
     offset: int
+    external_results: list[ExternalPlaceResult] = Field(default_factory=list)
+    external_snapshot_id: Optional[int] = None
+    external_source: Optional[str] = None
+    external_search_key: Optional[str] = None
+    external_count: int = 0
+    external_fetched_at: Optional[datetime] = None
 
 
 class AdvancedSearchFilters(BaseModel):

@@ -5,6 +5,7 @@ Enhanced Place Data Service - OSM Overpass + Foursquare Enrichment
 import httpx
 import asyncio
 import json
+import math
 from typing import List, Dict, Optional, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
@@ -464,6 +465,89 @@ class EnhancedPlaceDataService:
         logger.error(
             f"All Overpass endpoints failed. Last error: {last_error}")
         return []
+
+    def _build_live_overpass_query(
+        self,
+        lat: float,
+        lon: float,
+        radius: int,
+        limit: int,
+    ) -> str:
+        """Construct a focused Overpass query using an around filter."""
+
+        limit_clause = max(min(limit * 3, 300), 30)
+        filters: list[str] = []
+        for category, tags in self.osm_seed_tags.items():
+            for tag in tags:
+                filters.append(
+                    f'node["{category}"="{tag}"](around:{radius},{lat},{lon});'
+                )
+                filters.append(
+                    f'way["{category}"="{tag}"](around:{radius},{lat},{lon});'
+                )
+
+        return (
+            "[out:json][timeout:25];\n"
+            "(\n"
+            f"    {''.join(filters)}\n"
+            ");\n"
+            f"out center {limit_clause};\n"
+        )
+
+    async def search_live_overpass(
+        self,
+        lat: float,
+        lon: float,
+        radius: int,
+        query: Optional[str] = None,
+        types: Optional[List[str]] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Fetch live place data from Overpass and return ranked results."""
+
+        overpass_query = self._build_live_overpass_query(lat, lon, radius, limit)
+        raw_places = await self._fetch_overpass_data(overpass_query)
+        if not raw_places:
+            return []
+
+        normalized_query = query.lower().strip() if query else None
+        normalized_types = {
+            t.strip().lower() for t in types or [] if t and t.strip()
+        }
+
+        results: list[Dict[str, Any]] = []
+        for place in raw_places:
+            lat_val = place.get("latitude")
+            lon_val = place.get("longitude")
+            if lat_val is None or lon_val is None:
+                continue
+
+            distance_m = haversine_distance(lat, lon, lat_val, lon_val) * 1000
+            if radius > 0 and distance_m > radius:
+                continue
+
+            if normalized_query:
+                name = place.get("name", "").lower()
+                if normalized_query not in name:
+                    continue
+
+            if normalized_types:
+                category = (place.get("categories") or "").lower()
+                category_token = category.split(":", 1)[-1]
+                if category and category_token:
+                    comparison_pool = {category, category_token}
+                else:
+                    comparison_pool = {category} if category else set()
+                if not comparison_pool.intersection(normalized_types):
+                    continue
+
+            enriched_place = dict(place)
+            enriched_place.setdefault("data_source", "osm_overpass")
+            enriched_place["distance_m"] = round(distance_m, 2)
+            results.append(enriched_place)
+
+        results.sort(key=lambda item: item.get("distance_m", math.inf))
+        return results[:limit]
 
     async def reverse_geocode_city(self, lat: float, lon: float) -> Optional[str]:
         """Resolve a city name from coordinates using Nominatim.
