@@ -1,0 +1,36 @@
+{
+  "family": "circles-migration-fix",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
+  "taskRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
+  "containerDefinitions": [
+    {
+      "name": "migration-fix",
+      "image": "704845220483.dkr.ecr.us-east-1.amazonaws.com/circles-app:latest",
+      "essential": true,
+      "environment": [
+        { "name": "APP_DEBUG", "value": "true" },
+        { "name": "APP_USE_POSTGIS", "value": "true" }
+      ],
+      "secrets": [
+        { "name": "APP_DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_DATABASE_URL::" }
+      ],
+      "command": [
+        "sh",
+        "-c",
+        "python3 -c \"import psycopg; import os; db_url = os.environ['APP_DATABASE_URL'].replace('postgresql+asyncpg://', 'postgresql://'); conn = psycopg.connect(db_url); cur = conn.cursor(); print('Checking current migration state...'); cur.execute('SELECT version_num FROM alembic_version ORDER BY version_num'); versions = cur.fetchall(); print(f'Current versions: {versions}'); cur.execute(\\\"INSERT INTO alembic_version (version_num) VALUES ('499278ad9251') ON CONFLICT (version_num) DO NOTHING\\\"); conn.commit(); print('Successfully inserted missing migration 499278ad9251'); cur.execute('SELECT version_num FROM alembic_version ORDER BY version_num'); final_versions = cur.fetchall(); print(f'Final versions: {final_versions}'); conn.close(); print('Migration fix completed successfully')\""
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/circles",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "migration-fix"
+        }
+      }
+    }
+  ]
+}

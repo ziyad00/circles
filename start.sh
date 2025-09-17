@@ -25,18 +25,30 @@ async def fix_alembic():
             print(f'Current alembic version: {current_version}')
             
             if current_version == '499278ad9251':
-                print('Found problematic migration version, running alembic upgrade...')
-                # Instead of manually updating, let alembic handle it
-                import subprocess
-                result = subprocess.run(['alembic', 'upgrade', 'head'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    print('Successfully upgraded to latest migration')
+                print('Found problematic migration version 499278ad9251')
+                # Check if the migration tables actually exist
+                result = await conn.execute(text('''
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                        AND table_name = 'user_collections'
+                    );
+                '''))
+                tables_exist = result.scalar()
+                print(f'User collections tables exist: {tables_exist}')
+
+                if tables_exist:
+                    # Tables exist, so the migration was already applied, update to latest known good version
+                    print('Tables exist but version is problematic, updating to latest migration')
+                    await conn.execute(text('UPDATE alembic_version SET version_num = :version'),
+                                     {'version': 'fdeec55cbdb7'})
+                    print('Updated alembic version to: fdeec55cbdb7 (latest known good)')
                 else:
-                    print(f'Alembic upgrade failed: {result.stderr}')
-                    # Fallback: manually update to a known good version
-                    await conn.execute(text('UPDATE alembic_version SET version_num = :version'), 
-                                     {'version': 'add_user_collections_tables'})
-                    print('Fallback: Updated alembic version to: add_user_collections_tables')
+                    # Tables don't exist, rollback to previous version and let alembic rerun
+                    print('Tables missing, rolling back to previous version')
+                    await conn.execute(text('UPDATE alembic_version SET version_num = :version'),
+                                     {'version': 'fdeec55cbdb7'})
+                    print('Rollback: Updated alembic version to: fdeec55cbdb7')
             else:
                 print(f'Current version {current_version} is not the problematic one')
     except Exception as e:

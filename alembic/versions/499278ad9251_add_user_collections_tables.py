@@ -1,6 +1,6 @@
 """add_user_collections_tables
 
-Revision ID: add_user_collections_tables
+Revision ID: 499278ad9251
 Revises: fdeec55cbdb7
 Create Date: 2025-09-13 01:15:00.000000
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = 'add_user_collections_tables'
+revision = '499278ad9251'
 down_revision = 'fdeec55cbdb7'
 branch_labels = None
 depends_on = None

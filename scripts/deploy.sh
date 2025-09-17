@@ -12,7 +12,7 @@ ECS_CLUSTER="circles-cluster"
 ECS_TASK_DEFINITION="circles-task"
 
 # Get AWS account ID
-AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --region ${AWS_REGION} --query Account --output text)
 ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
 echo "🚀 Starting deployment..."
@@ -44,9 +44,11 @@ echo "📋 Updating ECS task definition..."
 aws ecs describe-task-definition --task-definition ${ECS_TASK_DEFINITION} --region ${AWS_REGION} --query taskDefinition > task-definition.json
 
 # Update the image in task definition
-python3 << EOF
+export NEW_IMAGE
+python3 << 'EOF'
 import json
 import sys
+import os
 
 # Read the task definition
 with open('task-definition.json', 'r') as f:
@@ -56,8 +58,10 @@ with open('task-definition.json', 'r') as f:
 for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes', 'placementConstraints', 'compatibilities', 'registeredAt', 'registeredBy']:
     task_def.pop(key, None)
 
-# Update the image
-task_def['containerDefinitions'][0]['image'] = '${NEW_IMAGE}'
+# Update the image using environment variable
+new_image = os.environ.get('NEW_IMAGE')
+if new_image:
+    task_def['containerDefinitions'][0]['image'] = new_image
 
 # Write back
 with open('task-definition.json', 'w') as f:
