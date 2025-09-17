@@ -396,6 +396,9 @@ async def list_user_checkins(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
+    import logging
+    logging.info(f"Fetching check-ins for user {user_id}, limit={limit}, offset={offset}")
+    
     # visibility enforcement: reuse can_view_checkin-like logic
     from ..utils import can_view_checkin
 
@@ -456,6 +459,9 @@ async def list_user_media(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
+    import logging
+    logging.info(f"Fetching media for user {user_id}, limit={limit}, offset={offset}")
+    
     # collect review photos and check-in photos with visibility checks
     from ..utils import can_view_checkin
     # review photos: always public for now (attached to reviews)
@@ -504,6 +510,20 @@ async def list_user_collections(
     """
     import logging
     logging.info(f"Fetching collections for user {user_id}")
+    
+    # Check if the user exists
+    try:
+        user_res = await db.execute(select(User).where(User.id == user_id))
+        user = user_res.scalar_one_or_none()
+        if not user:
+            logging.warning(f"User {user_id} not found for collections request")
+            raise HTTPException(status_code=404, detail="User not found")
+        logging.info(f"Found user {user_id} for collections request")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error checking user {user_id} for collections: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     # Get collection names and place IDs
     collections_query = (
