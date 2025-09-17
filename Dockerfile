@@ -1,5 +1,5 @@
 # Single-stage build for AWS deployment with correct platform
-FROM --platform=$TARGETPLATFORM python:3.12-slim
+FROM --platform=$TARGETPLATFORM public.ecr.aws/docker/library/python:3.12-slim
 
 # Set working directory
 WORKDIR /app
