@@ -7,6 +7,7 @@ from ..utils import can_view_checkin, haversine_distance
 from ..services.place_data_service_v2 import enhanced_place_data_service
 from ..services.storage import StorageService
 from ..services.jwt_service import JWTService
+from ..config import settings
 from ..schemas import (
     PlaceCreate,
     PlaceResponse,
@@ -37,10 +38,13 @@ from ..schemas import (
     PlaceCrowdLevel,
     ExternalSearchResponse,
     ExternalPlaceResult,
+    DMMessageResponse,
+    PlaceChatPrivateReply,
 )
 from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto, ExternalSearchSnapshot
 from ..dependencies import get_current_admin_user
 from ..database import get_db
+from .dms_ws import _send_private_reply_from_place_chat
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -356,6 +360,7 @@ async def create_place(payload: PlaceCreate, db: AsyncSession = Depends(get_db))
         longitude=payload.longitude,
         categories=categories,
         rating=payload.rating,
+        price_tier=payload.price_tier,
     )
     db.add(place)
     await db.commit()
@@ -1579,12 +1584,13 @@ async def nearby_places(
     await _attach_recent_checkins(
         db, paginated.items, app_settings.place_chat_window_hours)
 
-    # Check if we should fetch external results (Foursquare + OSM)
-    should_fetch_external = len(paginated.items) < limit
+    # Always fetch external results (Foursquare + OSM)
+    should_fetch_external = True
     if not should_fetch_external:
         return paginated
 
-    max_external = max(0, limit - len(paginated.items))
+    # Always fetch the full limit from external sources
+    max_external = limit
 
     # Try Foursquare first for higher quality data
     from ..config import settings as app_settings
@@ -2174,6 +2180,56 @@ async def whos_here_count(
     total = total_res.scalar_one()
 
     return {"count": total, "place_id": place_id}
+
+
+@router.post("/{place_id}/chat/private-reply", response_model=DMMessageResponse)
+async def send_place_chat_private_reply(
+    place_id: int,
+    payload: PlaceChatPrivateReply,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a private DM reply referencing a place chat message."""
+
+    window_cutoff = datetime.now(timezone.utc) - \
+        timedelta(hours=int(settings.place_chat_window_hours))
+
+    participation_query = select(CheckIn).where(
+        CheckIn.user_id == current_user.id,
+        CheckIn.place_id == place_id,
+        CheckIn.created_at >= window_cutoff,
+    )
+    if not (await db.execute(participation_query)).scalar_one_or_none():
+        raise HTTPException(
+            status_code=403,
+            detail="You must have a recent check-in at this place to reply privately",
+        )
+
+    thread, dm_message = await _send_private_reply_from_place_chat(
+        db=db,
+        place_id=place_id,
+        sender_id=current_user.id,
+        target_user_id=payload.target_user_id,
+        message_text=payload.text,
+        context_text=payload.context_text,
+    )
+
+    return DMMessageResponse(
+        id=dm_message.id,
+        thread_id=thread.id,
+        sender_id=dm_message.sender_id,
+        text=dm_message.text,
+        created_at=dm_message.created_at,
+        seen=None,
+        heart_count=0,
+        liked_by_me=False,
+        reply_to_id=dm_message.reply_to_id,
+        reply_to_text=dm_message.reply_to_text,
+        reply_to_sender_name=None,
+        photo_urls=dm_message.photo_urls or [],
+        video_urls=dm_message.video_urls or [],
+        caption=dm_message.caption,
+    )
 
 
 @router.post("/check-ins", response_model=CheckInResponse)
