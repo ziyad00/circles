@@ -285,18 +285,26 @@ async def upload_avatar(
 
     # Validate file type and size - be more permissive for iPhone uploads
     allowed_content_types = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
-
+    
     # iPhone HEIC files sometimes come with unexpected content types
+    # Also check for common iPhone upload patterns
     is_likely_heic = (
         file.filename and file.filename.lower().endswith(('.heic', '.heif')) or
-        file.content_type in ['image/heic', 'image/heif', 'application/octet-stream']
+        file.content_type in ['image/heic', 'image/heif', 'application/octet-stream', 'image/jpeg'] or
+        (file.content_type and 'heic' in file.content_type.lower())
     )
-
+    
+    # For iPhone uploads, be more lenient with content type validation
+    # The actual image validation will happen in the storage service
     if not file.content_type or (file.content_type not in allowed_content_types and not is_likely_heic):
-        raise HTTPException(
-            status_code=400,
-            detail="File must be an image (JPEG, PNG, WebP, HEIC). If you're using an iPhone, try taking a new photo or selecting from your gallery."
-        )
+        # If it's likely a HEIC file based on filename, allow it through
+        if file.filename and file.filename.lower().endswith(('.heic', '.heif')):
+            pass  # Allow HEIC files through even with unexpected content types
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="File must be an image (JPEG, PNG, WebP, HEIC). If you're using an iPhone, try taking a new photo or selecting from your gallery."
+            )
 
     # Check file size (configurable max MB for avatars)
     from ..config import settings
