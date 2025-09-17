@@ -186,6 +186,7 @@ async def _nearby_places_python_fallback(
                           Place.longitude <= max_lng)
 
     candidates = (await db.execute(stmt)).scalars().all()
+    logging.info(f"Found {len(candidates)} candidates in bounding box for lat={lat}, lng={lng}, radius={radius_m}m")
 
     within_radius: list[tuple[float, Place]] = []
     for place in candidates:
@@ -195,6 +196,8 @@ async def _nearby_places_python_fallback(
             lat, lng, place.latitude, place.longitude) * 1000
         if distance_m <= radius_m:
             within_radius.append((distance_m, place))
+    
+    logging.info(f"Found {len(within_radius)} places within {radius_m}m radius")
 
     within_radius.sort(key=lambda item: item[0])
 
@@ -670,10 +673,12 @@ async def advanced_search_places(
                 count_stmt = count_stmt.where(distance_filter)
                 logger.info("Using PostGIS distance filtering")
             except Exception as e:
-                logger.warning(f"PostGIS query failed, falling back to Haversine: {e}")
+                logger.warning(
+                    f"PostGIS query failed, falling back to Haversine: {e}")
                 # Continue to fallback below
         # Always use fallback for now to ensure reliability
-        logger.info("Using fallback distance filtering (PostGIS disabled for reliability)")
+        logger.info(
+            "Using fallback distance filtering (PostGIS disabled for reliability)")
 
     # Sorting
     if filters.sort_by:
