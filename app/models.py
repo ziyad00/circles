@@ -29,6 +29,10 @@ class User(Base):
         String, nullable=False, server_default="private")
     collections_default_visibility = Column(
         String, nullable=False, server_default="public")
+    availability_status = Column(String, nullable=False,
+                                 server_default="not_available")
+    availability_mode = Column(String, nullable=False,
+                                server_default="auto")
 
     # Relationships
     otp_codes = relationship("OTPCode", back_populates="user")

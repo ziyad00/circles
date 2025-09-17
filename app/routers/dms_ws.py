@@ -5,12 +5,16 @@ from sqlalchemy import select, update
 from datetime import datetime, timezone, timedelta
 import asyncio
 import json
+import logging
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..models import DMThread, DMParticipantState, DMMessage, User, CheckIn
 from ..config import settings
 from ..services.storage import StorageService
+
+
+logger = logging.getLogger(__name__)
 
 
 def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
@@ -81,6 +85,7 @@ async def place_chat_ws(websocket: WebSocket, place_id: int, db: AsyncSession = 
     # Use a synthetic thread id for room: negative ID space to avoid collision
     thread_id = -int(place_id)
     await manager.connect(thread_id, user_id, websocket)
+    await update_user_availability_from_connection(db, user_id, True)
 
     try:
         await websocket.send_json({"type": "connection_established", "place_id": place_id, "user_id": user_id, "window_hours": settings.place_chat_window_hours})
@@ -121,6 +126,8 @@ async def place_chat_ws(websocket: WebSocket, place_id: int, db: AsyncSession = 
         pass
     finally:
         manager.disconnect(thread_id, user_id, websocket)
+        if not manager.is_user_online(user_id):
+            await update_user_availability_from_connection(db, user_id, False)
 
 
 class ConnectionManager:
@@ -273,6 +280,10 @@ class ConnectionManager:
         }
         await self.broadcast(thread_id, user_id, payload)
 
+    def is_user_online(self, user_id: int) -> bool:
+        """Return True if the user has any active WebSocket connections."""
+        return bool(self.user_connections.get(user_id))
+
     async def _cleanup_stale_connections(self) -> None:
         """Background task to clean up stale connections"""
         while not self._shutdown:
@@ -343,6 +354,25 @@ async def _get_user_info(db: AsyncSession, user_id: int) -> dict:
     return {"id": user_id, "name": "Unknown", "avatar_url": None}
 
 
+async def update_user_availability_from_connection(db: AsyncSession, user_id: int, online: bool) -> None:
+    """Update a user's availability based on connection state when in auto mode."""
+    res = await db.execute(select(User).where(User.id == user_id))
+    user = res.scalar_one_or_none()
+    if not user:
+        return
+
+    # Manual mode overrides auto presence updates
+    if getattr(user, "availability_mode", "auto") != "auto":
+        return
+
+    desired_status = "available" if online else "not_available"
+    if user.availability_status == desired_status:
+        return
+
+    user.availability_status = desired_status
+    await db.commit()
+
+
 async def _get_or_create_state(db: AsyncSession, thread_id: int, user_id: int) -> DMParticipantState:
     res = await db.execute(select(DMParticipantState).where(
         DMParticipantState.thread_id == thread_id,
@@ -372,6 +402,7 @@ async def dm_ws(websocket: WebSocket, thread_id: int, db: AsyncSession = Depends
         return
 
     await manager.connect(thread_id, user_id, websocket)
+    await update_user_availability_from_connection(db, user_id, True)
 
     try:
         # Get user info for presence
@@ -511,6 +542,8 @@ async def dm_ws(websocket: WebSocket, thread_id: int, db: AsyncSession = Depends
         logger.error(f"WebSocket error: {e}")
     finally:
         manager.disconnect(thread_id, user_id, websocket)
+        if not manager.is_user_online(user_id):
+            await update_user_availability_from_connection(db, user_id, False)
         await manager.broadcast_presence(thread_id, user_id, False)
 
 
@@ -524,6 +557,7 @@ async def user_ws(websocket: WebSocket, user_id: int, db: AsyncSession = Depends
 
     # Use thread_id 0 for user-wide connections
     await manager.connect(0, user_id, websocket)
+    await update_user_availability_from_connection(db, user_id, True)
 
     try:
         await websocket.send_json({
@@ -550,3 +584,5 @@ async def user_ws(websocket: WebSocket, user_id: int, db: AsyncSession = Depends
         pass
     finally:
         manager.disconnect(0, user_id, websocket)
+        if not manager.is_user_online(user_id):
+            await update_user_availability_from_connection(db, user_id, False)

@@ -4,6 +4,16 @@ from enum import Enum
 from datetime import datetime
 
 
+class AvailabilityStatus(str, Enum):
+    available = "available"
+    not_available = "not_available"
+
+
+class AvailabilityMode(str, Enum):
+    auto = "auto"
+    manual = "manual"
+
+
 class UserBase(BaseModel):
     phone: Optional[str] = None
 
@@ -19,6 +29,8 @@ class UserResponse(UserBase):
     name: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
+    availability_status: AvailabilityStatus = AvailabilityStatus.not_available
+    availability_mode: AvailabilityMode = AvailabilityMode.auto
     created_at: datetime
     followers_count: Optional[int] = None
     following_count: Optional[int] = None
@@ -70,6 +82,7 @@ class PlaceBase(BaseModel):
         None, examples=[["coffee", "cafe"], "coffee,cafe"]
     )
     rating: Optional[float] = Field(None, examples=[4.5])
+    price_tier: Optional[str] = Field(None, examples=["$$"])
 
 
 class PlaceCreate(PlaceBase):
@@ -81,6 +94,7 @@ class PlaceResponse(PlaceBase):
     created_at: datetime
     # Optional representative photo for list views (latest review/check-in photo)
     photo_url: Optional[str] = None
+    recent_checkins_count: int = 0
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -559,6 +573,7 @@ class FollowUserResponse(BaseModel):
     username: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
+    availability_status: AvailabilityStatus = AvailabilityStatus.not_available
     is_verified: bool
     created_at: datetime
     followed_at: datetime
@@ -593,6 +608,8 @@ class PublicUserSearchResponse(BaseModel):
     avatar_url: Optional[str] = None
     created_at: datetime
     username: Optional[str] = None
+    availability_status: AvailabilityStatus = AvailabilityStatus.not_available
+    availability_mode: AvailabilityMode = AvailabilityMode.auto
     followed: bool = False
     model_config = ConfigDict(from_attributes=True)
 
@@ -623,6 +640,7 @@ class UserUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=100)
     bio: Optional[str] = Field(None, max_length=500)
     # avatar uploaded via multipart; url is server-filled
+    availability_status: Optional[AvailabilityStatus] = None
 
 
 class PublicUserResponse(BaseModel):
@@ -631,6 +649,8 @@ class PublicUserResponse(BaseModel):
     username: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
+    availability_status: AvailabilityStatus = AvailabilityStatus.not_available
+    availability_mode: AvailabilityMode = AvailabilityMode.auto
     created_at: datetime
     followers_count: Optional[int] = None
     following_count: Optional[int] = None

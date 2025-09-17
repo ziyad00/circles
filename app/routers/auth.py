@@ -131,6 +131,8 @@ async def get_current_user(
             phone=current_user.phone,
             is_verified=current_user.is_verified,
             username=current_user.username,
+            availability_status=current_user.availability_status,
+            availability_mode=current_user.availability_mode,
             created_at=current_user.created_at,
             followers_count=followers_count or 0,
             following_count=following_count or 0,
