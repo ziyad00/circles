@@ -7,6 +7,15 @@ from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService, _validate_image_or_raise
 from ..services.block_service import has_block_between
+from ..utils import (
+    can_view_checkin,
+    haversine_distance,
+    can_view_profile,
+    can_view_stats,
+    can_view_follower_list,
+    can_view_following_list,
+    should_appear_in_search
+)
 from ..models import (
     User,
     CheckIn,
@@ -163,6 +172,10 @@ async def search_users(
     res = await db.execute(stmt)
     items = []
     for user, followed in res.all():
+        # Check if user should appear in search results
+        if not await should_appear_in_search(db, user, current_user.id):
+            continue  # Skip users who don't want to appear in search
+
         items.append(
             PublicUserSearchResponse(
                 id=user.id,
@@ -202,9 +215,23 @@ async def get_user_profile(
 
         # Check for blocks only if there's a current user and it's not the same user
         if current_user and current_user.id != user.id:
-            logging.info(f"Checking blocks between current_user {current_user.id} and target user {user.id}")
+            logging.info(
+                f"Checking blocks between current_user {current_user.id} and target user {user.id}")
             if await has_block_between(db, current_user.id, user.id):
-                logging.warning(f"Block exists between users {current_user.id} and {user.id}")
+                logging.warning(
+                    f"Block exists between users {current_user.id} and {user.id}")
+                raise HTTPException(status_code=404, detail="User not found")
+
+        # Check profile privacy
+        if current_user:
+            if not await can_view_profile(db, user, current_user.id):
+                logging.warning(f"User {current_user.id} cannot view profile of user {user.id} due to privacy settings")
+                raise HTTPException(status_code=404, detail="User not found")
+        else:
+            # Anonymous access - only public profiles
+            profile_visibility = getattr(user, 'profile_visibility', 'public')
+            if profile_visibility != 'public':
+                logging.warning(f"Anonymous user cannot view private profile of user {user.id}")
                 raise HTTPException(status_code=404, detail="User not found")
     except HTTPException:
         raise
@@ -212,17 +239,30 @@ async def get_user_profile(
         logging.error(f"Unexpected error in get_user_profile: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-    followers_count = await db.scalar(
-        select(func.count()).where(Follow.followee_id == user.id)
-    )
-    following_count = await db.scalar(
-        select(func.count()).where(Follow.follower_id == user.id)
-    )
+    # Check if viewer can see stats
+    can_see_stats = True
+    if current_user:
+        can_see_stats = await can_view_stats(db, user, current_user.id)
+    else:
+        # Anonymous access - only if stats are public
+        stats_visibility = getattr(user, 'stats_visibility', 'public')
+        can_see_stats = (stats_visibility == 'public')
 
-    # Get check-ins count
-    check_ins_count = await db.scalar(
-        select(func.count()).where(CheckIn.user_id == user.id)
-    )
+    # Get counts only if allowed to see stats
+    if can_see_stats:
+        followers_count = await db.scalar(
+            select(func.count()).where(Follow.followee_id == user.id)
+        )
+        following_count = await db.scalar(
+            select(func.count()).where(Follow.follower_id == user.id)
+        )
+        check_ins_count = await db.scalar(
+            select(func.count()).where(CheckIn.user_id == user.id)
+        )
+    else:
+        followers_count = None
+        following_count = None
+        check_ins_count = None
 
     # Check if current user is following this user
     is_followed = None
@@ -362,10 +402,10 @@ async def upload_avatar(
             detail=str(e)
         )
 
-    # Generate filename
+    # Generate filename - preserve original extension or use .bin for unknown types
     _, ext = os.path.splitext(file.filename or "")
     if not ext:
-        ext = ".jpg"
+        ext = ".bin"  # Generic extension for unknown file types
     filename = f"{uuid4().hex}{ext}"
 
     # Store avatar using configured storage backend (avatars path)
@@ -397,8 +437,9 @@ async def list_user_checkins(
     offset: int = Query(0, ge=0),
 ):
     import logging
-    logging.info(f"Fetching check-ins for user {user_id}, limit={limit}, offset={offset}")
-    
+    logging.info(
+        f"Fetching check-ins for user {user_id}, limit={limit}, offset={offset}")
+
     # visibility enforcement: reuse can_view_checkin-like logic
     from ..utils import can_view_checkin
 
@@ -460,8 +501,9 @@ async def list_user_media(
     offset: int = Query(0, ge=0),
 ):
     import logging
-    logging.info(f"Fetching media for user {user_id}, limit={limit}, offset={offset}")
-    
+    logging.info(
+        f"Fetching media for user {user_id}, limit={limit}, offset={offset}")
+
     # collect review photos and check-in photos with visibility checks
     from ..utils import can_view_checkin
     # review photos: always public for now (attached to reviews)
@@ -510,13 +552,14 @@ async def list_user_collections(
     """
     import logging
     logging.info(f"Fetching collections for user {user_id}")
-    
+
     # Check if the user exists
     try:
         user_res = await db.execute(select(User).where(User.id == user_id))
         user = user_res.scalar_one_or_none()
         if not user:
-            logging.warning(f"User {user_id} not found for collections request")
+            logging.warning(
+                f"User {user_id} not found for collections request")
             raise HTTPException(status_code=404, detail="User not found")
         logging.info(f"Found user {user_id} for collections request")
     except HTTPException:
@@ -692,17 +735,8 @@ async def get_user_profile_stats(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Check if current user can view this profile
-    # Allow viewing stats if it's own profile or follower; otherwise restrict advanced stats
-    can_view = user_id == current_user.id or (
-        await db.scalar(
-            select(func.count(Follow.id)).where(
-                Follow.follower_id == current_user.id,
-                Follow.followee_id == user_id,
-            )
-        )
-        > 0
-    )
+    # Check if current user can view this user's stats
+    can_view = await can_view_stats(db, user, current_user.id)
 
     # Get check-in counts by visibility
     checkin_stats = await db.execute(

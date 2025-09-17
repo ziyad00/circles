@@ -367,7 +367,7 @@ class StorageService:
 
 def _validate_image_or_raise(filename: str, content: bytes) -> None:
     # Import custom exceptions
-    from ..exceptions import ImageTooLargeError, UnsupportedImageFormatError, CorruptedImageError
+    from ..exceptions import ImageTooLargeError
 
     # Size cap from settings (photo_max_mb)
     from ..config import settings
@@ -375,57 +375,14 @@ def _validate_image_or_raise(filename: str, content: bytes) -> None:
     if len(content) > max_bytes:
         raise ImageTooLargeError(int(settings.photo_max_mb))
 
-    # Always validate by content first (more reliable for iOS uploads)
-    try:
-        from PIL import Image
-        import io
-
-        # Register HEIF opener for iPhone HEIC support
-        try:
-            from pillow_heif import register_heif_opener
-            register_heif_opener()
-        except ImportError:
-            pass  # pillow-heif not available, continue without HEIC support
-
-        img = Image.open(io.BytesIO(content))
-        img.verify()
-    except Exception as e:
-        # Check if it's a format issue vs corruption
-        error_msg = str(e).lower()
-        print(f"Image validation error: {error_msg}")  # Debug logging
-
-        # Special handling for iPhone HEIC images
-        if 'heic' in error_msg or 'cannot identify' in error_msg or 'unknown' in error_msg:
-            # Try to handle HEIC format specifically
-            try:
-                # For HEIC images, we'll be more lenient and just check if it's a valid file
-                # This is because PIL doesn't support HEIC without additional plugins
-                # HEIC files start with specific byte patterns
-                if len(content) >= 12:
-                    # Check for HEIC file signature (ftyp box)
-                    # HEIC files can have different brand identifiers
-                    heic_signatures = [b'heic', b'heix', b'hevc', b'heim', b'heis', b'hevm', b'hevs']
-                    if b'ftyp' in content[:12]:
-                        # Check if any HEIC signature is present in the first 20 bytes
-                        for sig in heic_signatures:
-                            if sig in content[:20]:
-                                print(f"Detected HEIC file with signature: {sig}")  # Debug logging
-                                return
-                    
-                    # Also check for other common iPhone image patterns
-                    # Sometimes iPhone images have different headers
-                    if content.startswith(b'\x00\x00\x00') or content.startswith(b'\xff\xd8\xff'):
-                        # This might be a JPEG with unusual header, allow it
-                        print("Detected potential iPhone image with unusual header")  # Debug logging
-                        return
-            except Exception as heic_error:
-                print(f"HEIC detection error: {heic_error}")  # Debug logging
-                pass
-
-        if any(term in error_msg for term in ['cannot identify', 'format', 'unknown', 'unsupported']):
-            raise UnsupportedImageFormatError()
-        else:
-            raise CorruptedImageError()
+    # Accept any file format - no content validation
+    # Just ensure it's not empty
+    if len(content) == 0:
+        raise ValueError("File cannot be empty")
+    
+    # Basic check for minimum file size (avoid empty or corrupted files)
+    if len(content) < 10:
+        raise ValueError("File appears to be too small or corrupted")
 
 
 def _guess_content_type(filename: str) -> str:
@@ -441,4 +398,15 @@ def _guess_content_type(filename: str) -> str:
         ".gif": "image/gif",
         ".webp": "image/webp",
         ".heic": "image/heic",
+        ".heif": "image/heif",
+        ".bmp": "image/bmp",
+        ".tiff": "image/tiff",
+        ".tif": "image/tiff",
+        ".svg": "image/svg+xml",
+        ".ico": "image/x-icon",
+        ".raw": "image/x-canon-cr2",
+        ".cr2": "image/x-canon-cr2",
+        ".nef": "image/x-nikon-nef",
+        ".arw": "image/x-sony-arw",
+        ".dng": "image/x-adobe-dng",
     }.get(ext, "application/octet-stream")
