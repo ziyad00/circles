@@ -172,7 +172,8 @@ async def search_users(
                 created_at=user.created_at,
                 username=user.username,
                 availability_status=user.availability_status,
-                availability_mode=getattr(user, "availability_mode", AvailabilityMode.auto.value),
+                availability_mode=getattr(
+                    user, "availability_mode", AvailabilityMode.auto.value),
                 followed=bool(followed),
             )
         )
@@ -224,7 +225,8 @@ async def get_user_profile(
         bio=user.bio,
         avatar_url=_convert_single_to_signed_url(user.avatar_url),
         availability_status=user.availability_status,
-        availability_mode=getattr(user, "availability_mode", AvailabilityMode.auto.value),
+        availability_mode=getattr(
+            user, "availability_mode", AvailabilityMode.auto.value),
         created_at=user.created_at,
         followers_count=followers_count,
         following_count=following_count,
@@ -247,10 +249,6 @@ async def update_me(
         logging.warning(f"User {current_user.id} is not verified, blocking profile update")
         raise HTTPException(status_code=403, detail="Account must be verified to update profile")
     
-    # Store original values for rollback
-    original_name = current_user.name
-    original_bio = current_user.bio
-    
     try:
         if payload.name is not None:
             current_user.name = payload.name
@@ -270,19 +268,32 @@ async def update_me(
                     if is_online
                     else AvailabilityStatus.not_available.value
                 )
-        
+
         await db.commit()
         logging.info(f"Successfully committed changes for user {current_user.id}")
         await db.refresh(current_user)
         logging.info(f"Successfully refreshed user {current_user.id}")
-        return current_user
+
+        # Return proper PublicUserResponse format
+        return PublicUserResponse(
+            id=current_user.id,
+            name=current_user.name,
+            username=current_user.username,
+            bio=current_user.bio,
+            avatar_url=_convert_single_to_signed_url(current_user.avatar_url),
+            availability_status=current_user.availability_status,
+            availability_mode=getattr(current_user, "availability_mode", AvailabilityMode.auto.value),
+            created_at=current_user.created_at,
+            followers_count=None,  # Not needed for self update
+            following_count=None,  # Not needed for self update
+            check_ins_count=None,  # Not needed for self update
+            is_followed=None,      # Not applicable for self
+        )
     except Exception as e:
         logging.error(f"Error updating user {current_user.id}: {e}")
-        # Rollback changes
-        current_user.name = original_name
-        current_user.bio = original_bio
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update profile: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update profile: {str(e)}")
 
 
 @router.post("/me/avatar", response_model=PublicUserResponse)
@@ -295,28 +306,7 @@ async def upload_avatar(
     from uuid import uuid4
     # image validation comes from storage service helpers
 
-    # Validate file type and size - be more permissive for iPhone uploads
-    allowed_content_types = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
-    
-    # iPhone HEIC files sometimes come with unexpected content types
-    # Also check for common iPhone upload patterns
-    is_likely_heic = (
-        file.filename and file.filename.lower().endswith(('.heic', '.heif')) or
-        file.content_type in ['image/heic', 'image/heif', 'application/octet-stream', 'image/jpeg'] or
-        (file.content_type and 'heic' in file.content_type.lower())
-    )
-    
-    # For iPhone uploads, be more lenient with content type validation
-    # The actual image validation will happen in the storage service
-    if not file.content_type or (file.content_type not in allowed_content_types and not is_likely_heic):
-        # If it's likely a HEIC file based on filename, allow it through
-        if file.filename and file.filename.lower().endswith(('.heic', '.heif')):
-            pass  # Allow HEIC files through even with unexpected content types
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="File must be an image (JPEG, PNG, WebP, HEIC). If you're using an iPhone, try taking a new photo or selecting from your gallery."
-            )
+    # Skip content type validation - let storage service handle image validation
 
     # Check file size (configurable max MB for avatars)
     from ..config import settings
@@ -492,7 +482,7 @@ async def list_user_collections(
     """
     import logging
     logging.info(f"Fetching collections for user {user_id}")
-    
+
     # Get collection names and place IDs
     collections_query = (
         select(
@@ -507,7 +497,8 @@ async def list_user_collections(
 
     result = await db.execute(collections_query)
     collections_data = result.all()
-    logging.info(f"Found {len(collections_data)} collections for user {user_id}")
+    logging.info(
+        f"Found {len(collections_data)} collections for user {user_id}")
 
     collections = []
     for collection_name, count, place_ids in collections_data:
@@ -532,7 +523,8 @@ async def list_user_collections(
             "photos": photos
         })
 
-    logging.info(f"Returning {len(collections)} collections for user {user_id}")
+    logging.info(
+        f"Returning {len(collections)} collections for user {user_id}")
     return collections
 
 
