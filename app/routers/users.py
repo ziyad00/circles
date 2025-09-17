@@ -242,26 +242,35 @@ async def update_me(
     import logging
     logging.info(f"User {current_user.id} updating profile: name={payload.name}, bio={payload.bio}")
     
-    if payload.name is not None:
-        current_user.name = payload.name
-        logging.info(f"Updated name to: {payload.name}")
-    if payload.bio is not None:
-        current_user.bio = payload.bio
-        logging.info(f"Updated bio to: {payload.bio}")
-    if payload.availability_status is not None:
-        if payload.availability_status == AvailabilityStatus.not_available:
-            current_user.availability_status = AvailabilityStatus.not_available.value
-            current_user.availability_mode = AvailabilityMode.manual.value
-        else:
-            current_user.availability_mode = AvailabilityMode.auto.value
-            is_online = manager.is_user_online(current_user.id)
-            current_user.availability_status = (
-                AvailabilityStatus.available.value
-                if is_online
-                else AvailabilityStatus.not_available.value
-            )
+    # Check if user is verified
+    if not current_user.is_verified:
+        logging.warning(f"User {current_user.id} is not verified, blocking profile update")
+        raise HTTPException(status_code=403, detail="Account must be verified to update profile")
+    
+    # Store original values for rollback
+    original_name = current_user.name
+    original_bio = current_user.bio
     
     try:
+        if payload.name is not None:
+            current_user.name = payload.name
+            logging.info(f"Updated name to: {payload.name}")
+        if payload.bio is not None:
+            current_user.bio = payload.bio
+            logging.info(f"Updated bio to: {payload.bio}")
+        if payload.availability_status is not None:
+            if payload.availability_status == AvailabilityStatus.not_available:
+                current_user.availability_status = AvailabilityStatus.not_available.value
+                current_user.availability_mode = AvailabilityMode.manual.value
+            else:
+                current_user.availability_mode = AvailabilityMode.auto.value
+                is_online = manager.is_user_online(current_user.id)
+                current_user.availability_status = (
+                    AvailabilityStatus.available.value
+                    if is_online
+                    else AvailabilityStatus.not_available.value
+                )
+        
         await db.commit()
         logging.info(f"Successfully committed changes for user {current_user.id}")
         await db.refresh(current_user)
@@ -269,6 +278,9 @@ async def update_me(
         return current_user
     except Exception as e:
         logging.error(f"Error updating user {current_user.id}: {e}")
+        # Rollback changes
+        current_user.name = original_name
+        current_user.bio = original_bio
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update profile: {str(e)}")
 
