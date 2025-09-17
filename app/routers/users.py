@@ -490,6 +490,9 @@ async def list_user_collections(
     Returns collections of saved places, each with up to 4 random photos
     from the places in that collection.
     """
+    import logging
+    logging.info(f"Fetching collections for user {user_id}")
+    
     # Get collection names and place IDs
     collections_query = (
         select(
@@ -504,6 +507,7 @@ async def list_user_collections(
 
     result = await db.execute(collections_query)
     collections_data = result.all()
+    logging.info(f"Found {len(collections_data)} collections for user {user_id}")
 
     collections = []
     for collection_name, count, place_ids in collections_data:
@@ -528,6 +532,7 @@ async def list_user_collections(
             "photos": photos
         })
 
+    logging.info(f"Returning {len(collections)} collections for user {user_id}")
     return collections
 
 
