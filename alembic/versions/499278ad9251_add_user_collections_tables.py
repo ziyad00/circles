@@ -17,43 +17,72 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create user_collections table
-    op.create_table(
-        'user_collections',
-        sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('user_id', sa.Integer(), nullable=False),
-        sa.Column('name', sa.String(), nullable=False),
-        sa.Column('description', sa.Text(), nullable=True),
-        sa.Column('is_public', sa.Boolean(), nullable=True, default=True),
-        sa.Column('created_at', sa.DateTime(timezone=True),
-                  server_default=sa.text('now()'), nullable=True),
-        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
-        sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-        sa.PrimaryKeyConstraint('id')
-    )
+    # Check if tables already exist before creating them
+    conn = op.get_bind()
+    
+    # Check if user_collections table exists
+    result = conn.execute(sa.text("""
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables
+            WHERE table_schema = 'public'
+            AND table_name = 'user_collections'
+        );
+    """))
+    user_collections_exists = result.scalar()
+    
+    if not user_collections_exists:
+        # Create user_collections table
+        op.create_table(
+            'user_collections',
+            sa.Column('id', sa.Integer(), nullable=False),
+            sa.Column('user_id', sa.Integer(), nullable=False),
+            sa.Column('name', sa.String(), nullable=False),
+            sa.Column('description', sa.Text(), nullable=True),
+            sa.Column('is_public', sa.Boolean(), nullable=True, default=True),
+            sa.Column('created_at', sa.DateTime(timezone=True),
+                      server_default=sa.text('now()'), nullable=True),
+            sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+            sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+            sa.PrimaryKeyConstraint('id')
+        )
 
-    # Create index on user_id for better query performance
-    op.create_index(op.f('ix_user_collections_user_id'),
-                    'user_collections', ['user_id'], unique=False)
+        # Create index on user_id for better query performance
+        op.create_index(op.f('ix_user_collections_user_id'),
+                        'user_collections', ['user_id'], unique=False)
+    else:
+        print("user_collections table already exists, skipping creation")
 
-    # Create user_collection_places table
-    op.create_table(
-        'user_collection_places',
-        sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('collection_id', sa.Integer(), nullable=False),
-        sa.Column('place_id', sa.Integer(), nullable=False),
-        sa.Column('added_at', sa.DateTime(timezone=True),
-                  server_default=sa.text('now()'), nullable=True),
-        sa.ForeignKeyConstraint(['collection_id'], ['user_collections.id'], ),
-        sa.ForeignKeyConstraint(['place_id'], ['places.id'], ),
-        sa.PrimaryKeyConstraint('id')
-    )
+    # Check if user_collection_places table exists
+    result = conn.execute(sa.text("""
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables
+            WHERE table_schema = 'public'
+            AND table_name = 'user_collection_places'
+        );
+    """))
+    user_collection_places_exists = result.scalar()
+    
+    if not user_collection_places_exists:
+        # Create user_collection_places table
+        op.create_table(
+            'user_collection_places',
+            sa.Column('id', sa.Integer(), nullable=False),
+            sa.Column('collection_id', sa.Integer(), nullable=False),
+            sa.Column('place_id', sa.Integer(), nullable=False),
+            sa.Column('added_at', sa.DateTime(timezone=True),
+                      server_default=sa.text('now()'), nullable=True),
+            sa.ForeignKeyConstraint(['collection_id'], ['user_collections.id'], ),
+            sa.ForeignKeyConstraint(['place_id'], ['places.id'], ),
+            sa.PrimaryKeyConstraint('id')
+        )
 
-    # Create indexes for better query performance
-    op.create_index(op.f('ix_user_collection_places_collection_id'),
-                    'user_collection_places', ['collection_id'], unique=False)
-    op.create_index(op.f('ix_user_collection_places_place_id'),
-                    'user_collection_places', ['place_id'], unique=False)
+        # Create indexes for better query performance
+        op.create_index(op.f('ix_user_collection_places_collection_id'),
+                        'user_collection_places', ['collection_id'], unique=False)
+        op.create_index(op.f('ix_user_collection_places_place_id'),
+                        'user_collection_places', ['place_id'], unique=False)
+    else:
+        print("user_collection_places table already exists, skipping creation")
 
 
 def downgrade() -> None:
