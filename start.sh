@@ -74,9 +74,30 @@ async def fix_alembic():
                 tables_exist = result.scalar()
                 print(f'User collections tables exist: {tables_exist}')
 
-                if tables_exist:
-                    # Tables exist and version is correct, no action needed
-                    print('Tables exist and version is correct, no action needed')
+                # Check if availability_status column exists in users table
+                result = await conn.execute(text('''
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                        AND table_name = 'users'
+                        AND column_name = 'availability_status'
+                    );
+                '''))
+                availability_column_exists = result.scalar()
+                print(f'Availability status column exists: {availability_column_exists}')
+
+                if tables_exist and availability_column_exists:
+                    # Both tables and column exist, update to the latest version
+                    print('Both tables and column exist, updating to latest version')
+                    await conn.execute(text('UPDATE alembic_version SET version_num = :version'),
+                                     {'version': 'comprehensive_privacy_controls'})
+                    print('Updated alembic version to: comprehensive_privacy_controls')
+                elif tables_exist:
+                    # Tables exist but column doesn't, update to version before the column addition
+                    print('Tables exist but column missing, updating to version before column addition')
+                    await conn.execute(text('UPDATE alembic_version SET version_num = :version'),
+                                     {'version': 'fdeec55cbdb7'})
+                    print('Updated alembic version to: fdeec55cbdb7')
                 else:
                     # Tables don't exist, rollback to previous version and let alembic rerun
                     print('Tables missing, rolling back to previous version')
