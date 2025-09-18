@@ -95,7 +95,10 @@ asyncio.run(fix_alembic())
 
 # Run alembic migrations to ensure database is up to date
 echo "Running alembic migrations..."
-alembic upgrade head
+# Check for multiple heads and resolve them
+alembic heads
+echo "Attempting to upgrade to heads (all heads)..."
+alembic upgrade heads
 
 # Start the application
 echo "Starting FastAPI application..."
