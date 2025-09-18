@@ -27,7 +27,7 @@ def upgrade() -> None:
             sp.user_id,
             COALESCE(NULLIF(TRIM(sp.list_name), ''), 'Favorites') AS name,
             NULL,
-            1,
+            true,
             COALESCE(MIN(sp.created_at), CURRENT_TIMESTAMP)
         FROM saved_places sp
         LEFT JOIN user_collections uc
