@@ -70,7 +70,11 @@ class EnhancedPlaceDataService:
         self,
         lat: float,
         lon: float,
-        limit: int = 20
+        limit: int = 20,
+        query: str = None,
+        categories: str = None,
+        min_price: int = None,
+        max_price: int = None
     ) -> List[Dict[str, Any]]:
         """Fetch trending venues from Foursquare v3 as a fallback/override.
 
@@ -80,7 +84,7 @@ class EnhancedPlaceDataService:
         if not self.foursquare_api_key or self.foursquare_api_key == "demo_key_for_testing":
             return []
 
-        cache_key = f"fsq_trending:{round(lat, 4)}:{round(lon, 4)}:{limit}:{self.trending_radius_m}"
+        cache_key = f"fsq_trending:{round(lat, 4)}:{round(lon, 4)}:{limit}:{self.trending_radius_m}:{query}:{categories}:{min_price}:{max_price}"
         cached = self._cache_get(self._cache_discovery, cache_key)
         if cached is not None:
             return cached
@@ -95,8 +99,18 @@ class EnhancedPlaceDataService:
                 "limit": min(limit * 2, 50),
                 # Some tenants support sort=POPULARITY; ignore if rejected
                 "sort": "POPULARITY",
-                "fields": "fsq_id,name,location,geocodes,categories,rating,stats,hours,website,tel"
+                "fields": "fsq_id,name,location,geocodes,categories,rating,stats,hours,website,tel,photos,price,popularity,verified,description,features"
             }
+
+            # Add search filters to Foursquare API call
+            if query:
+                params["query"] = query
+            if categories:
+                params["categories"] = categories
+            if min_price is not None:
+                params["min_price"] = min_price
+            if max_price is not None:
+                params["max_price"] = max_price
 
             try:
                 resp = await client.get(url, headers=headers, params=params)
@@ -134,6 +148,34 @@ class EnhancedPlaceDataService:
                     except Exception:
                         attr_flags = {}
 
+                    # Extract photo URLs from Foursquare response
+                    photos = []
+                    if v.get("photos"):
+                        for photo in v.get("photos", []):
+                            # Foursquare photos have prefix + suffix format
+                            prefix = photo.get("prefix", "")
+                            suffix = photo.get("suffix", "")
+                            if prefix and suffix:
+                                # Create a medium-sized photo URL (300x300)
+                                photo_url = f"{prefix}300x300{suffix}"
+                                photos.append(photo_url)
+
+                    # Convert Foursquare price (1-4) to price tier symbols
+                    price_tier = None
+                    fsq_price = v.get("price")
+                    if fsq_price is not None:
+                        price_map = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
+                        price_tier = price_map.get(fsq_price)
+
+                    # Get enhanced address from location
+                    location = v.get("location", {})
+                    address = location.get("formatted_address") or location.get("address")
+                    city = location.get("locality") or location.get("city")
+
+                    # Check if currently open
+                    hours = v.get("hours", {})
+                    open_now = hours.get("open_now")
+
                     results.append({
                         "id": None,
                         "name": v.get("name"),
@@ -145,13 +187,23 @@ class EnhancedPlaceDataService:
                         "website": v.get("website"),
                         "external_id": v.get("fsq_id"),
                         "data_source": "foursquare",
+                        "photos": photos,
+                        # Enhanced fields
+                        "price_tier": price_tier,
+                        "popularity": v.get("popularity"),
+                        "verified": v.get("verified"),
+                        "description": v.get("description"),
+                        "address": address,
+                        "city": city,
+                        "open_now": open_now,
                         "metadata": {
                             "foursquare_id": v.get("fsq_id"),
                             "review_count": v.get("stats", {}).get("total_ratings"),
                             "photo_count": v.get("stats", {}).get("total_photos"),
-                            "opening_hours": v.get("hours", {}).get("display"),
+                            "opening_hours": hours.get("display"),
                             "discovery_source": "foursquare_trending",
                             "amenities": attr_flags,
+                            "features": v.get("features", []),
                         },
                     })
 
@@ -165,6 +217,10 @@ class EnhancedPlaceDataService:
         self,
         city: str,
         limit: int = 20,
+        query: str = None,
+        categories: str = None,
+        min_price: int = None,
+        max_price: int = None,
     ) -> List[Dict[str, Any]]:
         """Fetch trending venues from Foursquare by city name (no radius).
 
@@ -174,7 +230,7 @@ class EnhancedPlaceDataService:
             return []
 
         city_key = city.strip().lower()
-        cache_key = f"fsq_trending_city:{city_key}:{limit}"
+        cache_key = f"fsq_trending_city:{city_key}:{limit}:{query}:{categories}:{min_price}:{max_price}"
         cached = self._cache_get(self._cache_discovery, cache_key)
         if cached is not None:
             return cached
@@ -187,8 +243,18 @@ class EnhancedPlaceDataService:
                 "near": city,
                 "limit": min(limit * 2, 50),
                 "sort": "POPULARITY",
-                "fields": "fsq_id,name,location,geocodes,categories,rating,stats,hours,website,tel",
+                "fields": "fsq_id,name,location,geocodes,categories,rating,stats,hours,website,tel,photos,price,popularity,verified,description,features",
             }
+
+            # Add search filters to Foursquare API call
+            if query:
+                params["query"] = query
+            if categories:
+                params["categories"] = categories
+            if min_price is not None:
+                params["min_price"] = min_price
+            if max_price is not None:
+                params["max_price"] = max_price
 
             try:
                 resp = await client.get(url, headers=headers, params=params)
@@ -207,6 +273,34 @@ class EnhancedPlaceDataService:
                         "location", {}).get("latitude")
                     vlon = (loc.get("longitude") if loc else None) or v.get(
                         "location", {}).get("longitude")
+                    # Extract photo URLs from Foursquare response
+                    photos = []
+                    if v.get("photos"):
+                        for photo in v.get("photos", []):
+                            # Foursquare photos have prefix + suffix format
+                            prefix = photo.get("prefix", "")
+                            suffix = photo.get("suffix", "")
+                            if prefix and suffix:
+                                # Create a medium-sized photo URL (300x300)
+                                photo_url = f"{prefix}300x300{suffix}"
+                                photos.append(photo_url)
+
+                    # Convert Foursquare price (1-4) to price tier symbols
+                    price_tier = None
+                    fsq_price = v.get("price")
+                    if fsq_price is not None:
+                        price_map = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
+                        price_tier = price_map.get(fsq_price)
+
+                    # Get enhanced address from location
+                    location = v.get("location", {})
+                    address = location.get("formatted_address") or location.get("address")
+                    city = location.get("locality") or location.get("city")
+
+                    # Check if currently open
+                    hours = v.get("hours", {})
+                    open_now = hours.get("open_now")
+
                     results.append({
                         "id": None,
                         "name": v.get("name"),
@@ -218,12 +312,22 @@ class EnhancedPlaceDataService:
                         "website": v.get("website"),
                         "external_id": v.get("fsq_id"),
                         "data_source": "foursquare",
+                        "photos": photos,
+                        # Enhanced fields
+                        "price_tier": price_tier,
+                        "popularity": v.get("popularity"),
+                        "verified": v.get("verified"),
+                        "description": v.get("description"),
+                        "address": address,
+                        "city": city,
+                        "open_now": open_now,
                         "metadata": {
                             "foursquare_id": v.get("fsq_id"),
                             "review_count": v.get("stats", {}).get("total_ratings"),
                             "photo_count": v.get("stats", {}).get("total_photos"),
-                            "opening_hours": v.get("hours", {}).get("display"),
+                            "opening_hours": hours.get("display"),
                             "discovery_source": "foursquare_trending_city",
+                            "features": v.get("features", []),
                         },
                     })
 
@@ -1455,6 +1559,93 @@ class EnhancedPlaceDataService:
             'metadata': place.place_metadata,
             'last_enriched_at': place.last_enriched_at.isoformat() if place.last_enriched_at else None
         }
+
+    async def save_foursquare_place_to_db(self, place_data: Dict[str, Any], db: AsyncSession) -> Optional[Place]:
+        """Save a Foursquare place to the local database.
+
+        Args:
+            place_data: Dictionary containing place data from Foursquare
+            db: Database session
+
+        Returns:
+            Created Place object or None if it already exists
+        """
+        try:
+            # Check if place already exists by external_id (Foursquare ID)
+            existing = await db.execute(
+                select(Place).where(Place.external_id == place_data.get('external_id'))
+            )
+            if existing.scalar_one_or_none():
+                logger.info(f"Place with external_id {place_data.get('external_id')} already exists")
+                return None
+
+            # Create new place from Foursquare data
+            place = Place(
+                name=place_data.get('name'),
+                latitude=place_data.get('latitude'),
+                longitude=place_data.get('longitude'),
+                categories=place_data.get('categories'),
+                rating=place_data.get('rating'),
+                phone=place_data.get('phone'),
+                website=place_data.get('website'),
+                address=place_data.get('address'),
+                city=place_data.get('city'),
+                external_id=place_data.get('external_id'),
+                data_source=place_data.get('data_source', 'foursquare'),
+                price_tier=place_data.get('price_tier'),
+                place_metadata=place_data.get('metadata', {}),
+                last_enriched_at=datetime.now(timezone.utc)
+            )
+
+            # Auto-populate country/city/neighborhood if missing using reverse geocoding
+            if place.latitude is not None and place.longitude is not None:
+                try:
+                    geo = await self.reverse_geocode_details(lat=place.latitude, lon=place.longitude)
+                    if not place.city and geo.get("city"):
+                        place.city = geo.get("city")
+                    if not getattr(place, "country", None) and geo.get("country"):
+                        place.country = geo.get("country")
+                    if not getattr(place, "neighborhood", None) and geo.get("neighborhood"):
+                        place.neighborhood = geo.get("neighborhood")
+                except Exception as e:
+                    logger.warning(f"Failed to reverse geocode place {place.name}: {e}")
+
+            db.add(place)
+            await db.flush()
+            logger.info(f"Saved Foursquare place: {place.name} (ID: {place.id})")
+            return place
+
+        except Exception as e:
+            logger.error(f"Failed to save Foursquare place to database: {e}")
+            await db.rollback()
+            return None
+
+    async def save_foursquare_places_to_db(self, places_data: List[Dict[str, Any]], db: AsyncSession) -> List[Place]:
+        """Save multiple Foursquare places to the local database.
+
+        Args:
+            places_data: List of dictionaries containing place data from Foursquare
+            db: Database session
+
+        Returns:
+            List of created Place objects
+        """
+        saved_places = []
+        for place_data in places_data:
+            place = await self.save_foursquare_place_to_db(place_data, db)
+            if place:
+                saved_places.append(place)
+
+        if saved_places:
+            try:
+                await db.commit()
+                logger.info(f"Successfully saved {len(saved_places)} Foursquare places to database")
+            except Exception as e:
+                logger.error(f"Failed to commit Foursquare places to database: {e}")
+                await db.rollback()
+                return []
+
+        return saved_places
 
 
 # Global instance

@@ -169,6 +169,14 @@ class ExternalPlaceResult(BaseModel):
     external_id: Optional[str] = None
     data_source: str = "osm_overpass"
     distance_m: float
+    photos: Optional[List[str]] = None
+    # Enhanced Foursquare fields
+    price_tier: Optional[str] = None  # "$", "$$", "$$$", "$$$$"
+    rating: Optional[float] = None
+    popularity: Optional[float] = None  # 0.0-1.0 foot traffic score
+    verified: Optional[bool] = None  # Whether place is claimed
+    description: Optional[str] = None
+    open_now: Optional[bool] = None
     model_config = ConfigDict(from_attributes=False)
 
 
@@ -186,12 +194,6 @@ class PaginatedPlaces(BaseModel):
     total: int
     limit: int
     offset: int
-    external_results: list[ExternalPlaceResult] = Field(default_factory=list)
-    external_snapshot_id: Optional[int] = None
-    external_source: Optional[str] = None
-    external_search_key: Optional[str] = None
-    external_count: int = 0
-    external_fetched_at: Optional[datetime] = None
 
 
 class AdvancedSearchFilters(BaseModel):
