@@ -199,6 +199,13 @@ async def _nearby_places_python_fallback(
     radius_m: int,
     limit: int,
     offset: int,
+    q: str | None = None,
+    place_type: str | None = None,
+    country: str | None = None,
+    city: str | None = None,
+    neighborhood: str | None = None,
+    min_rating: float | None = None,
+    price_tier: str | None = None,
 ) -> PaginatedPlaces:
     """Fallback nearby query for databases without PostGIS/math functions."""
     lat_buffer = radius_m / 111_320
@@ -214,19 +221,39 @@ async def _nearby_places_python_fallback(
     min_lng = lng - lon_buffer
     max_lng = lng + lon_buffer
 
-    stmt = select(Place).where(
+    filters = [
         Place.latitude.is_not(None),
         Place.longitude.is_not(None),
         Place.latitude >= min_lat,
         Place.latitude <= max_lat,
-    )
+    ]
 
     # Only apply longitude bounds when we are not spanning the entire globe
     if lon_buffer < 180:
         min_lng = max(min_lng, -180)
         max_lng = min(max_lng, 180)
-        stmt = stmt.where(Place.longitude >= min_lng,
-                          Place.longitude <= max_lng)
+        filters.extend([
+            Place.longitude >= min_lng,
+            Place.longitude <= max_lng
+        ])
+
+    # Apply search and category filters
+    if q:
+        filters.append(Place.name.ilike(f"%{q}%"))
+    if place_type:
+        filters.append(Place.categories.ilike(f"%{place_type}%"))
+    if country:
+        filters.append(Place.country.ilike(f"%{country}%"))
+    if city:
+        filters.append(Place.city.ilike(f"%{city}%"))
+    if neighborhood:
+        filters.append(Place.neighborhood.ilike(f"%{neighborhood}%"))
+    if min_rating is not None:
+        filters.append(Place.rating >= min_rating)
+    if price_tier:
+        filters.append(Place.price_tier == price_tier)
+
+    stmt = select(Place).where(*filters)
 
     candidates = (await db.execute(stmt)).scalars().all()
     logging.info(
@@ -255,8 +282,6 @@ async def _nearby_places_python_fallback(
         total=total,
         limit=limit,
         offset=offset,
-        external_results=[],
-        external_count=0,
     )
 
 
@@ -396,72 +421,6 @@ async def create_place(payload: PlaceCreate, db: AsyncSession = Depends(get_db))
     return place
 
 
-@router.get("/search", response_model=PaginatedPlaces)
-async def search_places(
-    query: str | None = None,
-    city: str | None = None,
-    neighborhood: str | None = None,
-    category: str | None = None,
-    rating_min: float | None = None,
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Search for places with basic filters.
-
-    **Authentication Required:** No (public endpoint)
-
-    **Search Filters:**
-    - `query`: Search in place names (partial match)
-    - `city`: Filter by specific city
-    - `neighborhood`: Filter by neighborhood
-    - `category`: Filter by category (partial match)
-    - `rating_min`: Minimum rating filter
-
-    **Pagination:**
-    - `limit`: Number of results (1-100, default 20)
-    - `offset`: Number of results to skip (default 0)
-
-    **Response:**
-    - `items`: Array of places matching criteria
-    - `total`: Total number of matching places
-    - `limit`/`offset`: Pagination info
-
-    **Use Cases:**
-    - Basic place discovery
-    - Location-based searches
-    - Category browsing
-    - Rating-based filtering
-    """
-    # total count
-    count_stmt = select(func.count(Place.id))
-    if query:
-        count_stmt = count_stmt.where(Place.name.ilike(f"%{query}%"))
-    if city:
-        count_stmt = count_stmt.where(Place.city == city)
-    if neighborhood:
-        count_stmt = count_stmt.where(Place.neighborhood == neighborhood)
-    if category:
-        count_stmt = count_stmt.where(Place.categories.ilike(f"%{category}%"))
-    if rating_min is not None:
-        count_stmt = count_stmt.where(Place.rating >= rating_min)
-    total = (await db.execute(count_stmt)).scalar_one()
-
-    stmt = select(Place)
-    if query:
-        stmt = stmt.where(Place.name.ilike(f"%{query}%"))
-    if city:
-        stmt = stmt.where(Place.city == city)
-    if neighborhood:
-        stmt = stmt.where(Place.neighborhood == neighborhood)
-    if category:
-        stmt = stmt.where(Place.categories.ilike(f"%{category}%"))
-    if rating_min is not None:
-        stmt = stmt.where(Place.rating >= rating_min)
-    stmt = stmt.offset(offset).limit(limit)
-    items = (await db.execute(stmt)).scalars().all()
-    return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/recommendations", response_model=PaginatedPlaces)
@@ -793,139 +752,10 @@ async def advanced_search_places(
     return PaginatedPlaces(items=items, total=total, limit=filters.limit, offset=filters.offset)
 
 
-@router.get("/search/suggestions", response_model=SearchSuggestions)
-async def get_search_suggestions(
-    query: str | None = None,
-    limit: int = Query(10, ge=1, le=50),
-    db: AsyncSession = Depends(get_db),
-):
-    """Get search suggestions for cities, neighborhoods, and categories"""
-
-    # City suggestions
-    city_stmt = select(Place.city, func.count(Place.id).label('count'))
-    if query:
-        city_stmt = city_stmt.where(Place.city.ilike(f"%{query}%"))
-    city_stmt = city_stmt.where(Place.city.is_not(None)).group_by(
-        Place.city).order_by(desc('count')).limit(limit)
-    city_results = (await db.execute(city_stmt)).all()
-
-    # Neighborhood suggestions
-    neighborhood_stmt = select(
-        Place.neighborhood, func.count(Place.id).label('count'))
-    if query:
-        neighborhood_stmt = neighborhood_stmt.where(
-            Place.neighborhood.ilike(f"%{query}%"))
-    neighborhood_stmt = neighborhood_stmt.where(Place.neighborhood.is_not(
-        None)).group_by(Place.neighborhood).order_by(desc('count')).limit(limit)
-    neighborhood_results = (await db.execute(neighborhood_stmt)).all()
-
-    # Category suggestions (extract from comma-separated categories)
-    category_stmt = select(
-        Place.categories, func.count(Place.id).label('count'))
-    if query:
-        category_stmt = category_stmt.where(
-            Place.categories.ilike(f"%{query}%"))
-    category_stmt = category_stmt.where(Place.categories.is_not(None)).group_by(Place.categories).order_by(
-        # Get more to extract individual categories
-        desc('count')).limit(limit * 2)
-    category_results = (await db.execute(category_stmt)).all()
-
-    # Process categories (split comma-separated values)
-    category_counts = {}
-    for result in category_results:
-        if result.categories:
-            categories = [cat.strip() for cat in result.categories.split(',')]
-            for category in categories:
-                if category and (not query or query.lower() in category.lower()):
-                    category_counts[category] = category_counts.get(
-                        category, 0) + result.count
-
-    # Sort categories by count and take top results
-    sorted_categories = sorted(
-        category_counts.items(), key=lambda x: x[1], reverse=True)[:limit]
-
-    return SearchSuggestions(
-        cities=[SearchSuggestion(
-            type="city", value=result.city, count=result.count) for result in city_results],
-        neighborhoods=[SearchSuggestion(
-            type="neighborhood", value=result.neighborhood, count=result.count) for result in neighborhood_results],
-        categories=[SearchSuggestion(type="category", value=category, count=count)
-                    for category, count in sorted_categories]
-    )
 
 
-@router.get("/search/filter-options")
-async def get_filter_options(db: AsyncSession = Depends(get_db)):
-    """Get available filter options for search"""
-
-    # Get all cities
-    cities_stmt = select(Place.city, func.count(Place.id).label('count')).where(
-        Place.city.is_not(None)).group_by(Place.city).order_by(desc('count'))
-    cities = (await db.execute(cities_stmt)).all()
-
-    # Get all neighborhoods
-    neighborhoods_stmt = select(Place.neighborhood, func.count(Place.id).label('count')).where(
-        Place.neighborhood.is_not(None)).group_by(Place.neighborhood).order_by(desc('count'))
-    neighborhoods = (await db.execute(neighborhoods_stmt)).all()
-
-    # Get all categories
-    categories_stmt = select(Place.categories, func.count(Place.id).label('count')).where(
-        Place.categories.is_not(None)).group_by(Place.categories).order_by(desc('count'))
-    categories_results = (await db.execute(categories_stmt)).all()
-
-    # Process categories
-    category_counts = {}
-    for result in categories_results:
-        if result.categories:
-            categories = [cat.strip() for cat in result.categories.split(',')]
-            for category in categories:
-                if category:
-                    category_counts[category] = category_counts.get(
-                        category, 0) + result.count
-
-    # Get rating range
-    rating_stats = (await db.execute(select(func.min(Place.rating), func.max(Place.rating), func.avg(Place.rating)))).first()
-
-    return {
-        "cities": [{"name": city.city, "count": city.count} for city in cities],
-        "neighborhoods": [{"name": neighborhood.neighborhood, "count": neighborhood.count} for neighborhood in neighborhoods],
-        "categories": [{"name": category, "count": count} for category, count in sorted(category_counts.items(), key=lambda x: x[1], reverse=True)],
-        "rating_range": {
-            "min": float(rating_stats[0]) if rating_stats[0] else 0,
-            "max": float(rating_stats[1]) if rating_stats[1] else 5,
-            "average": float(rating_stats[2]) if rating_stats[2] else 0
-        }
-    }
 
 
-@router.get("/search/quick", response_model=PaginatedPlaces)
-async def quick_search_places(
-    q: str,
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    db: AsyncSession = Depends(get_db),
-):
-    """Quick search across multiple fields (name, city, neighborhood, categories)"""
-
-    # Build search query across multiple fields
-    search_conditions = [
-        Place.name.ilike(f"%{q}%"),
-        Place.city.ilike(f"%{q}%"),
-        Place.neighborhood.ilike(f"%{q}%"),
-        Place.categories.ilike(f"%{q}%")
-    ]
-
-    # Count total
-    count_stmt = select(func.count(Place.id)).where(
-        or_(*search_conditions))
-    total = (await db.execute(count_stmt)).scalar_one()
-
-    # Get results
-    stmt = select(Place).where(or_(*search_conditions)
-                               ).order_by(Place.name.asc()).offset(offset).limit(limit)
-    items = (await db.execute(stmt)).scalars().all()
-
-    return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
 
 # Removed place-level photo upload; use review-attached photos instead
@@ -1077,30 +907,29 @@ async def delete_review_photo(
 
 @router.get("/trending", response_model=PaginatedPlaces)
 async def get_trending_places(
-    time_window: str = Query(
-        "24h", description="Time window: 1h, 6h, 24h, 7d, 30d"),
+    time_window: str = Query("24h", description="Time window: 1h, 6h, 24h, 7d, 30d"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    lat: float | None = Query(
-        None, description="Latitude of the user location"),
-    lng: float | None = Query(
-        None, description="Longitude of the user location"),
+    lat: float | None = Query(None, description="Latitude of the user location"),
+    lng: float | None = Query(None, description="Longitude of the user location"),
     q: str | None = Query(None, description="Search text for place name"),
-    place_type: str | None = Query(
-        None, description="Category contains (e.g., cafe)"),
+    place_type: str | None = Query(None, description="Category contains (e.g., cafe)"),
     country: str | None = Query(None, description="Country filter (optional)"),
     city: str | None = Query(None, description="City filter (optional)"),
-    neighborhood: str | None = Query(
-        None, description="Neighborhood contains"),
-    min_rating: float | None = Query(
-        None, ge=0, le=5, description="Minimum rating"),
+    neighborhood: str | None = Query(None, description="Neighborhood contains"),
+    min_rating: float | None = Query(None, ge=0, le=5, description="Minimum rating"),
     price_tier: str | None = Query(None, description="$, $$, $$$, $$$$"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Get trending places based on recent activity.
+    Get trending places based on recent activity with Foursquare enhancement.
 
     **Authentication Required:** No
+
+    **Hybrid Approach:**
+    - Primary: Local database trending algorithm based on user activity
+    - Enhancement: Foursquare discovery for gaps and new places
+    - Data preservation: All user social data (check-ins, reviews) maintained
 
     **Trending Algorithm:**
     - Calculates activity score over specified time window
@@ -1120,16 +949,10 @@ async def get_trending_places(
     - Photos: 1 point each
     - Unique users: 2 points each
 
-    **Parameters:**
-    - `time_window`: Activity time period
-    - `lat`/`lng`: Optional coordinates for proximity re-ranking
-    - `limit`/`offset`: Standard pagination
-
-    **Use Cases:**
-    - Discover popular places
-    - Real-time trending content
-    - Location-aware trending
-    - Activity-based discovery
+    **Foursquare Enhancement:**
+    - Adds external discoveries when local results are insufficient
+    - Saves new places to local database for future trending
+    - Maintains photo URLs and rich metadata
     """
     # Require coordinates for local trending
     if lat is None or lng is None:
@@ -1143,58 +966,9 @@ async def get_trending_places(
     logging.info(f"Reverse geocoding result: {geo}")
     inferred_city = city or geo.get("city")
     inferred_neighborhood = geo.get("neighborhood")
-    logging.info(
-        f"Inferred city: {inferred_city}, neighborhood: {inferred_neighborhood}")
+    logging.info(f"Inferred city: {inferred_city}, neighborhood: {inferred_neighborhood}")
 
-    # FSQ override: use Foursquare-based trending by inferred city if enabled
-    from ..config import settings as app_settings
-    if app_settings.fsq_trending_override:
-        # Prefer explicit city, else inferred; fallback to lat/lng search
-        if inferred_city:
-            fsq = await enhanced_place_data_service.fetch_foursquare_trending_city(city=inferred_city, limit=limit)
-        else:
-            fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
-        now_ts = datetime.now(timezone.utc)
-        # Optionally attach a best-effort photo if present in metadata
-        items = []
-        for idx, p in enumerate(fsq):
-            photo_url = None
-            md = p.get("metadata") or {}
-            photos = md.get("photos") or []
-            if photos and isinstance(photos, list):
-                # photos may be URL strings or dicts with url
-                first = photos[0]
-                photo_url = first if isinstance(
-                    first, str) else first.get("url")
-            items.append(
-                PlaceResponse(
-                    id=-(idx + 1),
-                    name=p.get("name"),
-                    address=None,
-                    city=inferred_city,
-                    neighborhood=None,
-                    latitude=p.get("latitude"),
-                    longitude=p.get("longitude"),
-                    categories=p.get("categories"),
-                    rating=p.get("rating"),
-                    price_tier=p.get("price_tier"),
-                    created_at=now_ts,
-                    photo_url=photo_url,
-                    recent_checkins_count=0,
-                )
-            )
-        # client-side like filters server-applied on FSQ set
-        if q:
-            items = [it for it in items if it.name and q.lower()
-                     in it.name.lower()]
-        if place_type:
-            items = [it for it in items if it.categories and place_type.lower() in str(
-                it.categories).lower()]
-        if min_rating is not None:
-            items = [it for it in items if (it.rating or 0) >= min_rating]
-        return PaginatedPlaces(items=items, total=len(items), limit=limit, offset=offset)
-
-    # Calculate time window
+    # Calculate time window for trending
     now = datetime.now(timezone.utc)
     time_windows = {
         "1h": timedelta(hours=1),
@@ -1210,48 +984,7 @@ async def get_trending_places(
 
     window_start = now - time_windows[time_window]
 
-    if not inferred_city:
-        logging.warning(
-            f"Could not infer city from coordinates: lat={lat}, lng={lng}, geo={geo}")
-        # Try to use Foursquare directly with coordinates if city inference fails
-        if app_settings.fsq_trending_override:
-            logging.info(
-                "Using Foursquare trending with coordinates as fallback")
-            fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
-            now_ts = datetime.now(timezone.utc)
-            items = []
-            for idx, p in enumerate(fsq):
-                photo_url = None
-                md = p.get("metadata") or {}
-                photos = md.get("photos") or []
-                if photos and isinstance(photos, list):
-                    first = photos[0]
-                    photo_url = first if isinstance(
-                        first, str) else first.get("url")
-                items.append(
-                    PlaceResponse(
-                        id=-(idx + 1),
-                        name=p.get("name"),
-                        address=None,
-                        city=None,
-                        neighborhood=None,
-                        latitude=p.get("latitude"),
-                        longitude=p.get("longitude"),
-                        categories=p.get("categories"),
-                        rating=p.get("rating"),
-                        price_tier=p.get("price_tier"),
-                        created_at=now_ts,
-                        recent_checkins_count=0,
-                        external_results=[],
-                        external_count=0,
-                    )
-                )
-            return PaginatedPlaces(items=items, total=len(items), limit=limit, offset=0)
-        else:
-            raise HTTPException(
-                status_code=404, detail="Could not infer city from provided coordinates")
-
-    # Build trending score query filtered by inferred city
+    # Build trending score query filtered by inferred city (LOCAL DATABASE FIRST)
     # Score = (check-ins * 3) + (reviews * 2) + (photos * 1) + (unique users * 2)
     trending_base = (
         select(
@@ -1264,6 +997,7 @@ async def get_trending_places(
             Place.longitude,
             Place.categories,
             Place.rating,
+            Place.price_tier,
             Place.created_at,
             # Check-ins count
             func.coalesce(func.count(CheckIn.id), 0).label('checkins_count'),
@@ -1272,15 +1006,13 @@ async def get_trending_places(
             # Photos count (from reviews)
             func.coalesce(func.count(Photo.id), 0).label('photos_count'),
             # Unique users who checked in
-            func.coalesce(func.count(func.distinct(CheckIn.user_id)), 0).label(
-                'unique_users'),
+            func.coalesce(func.count(func.distinct(CheckIn.user_id)), 0).label('unique_users'),
             # Calculate trending score
             (
                 func.coalesce(func.count(CheckIn.id), 0) * 3 +
                 func.coalesce(func.count(Review.id), 0) * 2 +
                 func.coalesce(func.count(Photo.id), 0) * 1 +
-                func.coalesce(func.count(
-                    func.distinct(CheckIn.user_id)), 0) * 2
+                func.coalesce(func.count(func.distinct(CheckIn.user_id)), 0) * 2
             ).label('trending_score')
         )
         .outerjoin(CheckIn, and_(
@@ -1299,21 +1031,19 @@ async def get_trending_places(
 
     # Apply location filters: prefer explicit params, else inferred city
     if country:
-        trending_base = trending_base.where(Place.country.ilike(country))
-    if inferred_city:
-        trending_base = trending_base.where(Place.city.ilike(inferred_city))
-    # Only narrow by neighborhood if explicitly provided
+        trending_base = trending_base.where(Place.country.ilike(f"%{country}%"))
+    if city:
+        # Use explicit city if provided
+        trending_base = trending_base.where(Place.city.ilike(f"%{city}%"))
+    elif inferred_city:
+        # Use inferred city if no explicit city provided
+        trending_base = trending_base.where(Place.city.ilike(f"%{inferred_city}%"))
     if neighborhood:
-        trending_base = trending_base.where(
-            Place.neighborhood.ilike(f"%{neighborhood}%"))
+        trending_base = trending_base.where(Place.neighborhood.ilike(f"%{neighborhood}%"))
     if q:
         trending_base = trending_base.where(Place.name.ilike(f"%{q}%"))
     if place_type:
-        trending_base = trending_base.where(
-            Place.categories.ilike(f"%{place_type}%"))
-    if neighborhood:
-        trending_base = trending_base.where(
-            Place.neighborhood.ilike(f"%{neighborhood}%"))
+        trending_base = trending_base.where(Place.categories.ilike(f"%{place_type}%"))
     if min_rating is not None:
         trending_base = trending_base.where(Place.rating >= min_rating)
     if price_tier:
@@ -1332,21 +1062,23 @@ async def get_trending_places(
         .subquery()
     )
 
+    # Execute local trending query
     if q:
         # Build a general place filter for the search keyword within location/other filters
-        place_filter = select(Place.id).where(Place.city.ilike(inferred_city))
+        place_filter = select(Place.id)
+        if city:
+            place_filter = place_filter.where(Place.city.ilike(f"%{city}%"))
+        elif inferred_city:
+            place_filter = place_filter.where(Place.city.ilike(f"%{inferred_city}%"))
         if neighborhood:
-            place_filter = place_filter.where(
-                Place.neighborhood.ilike(f"%{neighborhood}%"))
+            place_filter = place_filter.where(Place.neighborhood.ilike(f"%{neighborhood}%"))
         if place_type:
-            place_filter = place_filter.where(
-                Place.categories.ilike(f"%{place_type}%"))
+            place_filter = place_filter.where(Place.categories.ilike(f"%{place_type}%"))
         if min_rating is not None:
             place_filter = place_filter.where(Place.rating >= min_rating)
         if price_tier:
             place_filter = place_filter.where(Place.price_tier == price_tier)
-        place_filter = place_filter.where(
-            Place.name.ilike(f"%{q}%")).subquery()
+        place_filter = place_filter.where(Place.name.ilike(f"%{q}%")).subquery()
 
         # Main query: all matching places, ordered by trending score if available
         stmt = (
@@ -1369,47 +1101,100 @@ async def get_trending_places(
             .offset(offset)
             .limit(limit)
         )
-
         count_stmt = select(func.count()).select_from(trending_subq)
 
-    # Execute queries
+    # Execute local database queries
     total = (await db.execute(count_stmt)).scalar_one()
     items = (await db.execute(stmt)).scalars().all()
 
-    await _attach_recent_checkins(
-        db, items, app_settings.place_chat_window_hours)
+    # Attach recent checkins (CRITICAL: preserve user activity data)
+    from ..config import settings as app_settings
+    await _attach_recent_checkins(db, items, app_settings.place_chat_window_hours)
 
-    # Optional: re-rank by proximity (we have lat/lng)
-    from ..utils import haversine_distance
+    # Optional: re-rank by proximity
+    if lat is not None and lng is not None:
+        from ..utils import haversine_distance
+        def distance_or_inf(p: Place) -> float:
+            if p.latitude is None or p.longitude is None:
+                return float("inf")
+            return haversine_distance(lat, lng, p.latitude, p.longitude)
+        items = sorted(items, key=distance_or_inf)
 
-    def distance_or_inf(p: Place) -> float:
-        if p.latitude is None or p.longitude is None:
-            return float("inf")
-        return haversine_distance(lat, lng, p.latitude, p.longitude)
-    items = sorted(items, key=distance_or_inf)
+    # FOURSQUARE ENHANCEMENT: Add external discoveries if local results are insufficient
+    if total < limit and lat is not None and lng is not None:
+        logging.info(f"Local trending returned {total} places, enhancing with Foursquare")
 
-    # Fallback to FSQ if no internal trending and enabled
-    if total == 0 and app_settings.fsq_trending_enabled and lat is not None and lng is not None:
-        fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
+        # Convert price tier to Foursquare price range
+        min_price = None
+        max_price = None
+        if price_tier:
+            if price_tier == "$":
+                min_price, max_price = 1, 2
+            elif price_tier == "$$":
+                min_price, max_price = 3, 4
+            elif price_tier == "$$$":
+                min_price, max_price = 3, 4
+            elif price_tier == "$$$$":
+                min_price, max_price = 4, 4
+
+        # Get additional places from Foursquare
+        remaining_limit = limit - total
+        fsq_places = await enhanced_place_data_service.fetch_foursquare_trending(
+            lat=lat,
+            lon=lng,
+            limit=remaining_limit * 2,  # Get extra to filter out duplicates
+            query=q,
+            categories=place_type,
+            min_price=min_price,
+            max_price=max_price
+        )
+
+        # Save Foursquare places to local database for future trending
+        if fsq_places:
+            try:
+                saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(fsq_places, db)
+                logging.info(f"Saved {len(saved_places)} new Foursquare places to database")
+            except Exception as e:
+                logging.warning(f"Failed to save Foursquare places to database: {e}")
+
+        # Convert Foursquare places to PlaceResponse and add to results
         now_ts = datetime.now(timezone.utc)
-        items_fsq = [
-            PlaceResponse(
-                id=-(idx + 1),
-                name=p.get("name"),
-                address=None,
-                city=None,
-                neighborhood=None,
-                latitude=p.get("latitude"),
-                longitude=p.get("longitude"),
-                categories=p.get("categories"),
-                rating=p.get("rating"),
-                price_tier=p.get("price_tier"),
-                created_at=now_ts,
-                recent_checkins_count=0,
+        fsq_items = []
+        existing_names = {item.name.lower() for item in items if item.name}
+
+        for p in fsq_places[:remaining_limit]:
+            # Skip if we already have this place locally
+            if p.get("name") and p.get("name").lower() in existing_names:
+                continue
+
+            # Extract photo URL
+            photo_url = None
+            photos = p.get("photos", [])
+            if photos:
+                photo_url = photos[0] if isinstance(photos[0], str) else photos[0]
+
+            fsq_items.append(
+                PlaceResponse(
+                    id=p.get("id"),
+                    name=p.get("name"),
+                    address=p.get("address"),
+                    city=p.get("city"),
+                    neighborhood=None,
+                    latitude=p.get("latitude"),
+                    longitude=p.get("longitude"),
+                    categories=p.get("categories"),
+                    rating=p.get("rating"),
+                    price_tier=p.get("price_tier"),
+                    created_at=now_ts,
+                    photo_url=photo_url,
+                    recent_checkins_count=0,  # External places don't have local checkins yet
+                )
             )
-            for idx, p in enumerate(fsq)
-        ]
-        return PaginatedPlaces(items=items_fsq, total=len(items_fsq), limit=limit, offset=offset)
+
+        # Combine local trending + Foursquare discoveries
+        items.extend(fsq_items)
+        total += len(fsq_items)
+        logging.info(f"Enhanced with {len(fsq_items)} Foursquare places, total: {total}")
 
     return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
@@ -1436,7 +1221,37 @@ async def get_global_trending_places(
         if lat is None or lng is None:
             raise HTTPException(
                 status_code=400, detail="Provide lat,lng for FSQ trending override")
-        fsq = await enhanced_place_data_service.fetch_foursquare_trending(lat=lat, lon=lng, limit=limit)
+        # Convert price tier to Foursquare price range
+        min_price = None
+        max_price = None
+        if price_tier:
+            if price_tier == "$":
+                min_price, max_price = 1, 2
+            elif price_tier == "$$":
+                min_price, max_price = 3, 4
+            elif price_tier == "$$$":
+                min_price, max_price = 3, 4
+            elif price_tier == "$$$$":
+                min_price, max_price = 4, 4
+
+        fsq = await enhanced_place_data_service.fetch_foursquare_trending(
+            lat=lat,
+            lon=lng,
+            limit=limit,
+            query=q,
+            categories=place_type,
+            min_price=min_price,
+            max_price=max_price
+        )
+
+        # Save Foursquare places to local database
+        if fsq:
+            try:
+                saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(fsq, db)
+                logging.info(f"Saved {len(saved_places)} new Foursquare trending places to database (global trending)")
+            except Exception as e:
+                logging.warning(f"Failed to save Foursquare trending places to database (global trending): {e}")
+
         now_ts = datetime.now(timezone.utc)
         items = [
             PlaceResponse(
@@ -1572,191 +1387,172 @@ async def nearby_places(
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Get nearby places with hybrid local database + Foursquare approach.
+
+    **Authentication Required:** No
+
+    **Hybrid Approach:**
+    - Primary: Local database with PostGIS/Python distance filtering
+    - Enhancement: Foursquare discovery when local results are insufficient
+    - Data preservation: All user social data (check-ins, reviews) maintained
+
+    **Features:**
+    - Efficient PostGIS distance search (fallback to Python if needed)
+    - Sorts results by distance (nearest first)
+    - Preserves recent check-ins and user activity
+    - Enhanced with Foursquare discoveries when needed
+
+    **Parameters:**
+    - `lat`/`lng`: Search center coordinates
+    - `radius_m`: Search radius in meters (default: 1000m)
+    - `limit`/`offset`: Standard pagination
+
+    **Use Cases:**
+    - Discover nearby places with social context
+    - Location-based exploration with user activity
+    - Distance-sorted place lists with check-in data
+    """
     from ..config import settings as app_settings
     import logging
-    logging.info(
-        f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
+    logging.info(f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
     paginated: PaginatedPlaces | None = None
 
+    # PRIMARY: Try local database first with PostGIS optimization
     if app_settings.use_postgis:
         try:
             # Use PostGIS for efficient distance search with lat/lng columns
             logging.info("Using PostGIS distance filtering for nearby search")
-            # Use spherical distance in meters without geography casts to avoid SQLAlchemy cache issues
             user_point = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
-            place_point = func.ST_SetSRID(func.ST_MakePoint(
-                Place.longitude, Place.latitude), 4326)
+            place_point = func.ST_SetSRID(func.ST_MakePoint(Place.longitude, Place.latitude), 4326)
             distance_m = func.ST_DistanceSphere(place_point, user_point)
 
-            # Count within radius (meters)
-            total_q = select(func.count(Place.id)).where(
+            # Build filter conditions for local places within radius
+            filters = [
                 Place.latitude.is_not(None),
                 Place.longitude.is_not(None),
                 distance_m <= radius_m,
-            )
+            ]
+
+            # Count within radius
+            total_q = select(func.count(Place.id)).where(*filters)
             total = (await db.execute(total_q)).scalar_one()
 
-            # Fetch places ordered by distance (meters)
+            # Fetch places ordered by distance
             stmt = (
                 select(Place)
-                .where(
-                    Place.latitude.is_not(None),
-                    Place.longitude.is_not(None),
-                    distance_m <= radius_m,
-                )
+                .where(*filters)
                 .order_by(distance_m.asc())
                 .offset(offset)
                 .limit(limit)
             )
             items = (await db.execute(stmt)).scalars().all()
-            paginated = PaginatedPlaces(
-                items=items,
-                total=total,
-                limit=limit,
-                offset=offset,
-                external_results=[],
-                external_count=0,
-            )
+            paginated = PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
         except Exception as e:
-            logging.warning(
-                f"PostGIS nearby failed, falling back to haversine: {e}")
-            # Rollback the failed transaction to clean up the connection
+            logging.warning(f"PostGIS nearby failed, falling back to haversine: {e}")
             await db.rollback()
 
+    # FALLBACK: Python distance calculation if PostGIS fails
     if paginated is None:
         logging.info("Using Python fallback for nearby places")
-        paginated = await _nearby_places_python_fallback(
-            db, lat, lng, radius_m, limit, offset
+        # Get all places and calculate distances in Python
+        stmt = select(Place).where(
+            Place.latitude.is_not(None),
+            Place.longitude.is_not(None)
         )
-        logging.info(f"Python fallback returned {paginated.total} places")
+        all_places = (await db.execute(stmt)).scalars().all()
 
-    await _attach_recent_checkins(
-        db, paginated.items, app_settings.place_chat_window_hours)
+        # Calculate distances and filter by radius
+        from ..utils import haversine_distance
+        nearby_places = []
+        for place in all_places:
+            distance_km = haversine_distance(lat, lng, place.latitude, place.longitude)
+            if distance_km <= (radius_m / 1000.0):  # Convert radius to km
+                nearby_places.append((place, distance_km))
 
-    # Always fetch external results (Foursquare + OSM)
-    should_fetch_external = True
-    if not should_fetch_external:
-        return paginated
+        # Sort by distance
+        nearby_places.sort(key=lambda x: x[1])
 
-    # Always fetch the full limit from external sources
-    max_external = limit
+        # Apply pagination
+        total = len(nearby_places)
+        paginated_places = nearby_places[offset:offset + limit]
+        items = [place for place, _ in paginated_places]
 
-    # Try Foursquare first for higher quality data
-    from ..config import settings as app_settings
-    fsq_results = []
-    if app_settings.fsq_trending_enabled and enhanced_place_data_service.foursquare_api_key:
-        try:
-            fsq_results = await enhanced_place_data_service.fetch_foursquare_trending(
-                lat=lat,
-                lon=lng,
-                limit=max_external
-            )
-            logging.info(
-                f"Foursquare returned {len(fsq_results)} nearby places")
-        except Exception as e:
-            logging.warning(f"Foursquare nearby search failed: {e}")
+        paginated = PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+        logging.info(f"Python fallback returned {total} places")
 
-    # If we still need more results, try OSM
-    osm_limit = max(0, max_external - len(fsq_results))
-    live_results = []
-    if osm_limit > 0:
-        live_results = await enhanced_place_data_service.search_live_overpass(
+    # Attach recent checkins (CRITICAL: preserve user activity data)
+    await _attach_recent_checkins(db, paginated.items, app_settings.place_chat_window_hours)
+
+    # FOURSQUARE ENHANCEMENT: Add external discoveries if local results are insufficient
+    if paginated.total < limit:
+        logging.info(f"Local nearby returned {paginated.total} places, enhancing with Foursquare")
+
+        # Get additional places from Foursquare (no filters for nearby - pure proximity)
+        remaining_limit = limit - paginated.total
+        fsq_places = await enhanced_place_data_service.fetch_foursquare_trending(
             lat=lat,
             lon=lng,
-            radius=radius_m,
-            query=None,
-            types=None,
-            limit=osm_limit,
+            limit=remaining_limit * 2  # Get extra to filter out duplicates
         )
-        logging.info(f"OSM returned {len(live_results)} nearby places")
 
-    # Combine Foursquare and OSM results
-    all_external_results = fsq_results + live_results
+        # Save Foursquare places to local database for future use
+        if fsq_places:
+            try:
+                saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(fsq_places, db)
+                logging.info(f"Saved {len(saved_places)} new Foursquare nearby places to database")
+            except Exception as e:
+                logging.warning(f"Failed to save Foursquare nearby places to database: {e}")
 
-    normalized_results: list[dict] = []
-    for item in all_external_results[:max_external]:
-        record = dict(item)
-        # Set data source if not already set
-        if "data_source" not in record:
-            # OSM results won't have this set
-            record["data_source"] = "osm_overpass"
+        # Convert Foursquare places to PlaceResponse and add to results
+        now_ts = datetime.now(timezone.utc)
+        fsq_items = []
+        existing_names = {item.name.lower() for item in paginated.items if item.name}
 
-        lat_val = record.get("latitude")
-        lon_val = record.get("longitude")
-        if lat_val is None or lon_val is None:
-            continue
-        if "distance_m" not in record:
-            record["distance_m"] = round(
-                haversine_distance(lat, lng, lat_val, lon_val) * 1000, 2
+        for p in fsq_places[:remaining_limit]:
+            # Skip if we already have this place locally
+            if p.get("name") and p.get("name").lower() in existing_names:
+                continue
+
+            # Extract photo URL
+            photo_url = None
+            photos = p.get("photos", [])
+            if photos:
+                photo_url = photos[0] if isinstance(photos[0], str) else photos[0]
+
+            fsq_items.append(
+                PlaceResponse(
+                    id=p.get("id"),
+                    name=p.get("name"),
+                    address=p.get("address"),
+                    city=p.get("city"),
+                    neighborhood=None,
+                    latitude=p.get("latitude"),
+                    longitude=p.get("longitude"),
+                    categories=p.get("categories"),
+                    rating=p.get("rating"),
+                    price_tier=p.get("price_tier"),
+                    created_at=now_ts,
+                    photo_url=photo_url,
+                    recent_checkins_count=0,  # External places don't have local checkins yet
+                )
             )
-        else:
-            record["distance_m"] = float(record["distance_m"])
-        normalized_results.append(record)
 
-    # Sort by distance to ensure nearest places first
-    normalized_results.sort(key=lambda x: x.get("distance_m", float('inf')))
+        # Add Foursquare discoveries to local results
+        paginated.items.extend(fsq_items)
+        paginated.total += len(fsq_items)
+        logging.info(f"Enhanced with {len(fsq_items)} Foursquare places, total: {paginated.total}")
 
-    if not normalized_results:
-        return paginated.model_copy(
-            update={
-                "external_results": [],
-                "external_count": 0,
-                "external_snapshot_id": None,
-                "external_source": None,
-                "external_search_key": None,
-                "external_fetched_at": None,
-            }
-        )
+        # Re-sort all items by distance to maintain nearest-first ordering
+        from ..utils import haversine_distance
+        def distance_or_inf(place: PlaceResponse) -> float:
+            if place.latitude is None or place.longitude is None:
+                return float("inf")
+            return haversine_distance(lat, lng, place.latitude, place.longitude)
 
-    response_results = [ExternalPlaceResult(**record)
-                        for record in normalized_results]
+        paginated.items.sort(key=distance_or_inf)
 
-    search_key = _build_external_search_key(lat, lng, radius_m, None, None)
-    snapshot_id: int | None = None
-    fetched_at = datetime.now(timezone.utc)
-
-    # Determine primary source based on results
-    fsq_count = len(fsq_results)
-    osm_count = len(live_results)
-    if fsq_count > 0 and osm_count > 0:
-        primary_source = "foursquare+osm"
-    elif fsq_count > 0:
-        primary_source = "foursquare"
-    else:
-        primary_source = "osm_overpass"
-
-    snapshot = ExternalSearchSnapshot(
-        search_key=search_key,
-        latitude=lat,
-        longitude=lng,
-        radius_m=radius_m,
-        query=None,
-        types=None,
-        source=primary_source,
-        result_count=len(normalized_results),
-        results=normalized_results,
-    )
-
-    try:
-        db.add(snapshot)
-        await db.commit()
-        await db.refresh(snapshot)
-        snapshot_id = snapshot.id
-        fetched_at = snapshot.fetched_at
-    except Exception as exc:  # pragma: no cover - defensive logging only
-        await db.rollback()
-        logger.warning("Failed to persist nearby external snapshot: %s", exc)
-
-    return paginated.model_copy(
-        update={
-            "external_results": response_results,
-            "external_count": len(response_results),
-            "external_snapshot_id": snapshot_id,
-            "external_source": primary_source,
-            "external_search_key": search_key,
-            "external_fetched_at": fetched_at,
-        }
-    )
+    return paginated
 
 
 @router.get("/{place_id}", response_model=EnhancedPlaceResponse)
@@ -3337,114 +3133,6 @@ async def test_external_endpoint():
     return {"message": "External endpoints are working!"}
 
 
-@router.get("/external/search", response_model=ExternalSearchResponse)
-async def search_external_places(
-    lat: float = Query(..., description="Latitude"),
-    lon: float = Query(..., description="Longitude"),
-    radius: int = Query(5000, ge=100, le=50000,
-                        description="Search radius in meters"),
-    query: str = Query(None, description="Optional search query"),
-    types: str = Query(
-        None, description="Comma-separated place types (e.g., restaurant,cafe)"),
-    limit: int = Query(20, ge=1, le=100, description="Max results"),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Search live OpenStreetMap (Overpass) data and keep a history snapshot.
-
-    **Authentication Required:** No (public endpoint)
-
-    **Features:**
-    - Live queries against free OSM/Overpass data
-    - Optional text and type filtering
-    - Results ranked by proximity
-    - Every response persisted for historical analysis (no place seeding)
-
-    **Parameters:**
-    - `lat`/`lon`: Search center coordinates
-    - `radius`: Search radius in meters (100-50000)
-    - `query`: Optional case-insensitive name fragment
-    - `types`: Optional comma-separated list of desired categories
-    - `limit`: Max results returned (1-100)
-    """
-    try:
-        type_list = [t.strip() for t in types.split(
-            ",") if t.strip()] if types else None
-
-        live_results = await enhanced_place_data_service.search_live_overpass(
-            lat=lat,
-            lon=lon,
-            radius=radius,
-            query=query,
-            types=type_list,
-            limit=limit,
-        )
-
-        normalized_results: list[dict] = []
-        for item in live_results[:limit]:
-            record = dict(item)
-            record.setdefault("data_source", "osm_overpass")
-            lat_val = record.get("latitude")
-            lon_val = record.get("longitude")
-            if lat_val is None or lon_val is None:
-                continue
-            if "distance_m" not in record:
-                record["distance_m"] = round(
-                    haversine_distance(lat, lon, lat_val, lon_val) * 1000, 2
-                )
-            else:
-                record["distance_m"] = float(record["distance_m"])
-            normalized_results.append(record)
-
-        search_key = _build_external_search_key(
-            lat, lon, radius, query, type_list)
-
-        response_results = [ExternalPlaceResult(**record)
-                            for record in normalized_results]
-
-        snapshot_id: int | None = None
-        fetched_at = datetime.now(timezone.utc)
-
-        snapshot = ExternalSearchSnapshot(
-            search_key=search_key,
-            latitude=lat,
-            longitude=lon,
-            radius_m=radius,
-            query=query,
-            types=",".join(type_list) if type_list else None,
-            source="osm_overpass",
-            result_count=len(normalized_results),
-            results=normalized_results,
-        )
-
-        try:
-            db.add(snapshot)
-            await db.commit()
-            await db.refresh(snapshot)
-            snapshot_id = snapshot.id
-            fetched_at = snapshot.fetched_at
-        except Exception as exc:  # pragma: no cover - logging only
-            await db.rollback()
-            logger.warning(
-                "Failed to persist external search snapshot: %s", exc)
-
-        return ExternalSearchResponse(
-            source="osm_overpass",
-            count=len(response_results),
-            fetched_at=fetched_at,
-            snapshot_id=snapshot_id,
-            search_key=search_key,
-            results=response_results,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:  # pragma: no cover - defensive path
-        logger.error("Failed to search external places: %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to search external places",
-        ) from e
 
 
 @router.get("/{place_id}/enrich", response_model=dict)
@@ -3673,95 +3361,6 @@ async def seed_places_from_osm(
         )
 
 
-@router.get("/search/enhanced", response_model=list[dict], include_in_schema=False)
-async def search_places_enhanced(
-    lat: float = Query(..., description="Latitude"),
-    lon: float = Query(..., description="Longitude"),
-    radius: int = Query(5000, ge=100, le=50000,
-                        description="Search radius in meters"),
-    query: str = Query(None, description="Optional search query"),
-    limit: int = Query(20, ge=1, le=100, description="Maximum results"),
-    enable_enrichment: bool = Query(
-        True, description="Enable Foursquare enrichment"),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Enhanced place search with automatic enrichment.
-
-    **Authentication Required:** No (public endpoint)
-
-    **Features:**
-    - Searches pre-seeded places in database
-    - Automatic Foursquare enrichment for stale/missing data
-    - Quality scoring and intelligent ranking
-    - Distance-based filtering and sorting
-
-    **Enrichment Logic:**
-    - Only enriches places that need it (missing data or stale)
-    - Hot places: 14-day TTL, Cold places: 60-day TTL
-    - Name similarity ≥ 0.65 + distance ≤ 150m matching
-    - Quality scoring: phone (+0.3), hours (+0.3), photos (+0.2), recent (+0.2)
-
-    **Ranking Algorithm:**
-    - 45% distance score
-    - 25% text match score
-    - 15% category boost
-    - 15% quality score
-
-    **Parameters:**
-    - `lat`/`lon`: Search center coordinates
-    - `radius`: Search radius in meters (100-50000)
-    - `query`: Optional search term
-    - `limit`: Maximum results (1-100)
-    - `enable_enrichment`: Enable/disable Foursquare enrichment
-
-    **Response:**
-    - List of places with quality scores
-    - Enrichment status for each place
-    - Distance and ranking information
-
-    **Use Cases:**
-    - Primary place discovery
-    - Location-based search
-    - High-quality place recommendations
-    """
-    try:
-        if enable_enrichment:
-            # Use enhanced search with enrichment
-            places = await enhanced_place_data_service.search_places_with_enrichment(
-                lat=lat,
-                lon=lon,
-                radius=radius,
-                query=query,
-                limit=limit,
-                db=db
-            )
-        else:
-            # Use basic search without enrichment
-            places = await enhanced_place_data_service._search_places_in_db(
-                lat=lat,
-                lon=lon,
-                radius=radius,
-                query=query,
-                limit=limit,
-                db=db
-            )
-            # Convert to response format
-            places = [
-                {
-                    **enhanced_place_data_service._place_to_dict(place),
-                    'quality_score': enhanced_place_data_service._calculate_quality_score(place)
-                }
-                for place in places
-            ]
-
-        return places
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to search places: {str(e)}"
-        )
 
 
 @router.post("/enrich/{place_id}", response_model=dict)
