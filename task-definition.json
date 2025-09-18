@@ -1,109 +1,155 @@
 {
-  "containerDefinitions": [
-    {
-      "name": "app",
-      "image": "704845220483.dkr.ecr.us-east-1.amazonaws.com/circles-app@sha256:54d492f30d4083a5f5d900b46580e5d9a0316e9401bca1b4cb0a013186a56872",
-      "cpu": 0,
-      "portMappings": [
+    "taskDefinitionArn": "arn:aws:ecs:us-east-1:704845220483:task-definition/circles-task:78",
+    "containerDefinitions": [
         {
-          "containerPort": 8000,
-          "hostPort": 8000,
-          "protocol": "tcp"
+            "name": "app",
+            "image": "704845220483.dkr.ecr.us-east-1.amazonaws.com/circles-app@sha256:36b1dec10c47b9b2597b22c52c5ab1cf27a8de7cd366e3d5c0b6749811ccac78",
+            "cpu": 0,
+            "portMappings": [
+                {
+                    "containerPort": 8000,
+                    "hostPort": 8000,
+                    "protocol": "tcp"
+                }
+            ],
+            "essential": true,
+            "command": [
+                "./start.sh"
+            ],
+            "environment": [
+                {
+                    "name": "S3_BUCKET",
+                    "value": "circles-media-259c"
+                },
+                {
+                    "name": "APP_S3_BUCKET",
+                    "value": "circles-media-259c"
+                },
+                {
+                    "name": "S3_REGION",
+                    "value": "us-east-1"
+                },
+                {
+                    "name": "APP_FSQ_TRENDING_OVERRIDE",
+                    "value": "false"
+                },
+                {
+                    "name": "APP_USE_POSTGIS",
+                    "value": "true"
+                },
+                {
+                    "name": "APP_JWT_EXPIRY_MINUTES",
+                    "value": "20160"
+                },
+                {
+                    "name": "APP_FSQ_TRENDING_ENABLED",
+                    "value": "true"
+                },
+                {
+                    "name": "APP_STORAGE_BACKEND",
+                    "value": "s3"
+                },
+                {
+                    "name": "APP_CHECKIN_MAX_DISTANCE_METERS",
+                    "value": "1000"
+                },
+                {
+                    "name": "APP_S3_REGION",
+                    "value": "us-east-1"
+                },
+                {
+                    "name": "APP_DEBUG",
+                    "value": "true"
+                }
+            ],
+            "mountPoints": [],
+            "volumesFrom": [],
+            "secrets": [
+                {
+                    "name": "APP_JWT_SECRET_KEY",
+                    "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_JWT_SECRET_KEY::"
+                },
+                {
+                    "name": "APP_OTP_SECRET_KEY",
+                    "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_OTP_SECRET_KEY::"
+                },
+                {
+                    "name": "APP_METRICS_TOKEN",
+                    "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_METRICS_TOKEN::"
+                },
+                {
+                    "name": "APP_DATABASE_URL",
+                    "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_DATABASE_URL::"
+                },
+                {
+                    "name": "DATABASE_URL",
+                    "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_DATABASE_URL::"
+                },
+                {
+                    "name": "APP_FOURSQUARE_API_KEY",
+                    "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_FOURSQUARE_API_KEY::"
+                }
+            ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/circles",
+                    "awslogs-region": "us-east-1",
+                    "awslogs-stream-prefix": "app"
+                }
+            },
+            "systemControls": []
         }
-      ],
-      "essential": true,
-      "command": [
-        "./start.sh"
-      ],
-      "environment": [
+    ],
+    "family": "circles-task",
+    "taskRoleArn": "arn:aws:iam::704845220483:role/circles-task-role",
+    "executionRoleArn": "arn:aws:iam::704845220483:role/circles-execution-role",
+    "networkMode": "awsvpc",
+    "revision": 78,
+    "volumes": [],
+    "status": "ACTIVE",
+    "requiresAttributes": [
         {
-          "name": "S3_BUCKET",
-          "value": "circles-media-259c"
+            "name": "com.amazonaws.ecs.capability.logging-driver.awslogs"
         },
         {
-          "name": "APP_S3_BUCKET",
-          "value": "circles-media-259c"
+            "name": "ecs.capability.execution-role-awslogs"
         },
         {
-          "name": "S3_REGION",
-          "value": "us-east-1"
+            "name": "com.amazonaws.ecs.capability.ecr-auth"
         },
         {
-          "name": "APP_FSQ_TRENDING_OVERRIDE",
-          "value": "false"
+            "name": "com.amazonaws.ecs.capability.docker-remote-api.1.19"
         },
         {
-          "name": "APP_USE_POSTGIS",
-          "value": "true"
+            "name": "ecs.capability.secrets.asm.environment-variables"
         },
         {
-          "name": "APP_JWT_EXPIRY_MINUTES",
-          "value": "20160"
+            "name": "com.amazonaws.ecs.capability.docker-remote-api.1.21"
         },
         {
-          "name": "APP_FSQ_TRENDING_ENABLED",
-          "value": "true"
+            "name": "com.amazonaws.ecs.capability.task-iam-role"
         },
         {
-          "name": "APP_STORAGE_BACKEND",
-          "value": "s3"
+            "name": "ecs.capability.execution-role-ecr-pull"
         },
         {
-          "name": "APP_CHECKIN_MAX_DISTANCE_METERS",
-          "value": "1000"
+            "name": "com.amazonaws.ecs.capability.docker-remote-api.1.18"
         },
         {
-          "name": "APP_S3_REGION",
-          "value": "us-east-1"
-        },
-        {
-          "name": "APP_DEBUG",
-          "value": "true"
+            "name": "ecs.capability.task-eni"
         }
-      ],
-      "mountPoints": [],
-      "volumesFrom": [],
-      "secrets": [
-        {
-          "name": "APP_JWT_SECRET_KEY",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_JWT_SECRET_KEY::"
-        },
-        {
-          "name": "APP_OTP_SECRET_KEY",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_OTP_SECRET_KEY::"
-        },
-        {
-          "name": "APP_METRICS_TOKEN",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_METRICS_TOKEN::"
-        },
-        {
-          "name": "APP_DATABASE_URL",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_DATABASE_URL::"
-        },
-        {
-          "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:704845220483:secret:circles/app-config-U0Rxwh:APP_DATABASE_URL::"
-        }
-      ],
-      "logConfiguration": {
-        "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/circles",
-          "awslogs-region": "us-east-1",
-          "awslogs-stream-prefix": "app"
-        }
-      },
-      "systemControls": []
-    }
-  ],
-  "family": "circles-task",
-  "taskRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
-  "executionRoleArn": "arn:aws:iam::704845220483:role/circles-ecs-task",
-  "networkMode": "awsvpc",
-  "volumes": [],
-  "requiresCompatibilities": [
-    "FARGATE"
-  ],
-  "cpu": "512",
-  "memory": "1024"
+    ],
+    "placementConstraints": [],
+    "compatibilities": [
+        "EC2",
+        "FARGATE"
+    ],
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "cpu": "512",
+    "memory": "1024",
+    "registeredAt": "2025-09-17T21:49:23.540000+03:00",
+    "registeredBy": "arn:aws:sts::704845220483:assumed-role/circles-codebuild-role/AWSCodeBuild-e7ef790d-11d2-4d99-a920-868294585ef6"
 }
