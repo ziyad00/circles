@@ -1201,6 +1201,32 @@ async def block_user(
     # Create or update the participant state for blocking
     state = await _get_or_create_state(db, thread.id, current_user.id)
     state.blocked = payload.blocked
+
+    # If blocking someone, remove any existing follow relationships
+    if payload.blocked:
+        from ..models import Follow
+        # Remove follow relationship if current user follows the blocked user
+        follow_res = await db.execute(
+            select(Follow).where(
+                Follow.follower_id == current_user.id,
+                Follow.followee_id == user_id
+            )
+        )
+        follow = follow_res.scalars().first()
+        if follow:
+            await db.delete(follow)
+
+        # Remove follow relationship if blocked user follows current user
+        follow_res = await db.execute(
+            select(Follow).where(
+                Follow.follower_id == user_id,
+                Follow.followee_id == current_user.id
+            )
+        )
+        follow = follow_res.scalars().first()
+        if follow:
+            await db.delete(follow)
+
     await db.commit()
     return DMThreadBlockUpdate(blocked=state.blocked)
 
