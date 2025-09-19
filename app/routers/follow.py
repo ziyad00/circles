@@ -59,30 +59,49 @@ router = APIRouter(prefix="/follow", tags=["follow"])
 async def follow_user(user_id: int, current_user: User = Depends(JWTService.get_current_user), db: AsyncSession = Depends(get_db)):
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot follow yourself")
+
+    # Check if target user exists
     res = await db.execute(select(User).where(User.id == user_id))
     target = res.scalars().first()
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
-    res = await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == user_id))
-    if res.scalars().first():
-        return {"followed": True}
-    db.add(Follow(follower_id=current_user.id, followee_id=user_id))
-    await db.commit()
 
-    # Create activity for the follow
+    # Use a single transaction for the entire operation
     try:
-        await create_follow_activity(
-            db=db,
-            follower_id=current_user.id,
-            followee_id=user_id,
-            followee_name=target.name or f"User {target.id}"
-        )
-    except Exception as e:
-        # Log error but don't fail the follow creation
-        print(
-            f"Failed to create activity for follow {current_user.id} -> {user_id}: {e}")
+        # Check if follow already exists within the transaction
+        res = await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == user_id))
+        if res.scalars().first():
+            return {"followed": True}
 
-    return {"followed": True}
+        # Create the follow relationship
+        new_follow = Follow(follower_id=current_user.id, followee_id=user_id)
+        db.add(new_follow)
+
+        # Create activity for the follow within the same transaction
+        try:
+            await create_follow_activity(
+                db=db,
+                follower_id=current_user.id,
+                followee_id=user_id,
+                followee_name=target.name or f"User {target.id}"
+            )
+        except Exception as e:
+            # Log error but don't fail the follow creation
+            print(f"Failed to create activity for follow {current_user.id} -> {user_id}: {e}")
+
+        # Commit everything together
+        await db.commit()
+        return {"followed": True}
+
+    except Exception as e:
+        # Roll back on any error
+        await db.rollback()
+        # Check if this was a duplicate follow error
+        res = await db.execute(select(Follow).where(Follow.follower_id == current_user.id, Follow.followee_id == user_id))
+        if res.scalars().first():
+            return {"followed": True}
+        # Re-raise if it's a different error
+        raise e
 
 
 @router.delete("/{user_id}", response_model=FollowStatusResponse)
@@ -106,8 +125,8 @@ async def list_followers(limit: int = Query(20, ge=1, le=100), offset: int = Que
     my_following_subq = select(Follow.followee_id).where(
         Follow.follower_id == current_user.id).subquery()
 
-    total = (await db.execute(select(func.count()).select_from(followers_subq))).scalar_one()
-    res = await db.execute(
+    # Get all follower relationships first, then filter out blocked users in the query
+    base_query = (
         select(
             User,
             followers_subq.c.created_at,
@@ -118,15 +137,26 @@ async def list_followers(limit: int = Query(20, ge=1, le=100), offset: int = Que
         .outerjoin(my_following_subq, User.id == my_following_subq.c.followee_id)
         .group_by(User.id, followers_subq.c.created_at)
         .order_by(desc(followers_subq.c.created_at))
-        .offset(offset)
-        .limit(limit)
     )
-    items = []
-    for (u, created_at, followed) in res.all():
-        # Skip users who have blocked the current user
-        if await has_user_blocked(db, u.id, current_user.id):
-            continue
 
+    # Get total count first (we'll need to handle blocking in the application layer)
+    total_res = await db.execute(base_query)
+    all_followers = total_res.all()
+
+    # Filter out blocked users to get accurate count
+    filtered_followers = []
+    for (u, created_at, followed) in all_followers:
+        # Skip users who have blocked the current user
+        if not await has_user_blocked(db, u.id, current_user.id):
+            filtered_followers.append((u, created_at, followed))
+
+    total = len(filtered_followers)
+
+    # Apply pagination to filtered results
+    paginated_followers = filtered_followers[offset:offset+limit]
+
+    items = []
+    for (u, created_at, followed) in paginated_followers:
         # Check if current user has blocked this user
         is_blocked = await has_user_blocked(db, current_user.id, u.id)
 
@@ -151,17 +181,31 @@ async def list_followers(limit: int = Query(20, ge=1, le=100), offset: int = Que
 async def list_following(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), current_user: User = Depends(JWTService.get_current_user), db: AsyncSession = Depends(get_db)):
     subq = select(Follow).where(
         Follow.follower_id == current_user.id).subquery()
-    total = (await db.execute(select(func.count()).select_from(subq))).scalar_one()
-    res = await db.execute(
-        select(User, subq.c.created_at).join_from(User, subq, User.id == subq.c.followee_id).order_by(
-            desc(subq.c.created_at)).offset(offset).limit(limit)
-    )
-    items = []
-    for (u, created_at) in res.all():
-        # Skip users who have blocked the current user
-        if await has_user_blocked(db, u.id, current_user.id):
-            continue
 
+    # Get all following relationships first
+    base_query = (
+        select(User, subq.c.created_at)
+        .join_from(User, subq, User.id == subq.c.followee_id)
+        .order_by(desc(subq.c.created_at))
+    )
+
+    res = await db.execute(base_query)
+    all_following = res.all()
+
+    # Filter out blocked users to get accurate count
+    filtered_following = []
+    for (u, created_at) in all_following:
+        # Skip users who have blocked the current user
+        if not await has_user_blocked(db, u.id, current_user.id):
+            filtered_following.append((u, created_at))
+
+    total = len(filtered_following)
+
+    # Apply pagination to filtered results
+    paginated_following = filtered_following[offset:offset+limit]
+
+    items = []
+    for (u, created_at) in paginated_following:
         # Check if current user has blocked this user
         is_blocked = await has_user_blocked(db, current_user.id, u.id)
 
