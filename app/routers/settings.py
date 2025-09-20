@@ -11,6 +11,41 @@ from ..schemas import PrivacySettingsUpdate, PrivacySettingsResponse, Notificati
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
+@router.get("/", response_model=dict)
+async def get_all_settings(
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all user settings in one response"""
+    # Get notification preferences
+    prefs = await _get_or_create_prefs(db, current_user.id)
+
+    return {
+        "privacy": {
+            # Legacy settings (backward compatibility)
+            "dm_privacy": current_user.dm_privacy,
+            "checkins_default_visibility": current_user.checkins_default_visibility,
+            "collections_default_visibility": current_user.collections_default_visibility,
+            # Comprehensive privacy controls
+            "profile_visibility": current_user.profile_visibility,
+            "follower_list_visibility": current_user.follower_list_visibility,
+            "following_list_visibility": current_user.following_list_visibility,
+            "stats_visibility": current_user.stats_visibility,
+            "media_default_visibility": current_user.media_default_visibility,
+            "search_visibility": current_user.search_visibility,
+        },
+        "notifications": {
+            "dm_messages": prefs.dm_messages,
+            "dm_requests": prefs.dm_requests,
+            "follows": prefs.follows,
+            "likes": prefs.likes,
+            "comments": prefs.comments,
+            "activity_summary": prefs.activity_summary,
+            "marketing": prefs.marketing,
+        }
+    }
+
+
 @router.get("/privacy", response_model=PrivacySettingsResponse)
 async def get_privacy_settings(
     current_user: User = Depends(JWTService.get_current_user),
@@ -21,12 +56,12 @@ async def get_privacy_settings(
         checkins_default_visibility=current_user.checkins_default_visibility,
         collections_default_visibility=current_user.collections_default_visibility,
         # Comprehensive privacy controls
-        profile_visibility=getattr(current_user, 'profile_visibility', 'public'),
-        follower_list_visibility=getattr(current_user, 'follower_list_visibility', 'public'),
-        following_list_visibility=getattr(current_user, 'following_list_visibility', 'public'),
-        stats_visibility=getattr(current_user, 'stats_visibility', 'public'),
-        media_default_visibility=getattr(current_user, 'media_default_visibility', 'public'),
-        search_visibility=getattr(current_user, 'search_visibility', 'public'),
+        profile_visibility=current_user.profile_visibility,
+        follower_list_visibility=current_user.follower_list_visibility,
+        following_list_visibility=current_user.following_list_visibility,
+        stats_visibility=current_user.stats_visibility,
+        media_default_visibility=current_user.media_default_visibility,
+        search_visibility=current_user.search_visibility,
     )
 
 

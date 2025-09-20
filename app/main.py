@@ -14,6 +14,7 @@ from .routers.checkins import router as checkins_router
 from .routers.activity import router as activity_router
 from .routers.onboarding import router as onboarding_router
 from .routers.collections import router as collections_router
+from .routers.blocking import router as blocking_router
 from .database import create_tables
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -171,6 +172,7 @@ app.include_router(checkins_router)
 app.include_router(activity_router)
 app.include_router(onboarding_router)
 app.include_router(collections_router)
+app.include_router(blocking_router)
 
 # Serve uploaded media
 app.mount("/media", StaticFiles(directory="media"), name="media")

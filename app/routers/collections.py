@@ -5,6 +5,7 @@ from sqlalchemy import select, func, desc
 from ..database import get_db
 from ..services.jwt_service import JWTService
 from ..services.storage import StorageService
+from ..services.block_service import has_block_between
 from ..utils import can_view_collection
 from ..services.collection_sync import (
     ensure_saved_place_entry,
@@ -53,13 +54,12 @@ async def list_collections_summary(
 
     Returns list of: { id, name, count, photos[<=4] }
     """
-    # Aggregate counts and place_ids per collection
+    # Get collections with counts (SQLite compatible)
     result = await db.execute(
         select(
             UserCollection.id,
             UserCollection.name,
             func.count(UserCollectionPlace.id).label("count"),
-            func.array_agg(UserCollectionPlace.place_id).label("place_ids"),
         )
         .join(
             UserCollectionPlace,
@@ -73,15 +73,21 @@ async def list_collections_summary(
 
     rows = result.all()
     collections: list[dict] = []
-    for col_id, name, count, place_ids in rows:
+    for col_id, name, count in rows:
         photos: list[str] = []
+
+        # Get place IDs for this collection separately (SQLite compatible)
+        place_ids_result = await db.execute(
+            select(UserCollectionPlace.place_id)
+            .where(UserCollectionPlace.collection_id == col_id)
+        )
+        place_ids = [row[0] for row in place_ids_result.all()]
         place_ids = [pid for pid in (place_ids or []) if pid is not None]
         if place_ids:
-            # Prefer place photos
+            # Prefer place photos (SQLite compatible - no random ordering)
             photos_res = await db.execute(
                 select(Photo.url)
                 .where(Photo.place_id.in_(place_ids))
-                .order_by(func.random())
                 .limit(4)
             )
             photos = list(photos_res.scalars().all())
@@ -92,7 +98,6 @@ async def list_collections_summary(
                     select(CheckInPhoto.url)
                     .join(CheckIn, CheckInPhoto.check_in_id == CheckIn.id)
                     .where(CheckIn.place_id.in_(place_ids))
-                    .order_by(func.random())
                     .limit(4)
                 )
                 photos = list(ciph_res.scalars().all())
@@ -125,38 +130,61 @@ async def create_collection(
     - Public or private visibility
     - Add description for collection purpose
     """
-    # Check if collection name already exists for this user
-    existing = await db.execute(
-        select(UserCollection).where(
-            UserCollection.user_id == current_user.id,
-            UserCollection.name == payload.name
+    # Use a transaction to prevent race conditions
+    try:
+        # Check if collection name already exists for this user within transaction
+        existing = await db.execute(
+            select(UserCollection).where(
+                UserCollection.user_id == current_user.id,
+                UserCollection.name == payload.name
+            )
         )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(
-            status_code=400,
-            detail="Collection with this name already exists"
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400,
+                detail="Collection with this name already exists"
+            )
+
+        # Handle backward compatibility: visibility overrides is_public if provided
+        if payload.visibility is not None:
+            visibility = payload.visibility.value
+            is_public = (visibility == "public")
+        else:
+            visibility = "public" if payload.is_public else "private"
+            is_public = payload.is_public
+
+        collection = UserCollection(
+            user_id=current_user.id,
+            name=payload.name,
+            description=payload.description,
+            is_public=is_public,
+            visibility=visibility
         )
+        db.add(collection)
+        await db.commit()
+        await db.refresh(collection)
+        return collection
 
-    # Handle backward compatibility: visibility overrides is_public if provided
-    if payload.visibility is not None:
-        visibility = payload.visibility.value
-        is_public = (visibility == "public")
-    else:
-        visibility = "public" if payload.is_public else "private"
-        is_public = payload.is_public
-
-    collection = UserCollection(
-        user_id=current_user.id,
-        name=payload.name,
-        description=payload.description,
-        is_public=is_public,
-        visibility=visibility
-    )
-    db.add(collection)
-    await db.commit()
-    await db.refresh(collection)
-    return collection
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Roll back on any error
+        await db.rollback()
+        # Check if this was a duplicate name error
+        existing = await db.execute(
+            select(UserCollection).where(
+                UserCollection.user_id == current_user.id,
+                UserCollection.name == payload.name
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400,
+                detail="Collection with this name already exists"
+            )
+        # Re-raise if it's a different error
+        raise e
 
 
 @router.get("/", response_model=PaginatedCollections)
@@ -221,10 +249,12 @@ async def get_collection(
 
     # Check ownership or visibility permissions
     if collection.user_id != current_user.id:
-        visibility = getattr(collection, 'visibility', 'public' if collection.is_public else 'private')
+        visibility = getattr(collection, 'visibility',
+                             'public' if collection.is_public else 'private')
         can_view = await can_view_collection(db, collection.user_id, current_user.id, visibility)
         if not can_view:
-            raise HTTPException(status_code=403, detail="Collection is private")
+            raise HTTPException(
+                status_code=403, detail="Collection is private")
 
     return collection
 
@@ -352,44 +382,67 @@ async def add_place_to_collection(
     if not place:
         raise HTTPException(status_code=404, detail="Place not found")
 
-    # Check if place is already in collection
-    existing = await db.execute(
-        select(UserCollectionPlace).where(
-            UserCollectionPlace.collection_id == collection_id,
-            UserCollectionPlace.place_id == place_id
+    # Use a single transaction for the entire operation
+    try:
+        # Check if place is already in collection
+        existing = await db.execute(
+            select(UserCollectionPlace).where(
+                UserCollectionPlace.collection_id == collection_id,
+                UserCollectionPlace.place_id == place_id
+            )
         )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(
-            status_code=400, detail="Place already in collection")
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400, detail="Place already in collection")
 
-    saved_place = await ensure_saved_place_entry(
-        db, current_user.id, place_id, collection.name)
-    await db.flush()
-
-    association_res = await db.execute(
-        select(UserCollectionPlace).where(
-            UserCollectionPlace.collection_id == collection_id,
-            UserCollectionPlace.place_id == place_id
+        # Create the direct collection place association first
+        association = UserCollectionPlace(
+            collection_id=collection_id,
+            place_id=place_id
         )
-    )
-    association = association_res.scalar_one_or_none()
-    if association is None:
-        association = await sync_saved_place_membership(db, saved_place)
-    if association is None:
+        db.add(association)
+
+        # Handle saved place sync within the same transaction
+        try:
+            saved_place = await ensure_saved_place_entry(
+                db, current_user.id, place_id, collection.name)
+            # Ensure sync is complete
+            await sync_saved_place_membership(db, saved_place)
+        except Exception as sync_error:
+            # Log sync error but don't fail the collection addition
+            print(
+                f"Warning: SavedPlace sync failed for user {current_user.id}, place {place_id}: {sync_error}")
+
+        # Commit everything together
+        await db.commit()
+        await db.refresh(association)
+
+        return {
+            "message": "Place added to collection",
+            "id": association.id,
+        }
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Roll back on any error
+        await db.rollback()
+        # Check if this was a duplicate place error
+        existing = await db.execute(
+            select(UserCollectionPlace).where(
+                UserCollectionPlace.collection_id == collection_id,
+                UserCollectionPlace.place_id == place_id
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400, detail="Place already in collection")
+        # Re-raise if it's a different error
         raise HTTPException(
             status_code=500,
-            detail="Failed to persist collection membership",
+            detail=f"Failed to add place to collection: {str(e)}"
         )
-
-    await db.commit()
-    await db.refresh(saved_place)
-    await db.refresh(association)
-
-    return {
-        "message": "Place added to collection",
-        "id": association.id,
-    }
 
 
 @router.delete("/{collection_id}/places/{place_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -476,10 +529,12 @@ async def get_collection_places(
         raise HTTPException(status_code=404, detail="Collection not found")
 
     if collection.user_id != current_user.id:
-        visibility = getattr(collection, 'visibility', 'public' if collection.is_public else 'private')
+        visibility = getattr(collection, 'visibility',
+                             'public' if collection.is_public else 'private')
         can_view = await can_view_collection(db, collection.user_id, current_user.id, visibility)
         if not can_view:
-            raise HTTPException(status_code=403, detail="Collection is private")
+            raise HTTPException(
+                status_code=403, detail="Collection is private")
 
     # Get total count
     total = (
@@ -621,10 +676,12 @@ async def get_collection_items_list(
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
     if collection.user_id != current_user.id:
-        visibility = getattr(collection, 'visibility', 'public' if collection.is_public else 'private')
+        visibility = getattr(collection, 'visibility',
+                             'public' if collection.is_public else 'private')
         can_view = await can_view_collection(db, collection.user_id, current_user.id, visibility)
         if not can_view:
-            raise HTTPException(status_code=403, detail="Collection is private")
+            raise HTTPException(
+                status_code=403, detail="Collection is private")
 
     # Fetch places in this collection (no pagination)
     places_query = (

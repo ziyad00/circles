@@ -117,6 +117,9 @@ class Settings(BaseSettings):
     fsq_trending_radius_m: int = Field(
         default=5000, env="FSQ_TRENDING_RADIUS_M"
     )
+    fsq_use_real_trending: bool = Field(
+        default=True, env="FSQ_USE_REAL_TRENDING"
+    )
 
     # Place chat (ephemeral, check-in gated)
     place_chat_window_hours: int = Field(

@@ -117,7 +117,8 @@ class CheckInCreate(BaseModel):
 
 
 class CheckInUpdate(BaseModel):
-    note: Optional[str] = Field(None, max_length=500, examples=["Updated note"])
+    note: Optional[str] = Field(
+        None, max_length=500, examples=["Updated note"])
     visibility: Optional[VisibilityEnum] = Field(
         None,
         examples=[VisibilityEnum.public,
@@ -377,7 +378,8 @@ class CheckInPhotoResponse(BaseModel):
 class CheckInCommentCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=1000,
                          description="Comment content")
-    reply_to_id: Optional[int] = Field(None, description="ID of the comment being replied to")
+    reply_to_id: Optional[int] = Field(
+        None, description="ID of the comment being replied to")
 
 
 class CheckInCommentResponse(BaseModel):
@@ -506,14 +508,17 @@ class DMRequestDecision(BaseModel):
 
 
 class DMMessageCreate(BaseModel):
-    text: str = Field("", max_length=2000)  # Allow empty text for media-only messages
-    message_type: str = Field("text", regex="^(text|photo|video|voice|file|location)$")
+    # Allow empty text for media-only messages
+    text: str = Field("", max_length=2000)
+    message_type: str = Field(
+        "text", pattern="^(text|photo|video|voice|file|location)$")
     reply_to_id: Optional[int] = None
 
     # Media attachments
     photo_urls: list[str] = Field(default_factory=list, max_length=10)
     video_urls: list[str] = Field(default_factory=list, max_length=5)
-    voice_urls: list[str] = Field(default_factory=list, max_length=1)  # One voice message at a time
+    # One voice message at a time
+    voice_urls: list[str] = Field(default_factory=list, max_length=1)
     voice_duration: Optional[int] = Field(None, ge=1, le=300)  # Max 5 minutes
     file_urls: list[str] = Field(default_factory=list, max_length=5)
     file_names: list[str] = Field(default_factory=list, max_length=5)
@@ -529,7 +534,8 @@ class DMMessageCreate(BaseModel):
     location_address: Optional[str] = Field(None, max_length=500)
 
     # Disappearing messages
-    auto_delete_duration: Optional[int] = Field(None, ge=5, le=604800)  # 5 seconds to 1 week
+    auto_delete_duration: Optional[int] = Field(
+        None, ge=5, le=604800)  # 5 seconds to 1 week
 
     # Forwarding
     forwarded_from_message_id: Optional[int] = None
@@ -594,7 +600,8 @@ class DMMessageResponse(BaseModel):
     # Deleted message info
     deleted_at: Optional[datetime] = None
     deleted_by_user_id: Optional[int] = None
-    is_deleted_placeholder: bool = False  # True when showing "This message was deleted"
+    # True when showing "This message was deleted"
+    is_deleted_placeholder: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -624,6 +631,45 @@ class UnreadCountResponse(BaseModel):
 
 class DMThreadBlockUpdate(BaseModel):
     blocked: bool = Field(..., examples=[True])
+
+
+class GlobalBlockCreate(BaseModel):
+    blocked_user_id: int = Field(..., description="ID of user to block")
+    reason: Optional[str] = Field(
+        None, description="Optional reason for blocking")
+    block_type: str = Field(
+        "permanent", description="Type of block: permanent or temporary")
+    expires_at: Optional[datetime] = Field(
+        None, description="Expiration time for temporary blocks")
+
+
+class GlobalBlockResponse(BaseModel):
+    id: int
+    blocker_id: int
+    blocked_id: int
+    reason: Optional[str]
+    block_type: str
+    expires_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+    blocked_user: Optional[dict] = None  # Will be populated with user info
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedBlocks(BaseModel):
+    items: List[GlobalBlockResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class BlockStatusResponse(BaseModel):
+    is_blocked: bool
+    block_type: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    reason: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 
 class TypingUpdate(BaseModel):
@@ -714,7 +760,8 @@ class ReactionResponse(BaseModel):
 
 class MessageForwardRequest(BaseModel):
     message_id: int
-    target_thread_ids: list[int] = Field(..., min_length=1, max_length=5)  # Limit to 5 threads
+    # Limit to 5 threads
+    target_thread_ids: list[int] = Field(..., min_length=1, max_length=5)
 
 
 class MessageSearchRequest(BaseModel):
@@ -742,7 +789,7 @@ class MessageSearchResponse(BaseModel):
 
 class DeliveryStatusUpdate(BaseModel):
     message_id: int
-    status: str = Field(..., regex="^(delivered|failed)$")
+    status: str = Field(..., pattern="^(delivered|failed)$")
     failure_reason: Optional[str] = None
 
 
@@ -1002,7 +1049,8 @@ class CollectionCreate(BaseModel):
     description: Optional[str] = Field(None, max_length=500)
     # Backward compatibility: support both is_public and visibility
     is_public: bool = True
-    visibility: Optional[VisibilityEnum] = Field(None, description="Standardized privacy control (overrides is_public if provided)")
+    visibility: Optional[VisibilityEnum] = Field(
+        None, description="Standardized privacy control (overrides is_public if provided)")
 
 
 class CollectionResponse(BaseModel):

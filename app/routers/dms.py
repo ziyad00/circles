@@ -137,7 +137,7 @@ async def open_or_get_thread(
     return thread
 
 
-@router.post("/requests", response_model=DMThreadResponse)
+@router.post("/requests", response_model=DMThreadResponse, status_code=201)
 async def send_dm_request(
     payload: DMRequestCreate,
     current_user: User = Depends(JWTService.get_current_user),
@@ -520,6 +520,88 @@ async def _ensure_thread_not_blocked(
     return other_id
 
 
+@router.get("/threads/{thread_id}", response_model=DMThreadResponse)
+async def get_thread(
+    thread_id: int,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get a specific DM thread by ID.
+
+    **Authentication Required:** Yes
+
+    **Features:**
+    - Get thread details including participants
+    - Check thread status and settings
+    - Verify user has access to thread
+
+    **Use Cases:**
+    - Load thread details for UI
+    - Check thread status before sending messages
+    - Verify thread access permissions
+    """
+    res = await db.execute(select(DMThread).where(DMThread.id == thread_id))
+    thread = res.scalars().first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if not _is_participant(thread, current_user.id):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    await _ensure_thread_not_blocked(db, thread, current_user.id)
+
+    # Get other user's info
+    other_user_id = thread.user_a_id if thread.user_b_id == current_user.id else thread.user_b_id
+    other_user_res = await db.execute(select(User).where(User.id == other_user_id))
+    other_user = other_user_res.scalars().first()
+
+    # Get participant state
+    participant_state_res = await db.execute(
+        select(DMParticipantState).where(
+            DMParticipantState.thread_id == thread_id,
+            DMParticipantState.user_id == current_user.id
+        )
+    )
+    participant_state = participant_state_res.scalars().first()
+
+    # Get last message
+    last_msg_res = await db.execute(
+        select(DMMessage)
+        .where(DMMessage.thread_id == thread_id, DMMessage.deleted_at.is_(None))
+        .order_by(DMMessage.created_at.desc())
+        .limit(1)
+    )
+    last_message = last_msg_res.scalars().first()
+
+    # Convert avatar URL to signed URL if needed
+    other_user_avatar = other_user.avatar_url if other_user else None
+    if other_user_avatar and not other_user_avatar.startswith('http'):
+        try:
+            other_user_avatar = _convert_single_to_signed_url(
+                other_user_avatar)
+        except Exception:
+            pass  # Keep original if signing fails
+
+    return DMThreadResponse(
+        id=thread.id,
+        user_a_id=thread.user_a_id,
+        user_b_id=thread.user_b_id,
+        initiator_id=thread.initiator_id,
+        status=thread.status,
+        created_at=thread.created_at,
+        updated_at=thread.updated_at,
+        other_user_name=other_user.name if other_user else None,
+        other_user_username=other_user.username if other_user else None,
+        other_user_avatar=other_user_avatar,
+        is_muted=bool(
+            participant_state.muted) if participant_state and participant_state.muted is not None else None,
+        is_blocked=bool(
+            participant_state.blocked) if participant_state and participant_state.blocked is not None else None,
+        last_message=last_message.text if last_message else None,
+        last_message_time=last_message.created_at if last_message else None,
+        sender_photo_url=None,  # Could be enhanced to get sender's photo
+    )
+
+
 @router.get("/threads/{thread_id}/messages", response_model=PaginatedDMMessages)
 async def list_messages(
     thread_id: int,
@@ -624,7 +706,8 @@ async def list_messages(
                 reply_to_id=m.reply_to_id,
                 reply_to_text=m.reply_to_text,
                 reply_to_sender_name=reply_sender_name,
-                photo_urls=m.photo_urls or [],
+                photo_urls=[_convert_single_to_signed_url(
+                    url) for url in (m.photo_urls or []) if url],
                 video_urls=m.video_urls or [],
                 voice_urls=getattr(m, 'voice_urls', []) or [],
                 voice_duration=getattr(m, 'voice_duration', None),
@@ -638,8 +721,10 @@ async def list_messages(
                 location_address=getattr(m, 'location_address', None),
                 expires_at=getattr(m, 'expires_at', None),
                 auto_delete_duration=getattr(m, 'auto_delete_duration', None),
-                forwarded_from_message_id=getattr(m, 'forwarded_from_message_id', None),
-                forwarded_from_user_id=getattr(m, 'forwarded_from_user_id', None),
+                forwarded_from_message_id=getattr(
+                    m, 'forwarded_from_message_id', None),
+                forwarded_from_user_id=getattr(
+                    m, 'forwarded_from_user_id', None),
                 forwarded_from_user_name=forwarded_from_user_name,
                 is_forwarded=getattr(m, 'is_forwarded', False),
             )
@@ -647,7 +732,7 @@ async def list_messages(
     return PaginatedDMMessages(items=response_items, total=total, limit=limit, offset=offset)
 
 
-@router.post("/threads/{thread_id}/messages", response_model=DMMessageResponse)
+@router.post("/threads/{thread_id}/messages", response_model=DMMessageResponse, status_code=201)
 async def send_message(
     thread_id: int,
     payload: DMMessageCreate,
@@ -735,14 +820,16 @@ async def send_message(
     expires_at = None
     if payload.auto_delete_duration:
         from datetime import timedelta
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=payload.auto_delete_duration)
+        expires_at = datetime.now(timezone.utc) + \
+            timedelta(seconds=payload.auto_delete_duration)
 
     # Handle forwarded message
     forwarded_from_user_id = None
     if payload.forwarded_from_message_id:
         # Get the original message to extract the original sender
         orig_msg_result = await db.execute(
-            select(DMMessage).where(DMMessage.id == payload.forwarded_from_message_id)
+            select(DMMessage).where(DMMessage.id ==
+                                    payload.forwarded_from_message_id)
         )
         orig_msg = orig_msg_result.scalars().first()
         if orig_msg:
@@ -1166,10 +1253,11 @@ async def block_user(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Block or unblock a user completely.
+    Block or unblock a user globally (backward compatible endpoint).
 
-    This endpoint now works with user IDs to block users across all interactions.
-    Uses the same URL structure as before but now expects user IDs instead of thread IDs.
+    This endpoint works with user IDs to block users across all interactions.
+    Uses the same URL structure as before but now handles global blocking.
+    The user_id parameter is the ID of the user to block/unblock.
     """
     # Validate the other user exists
     user_res = await db.execute(select(User).where(User.id == user_id))
@@ -1181,54 +1269,38 @@ async def block_user(
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot block yourself")
 
-    # Find or create thread between current user and other user
-    a, b = _normalize_pair(current_user.id, user_id)
-    thread_res = await db.execute(select(DMThread).where(DMThread.user_a_id == a, DMThread.user_b_id == b))
-    thread = thread_res.scalars().first()
+    # Use the global blocking system for backward compatibility
+    from ..services.block_service import create_global_block, remove_global_block, has_user_blocked
 
-    if not thread:
-        # Create thread if it doesn't exist (for blocking purposes)
-        thread = DMThread(
-            user_a_id=a,
-            user_b_id=b,
-            initiator_id=current_user.id,
-            status="accepted",  # We create as accepted since we're just blocking
-        )
-        db.add(thread)
-        await db.commit()
-        await db.refresh(thread)
-
-    # Create or update the participant state for blocking
-    state = await _get_or_create_state(db, thread.id, current_user.id)
-    state.blocked = payload.blocked
-
-    # If blocking someone, remove any existing follow relationships
     if payload.blocked:
-        from ..models import Follow
-        # Remove follow relationship if current user follows the blocked user
-        follow_res = await db.execute(
-            select(Follow).where(
-                Follow.follower_id == current_user.id,
-                Follow.followee_id == user_id
-            )
-        )
-        follow = follow_res.scalars().first()
-        if follow:
-            await db.delete(follow)
+        # Check if already blocked
+        if await has_user_blocked(db, current_user.id, user_id):
+            return DMThreadBlockUpdate(blocked=True)
 
-        # Remove follow relationship if blocked user follows current user
-        follow_res = await db.execute(
-            select(Follow).where(
-                Follow.follower_id == user_id,
-                Follow.followee_id == current_user.id
+        # Create global block
+        try:
+            await create_global_block(
+                db=db,
+                blocker_id=current_user.id,
+                blocked_id=user_id,
+                reason="Blocked via DM endpoint",
+                block_type="permanent"
             )
+        except ValueError as e:
+            if "already blocked" in str(e):
+                return DMThreadBlockUpdate(blocked=True)
+            raise HTTPException(status_code=400, detail=str(e))
+    else:
+        # Remove global block
+        success = await remove_global_block(
+            db=db,
+            blocker_id=current_user.id,
+            blocked_id=user_id
         )
-        follow = follow_res.scalars().first()
-        if follow:
-            await db.delete(follow)
+        if not success:
+            return DMThreadBlockUpdate(blocked=False)
 
-    await db.commit()
-    return DMThreadBlockUpdate(blocked=state.blocked)
+    return DMThreadBlockUpdate(blocked=payload.blocked)
 
 
 @router.post("/threads/{thread_id}/typing", status_code=status.HTTP_204_NO_CONTENT)
@@ -1561,7 +1633,8 @@ async def upload_voice_message(
 ):
     """Upload voice messages (audio files)"""
     # Validate file type
-    allowed_types = ["audio/mpeg", "audio/mp4", "audio/webm", "audio/wav", "audio/ogg"]
+    allowed_types = ["audio/mpeg", "audio/mp4",
+                     "audio/webm", "audio/wav", "audio/ogg"]
     if file.content_type not in allowed_types:
         raise HTTPException(
             status_code=400,
@@ -1595,7 +1668,8 @@ async def upload_voice_message(
             # Local storage
             import os
             from pathlib import Path
-            media_dir = Path("media") / "dm_media" / str(current_user.id) / "voice"
+            media_dir = Path("media") / "dm_media" / \
+                str(current_user.id) / "voice"
             media_dir.mkdir(parents=True, exist_ok=True)
             file_path = media_dir / filename
             with open(file_path, "wb") as f:
@@ -1604,7 +1678,8 @@ async def upload_voice_message(
 
         # Estimate duration (simple approximation based on file size)
         # This is a rough estimate - in production you'd use audio processing libraries
-        estimated_duration = min(max(len(file_content) // 16000, 1), 300)  # 1-300 seconds
+        estimated_duration = min(
+            max(len(file_content) // 16000, 1), 300)  # 1-300 seconds
 
         return VoiceMessageUploadResponse(
             url=file_url,
@@ -1663,7 +1738,8 @@ async def upload_file(
             # Local storage
             import os
             from pathlib import Path
-            media_dir = Path("media") / "dm_media" / str(current_user.id) / "files"
+            media_dir = Path("media") / "dm_media" / \
+                str(current_user.id) / "files"
             media_dir.mkdir(parents=True, exist_ok=True)
             file_path = media_dir / filename
             with open(file_path, "wb") as f:
@@ -1702,7 +1778,8 @@ async def forward_messages(
     )
     source_thread = source_thread_result.scalars().first()
     if not source_thread or not _is_participant(source_thread, current_user.id):
-        raise HTTPException(status_code=403, detail="Access denied to source message")
+        raise HTTPException(
+            status_code=403, detail="Access denied to source message")
 
     forwarded_count = 0
     failed_threads = []
@@ -1738,8 +1815,10 @@ async def forward_messages(
                 file_names=getattr(source_msg, 'file_names', []) or [],
                 file_sizes=getattr(source_msg, 'file_sizes', []) or [],
                 caption=source_msg.caption,
-                location_latitude=getattr(source_msg, 'location_latitude', None),
-                location_longitude=getattr(source_msg, 'location_longitude', None),
+                location_latitude=getattr(
+                    source_msg, 'location_latitude', None),
+                location_longitude=getattr(
+                    source_msg, 'location_longitude', None),
                 location_name=getattr(source_msg, 'location_name', None),
                 location_address=getattr(source_msg, 'location_address', None),
                 forwarded_from_message_id=source_msg.id,
@@ -1860,7 +1939,8 @@ async def update_delivery_status(
 
     # Verify the current user sent this message
     if message.sender_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Can only update status of your own messages")
+        raise HTTPException(
+            status_code=403, detail="Can only update status of your own messages")
 
     # Update delivery status
     if payload.status == "delivered":
