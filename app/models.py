@@ -51,7 +51,7 @@ class User(Base):
     photos = relationship("Photo", back_populates="user")
     check_in_comments = relationship("CheckInComment", back_populates="user")
     check_in_likes = relationship("CheckInLike", back_populates="user")
-    dm_messages = relationship("DMMessage", back_populates="sender")
+    dm_messages = relationship("DMMessage", back_populates="sender", foreign_keys="DMMessage.sender_id")
     support_tickets = relationship("SupportTicket", back_populates="user")
     activities = relationship("Activity", back_populates="user")
     collections = relationship("UserCollection", back_populates="user")

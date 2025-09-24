@@ -507,7 +507,7 @@ class DMRequestDecision(BaseModel):
 
 class DMMessageCreate(BaseModel):
     text: str = Field("", max_length=2000)  # Allow empty text for media-only messages
-    message_type: str = Field("text", regex="^(text|photo|video|voice|file|location)$")
+    message_type: str = Field("text", pattern="^(text|photo|video|voice|file|location)$")
     reply_to_id: Optional[int] = None
 
     # Media attachments
@@ -742,7 +742,7 @@ class MessageSearchResponse(BaseModel):
 
 class DeliveryStatusUpdate(BaseModel):
     message_id: int
-    status: str = Field(..., regex="^(delivered|failed)$")
+    status: str = Field(..., pattern="^(delivered|failed)$")
     failure_reason: Optional[str] = None
 
 
