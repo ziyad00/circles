@@ -107,6 +107,16 @@ class Place(Base):
     last_enriched_at = Column(DateTime(timezone=True),
                               nullable=True)  # When last enriched
 
+    # Additional Foursquare fields
+    postal_code = Column(String, nullable=True)
+    cross_street = Column(String, nullable=True)
+    formatted_address = Column(Text, nullable=True)
+    # Distance from search point
+    distance_meters = Column(Float, nullable=True)
+    # When venue was created on Foursquare
+    venue_created_at = Column(DateTime(timezone=True), nullable=True)
+    photo_url = Column(String, nullable=True)  # Primary photo URL
+
     # Relationships
     check_ins = relationship("CheckIn", back_populates="place")
     saved_by = relationship("SavedPlace", back_populates="place")

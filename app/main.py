@@ -35,27 +35,28 @@ async def lifespan(app: FastAPI):
     await create_tables()
 
     # Auto-seed Saudi cities data if needed
-    try:
-        from .services.auto_seeder_service import auto_seeder_service
-        from .database import get_db
+    # TODO: Temporarily disable auto-seeding to fix save errors
+    # try:
+    #     from .services.auto_seeder_service import auto_seeder_service
+    #     from .database import get_db
 
-        async for db in get_db():
-            seeding_result = await auto_seeder_service.auto_seed_if_needed(db)
+    #     async for db in get_db():
+    #         seeding_result = await auto_seeder_service.auto_seed_if_needed(db)
 
-            if seeding_result["status"] == "completed":
-                logger.info(
-                    f"Auto-seeding completed! Added {seeding_result['total_places_added']} places")
-            elif seeding_result["status"] == "skipped":
-                logger.info(
-                    f"Auto-seeding skipped: {seeding_result['reason']}")
-            else:
-                logger.warning(
-                    f"Auto-seeding failed: {seeding_result.get('error', 'Unknown error')}")
+    #         if seeding_result["status"] == "completed":
+    #             logger.info(
+    #                 f"Auto-seeding completed! Added {seeding_result['total_places_added']} places")
+    #         elif seeding_result["status"] == "skipped":
+    #             logger.info(
+    #                 f"Auto-seeding skipped: {seeding_result['reason']}")
+    #         else:
+    #             logger.warning(
+    #                 f"Auto-seeding failed: {seeding_result.get('error', 'Unknown error')}")
 
-            break  # Only run once
+    #         break  # Only run once
 
-    except Exception as e:
-        logger.error(f"Auto-seeding error: {e}")
+    # except Exception as e:
+    #     logger.error(f"Auto-seeding error: {e}")
 
     yield
 

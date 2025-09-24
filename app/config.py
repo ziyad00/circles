@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     foursquare_api_key: Optional[str] = Field(
         default="demo_key_for_testing", env="FOURSQUARE_API_KEY"
     )
+    foursquare_client_id: Optional[str] = Field(
+        default=None, env="FOURSQUARE_CLIENT_ID"
+    )
+    foursquare_client_secret: Optional[str] = Field(
+        default=None, env="FOURSQUARE_CLIENT_SECRET"
+    )
     use_openstreetmap: bool = Field(
         default=True, env="USE_OPENSTREETMAP"
     )
@@ -143,6 +149,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_prefix = "APP_"
         case_sensitive = False
+        extra = "ignore"
 
 
 settings = Settings()

@@ -1415,30 +1415,28 @@ async def nearby_places(
     """
     from ..config import settings as app_settings
     import logging
-    logging.info(f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
-    paginated: PaginatedPlaces | None = None
+    logging.info(
+        f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
 
-    # PRIMARY: Try local database first with PostGIS optimization
+    local_places: list[Place] = []
+    total_local: int = 0
+
     if app_settings.use_postgis:
         try:
-            # Use PostGIS for efficient distance search with lat/lng columns
             logging.info("Using PostGIS distance filtering for nearby search")
             user_point = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
             place_point = func.ST_SetSRID(func.ST_MakePoint(Place.longitude, Place.latitude), 4326)
             distance_m = func.ST_DistanceSphere(place_point, user_point)
 
-            # Build filter conditions for local places within radius
             filters = [
                 Place.latitude.is_not(None),
                 Place.longitude.is_not(None),
                 distance_m <= radius_m,
             ]
 
-            # Count within radius
             total_q = select(func.count(Place.id)).where(*filters)
-            total = (await db.execute(total_q)).scalar_one()
+            total_local = (await db.execute(total_q)).scalar_one()
 
-            # Fetch places ordered by distance
             stmt = (
                 select(Place)
                 .where(*filters)
@@ -1446,79 +1444,115 @@ async def nearby_places(
                 .offset(offset)
                 .limit(limit)
             )
-            items = (await db.execute(stmt)).scalars().all()
-            paginated = PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
+            local_places = (await db.execute(stmt)).scalars().all()
         except Exception as e:
             logging.warning(f"PostGIS nearby failed, falling back to haversine: {e}")
             await db.rollback()
 
-    # FALLBACK: Python distance calculation if PostGIS fails
-    if paginated is None:
+    if not local_places:
         logging.info("Using Python fallback for nearby places")
-        # Get all places and calculate distances in Python
         stmt = select(Place).where(
             Place.latitude.is_not(None),
             Place.longitude.is_not(None)
         )
         all_places = (await db.execute(stmt)).scalars().all()
 
-        # Calculate distances and filter by radius
         from ..utils import haversine_distance
         nearby_places = []
         for place in all_places:
-            distance_km = haversine_distance(lat, lng, place.latitude, place.longitude)
-            if distance_km <= (radius_m / 1000.0):  # Convert radius to km
+            distance_km = haversine_distance(
+                lat, lng, place.latitude, place.longitude)
+            if distance_km <= (radius_m / 1000.0):
                 nearby_places.append((place, distance_km))
 
-        # Sort by distance
         nearby_places.sort(key=lambda x: x[1])
+        total_local = len(nearby_places)
+        paginated_slice = nearby_places[offset:offset + limit]
+        local_places = [place for place, _ in paginated_slice]
+        logging.info(f"Python fallback returned {total_local} places")
 
-        # Apply pagination
-        total = len(nearby_places)
-        paginated_places = nearby_places[offset:offset + limit]
-        items = [place for place, _ in paginated_places]
+    if not local_places:
+        logging.info("Local database fallback returned 0 nearby places")
+        return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
-        paginated = PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
-        logging.info(f"Python fallback returned {total} places")
+    await _attach_recent_checkins(
+        db, local_places, app_settings.place_chat_window_hours
+    )
 
-    # Attach recent checkins (CRITICAL: preserve user activity data)
-    await _attach_recent_checkins(db, paginated.items, app_settings.place_chat_window_hours)
+    place_responses: list[PlaceResponse] = []
+    for item in local_places:
+        place_responses.append(
+            PlaceResponse(
+                id=item.id,
+                name=item.name,
+                address=item.address,
+                country=getattr(item, "country", None),
+                city=item.city,
+                neighborhood=item.neighborhood,
+                latitude=item.latitude,
+                longitude=item.longitude,
+                categories=item.categories,
+                rating=item.rating,
+                description=getattr(item, "description", None),
+                price_tier=item.price_tier,
+                created_at=item.created_at,
+                photo_url=_convert_single_to_signed_url(
+                    getattr(item, "photo_url", None)
+                ),
+                recent_checkins_count=getattr(item, "recent_checkins_count", 0),
+                postal_code=getattr(item, "postal_code", None),
+                cross_street=getattr(item, "cross_street", None),
+                formatted_address=getattr(item, "formatted_address", None),
+                distance_meters=getattr(item, "distance_meters", None),
+                venue_created_at=getattr(item, "venue_created_at", None),
+                primary_category=None,
+                category_icons=None,
+                photo_urls=None,
+            )
+        )
 
-    # FOURSQUARE ENHANCEMENT: Add external discoveries if local results are insufficient
+    paginated = PaginatedPlaces(
+        items=place_responses,
+        total=total_local,
+        limit=limit,
+        offset=offset,
+    )
+
     if paginated.total < limit:
-        logging.info(f"Local nearby returned {paginated.total} places, enhancing with Foursquare")
+        logging.info(
+            f"Local nearby returned {paginated.total} places, enhancing with Foursquare")
 
-        # Get additional places from Foursquare (no filters for nearby - pure proximity)
         remaining_limit = limit - paginated.total
         fsq_places = await enhanced_place_data_service.fetch_foursquare_trending(
             lat=lat,
             lon=lng,
-            limit=remaining_limit * 2  # Get extra to filter out duplicates
+            limit=remaining_limit * 2
         )
 
-        # Save Foursquare places to local database for future use
         if fsq_places:
             try:
                 saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(fsq_places, db)
-                logging.info(f"Saved {len(saved_places)} new Foursquare nearby places to database")
+                logging.info(
+                    f"Saved {len(saved_places)} new Foursquare nearby places to database")
             except Exception as e:
-                logging.warning(f"Failed to save Foursquare nearby places to database: {e}")
+                logging.warning(
+                    f"Failed to save Foursquare nearby places to database: {e}")
 
-        # Convert Foursquare places to PlaceResponse and add to results
         now_ts = datetime.now(timezone.utc)
-        fsq_items = []
-        existing_names = {item.name.lower() for item in paginated.items if item.name}
+        fsq_items: list[PlaceResponse] = []
+        existing_names = {item.name.lower()
+                          for item in paginated.items if item.name}
 
         for p in fsq_places[:remaining_limit]:
-            # Skip if we already have this place locally
             if p.get("name") and p.get("name").lower() in existing_names:
                 continue
 
-            # Extract photo URL
             photo_url = None
             photos = p.get("photos", [])
             if photos:
-                photo_url = photos[0] if isinstance(photos[0], str) else photos[0]
+                first_photo = photos[0]
+                photo_url = first_photo if isinstance(
+                    first_photo, str) else first_photo
 
             fsq_items.append(
                 PlaceResponse(
@@ -1534,23 +1568,25 @@ async def nearby_places(
                     price_tier=p.get("price_tier"),
                     created_at=now_ts,
                     photo_url=photo_url,
-                    recent_checkins_count=0,  # External places don't have local checkins yet
+                    recent_checkins_count=0,
                 )
             )
 
-        # Add Foursquare discoveries to local results
-        paginated.items.extend(fsq_items)
-        paginated.total += len(fsq_items)
-        logging.info(f"Enhanced with {len(fsq_items)} Foursquare places, total: {paginated.total}")
+        if fsq_items:
+            paginated.items.extend(fsq_items)
+            paginated.total += len(fsq_items)
+            logging.info(
+                f"Enhanced with {len(fsq_items)} Foursquare places, total: {paginated.total}")
 
-        # Re-sort all items by distance to maintain nearest-first ordering
-        from ..utils import haversine_distance
-        def distance_or_inf(place: PlaceResponse) -> float:
-            if place.latitude is None or place.longitude is None:
-                return float("inf")
-            return haversine_distance(lat, lng, place.latitude, place.longitude)
+            from ..utils import haversine_distance
 
-        paginated.items.sort(key=distance_or_inf)
+            def distance_or_inf(place: PlaceResponse) -> float:
+                if place.latitude is None or place.longitude is None:
+                    return float("inf")
+                return haversine_distance(
+                    lat, lng, place.latitude, place.longitude)
+
+            paginated.items.sort(key=distance_or_inf)
 
     return paginated
 
