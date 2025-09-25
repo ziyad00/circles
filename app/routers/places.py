@@ -421,8 +421,6 @@ async def create_place(payload: PlaceCreate, db: AsyncSession = Depends(get_db))
     return place
 
 
-
-
 @router.get("/recommendations", response_model=PaginatedPlaces)
 async def get_recommendations(
     limit: int = Query(20, ge=1, le=100),
@@ -752,12 +750,6 @@ async def advanced_search_places(
     return PaginatedPlaces(items=items, total=total, limit=filters.limit, offset=filters.offset)
 
 
-
-
-
-
-
-
 # Removed place-level photo upload; use review-attached photos instead
 # Review photos
 
@@ -907,17 +899,23 @@ async def delete_review_photo(
 
 @router.get("/trending", response_model=PaginatedPlaces)
 async def get_trending_places(
-    time_window: str = Query("24h", description="Time window: 1h, 6h, 24h, 7d, 30d"),
+    time_window: str = Query(
+        "24h", description="Time window: 1h, 6h, 24h, 7d, 30d"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    lat: float | None = Query(None, description="Latitude of the user location"),
-    lng: float | None = Query(None, description="Longitude of the user location"),
+    lat: float | None = Query(
+        None, description="Latitude of the user location"),
+    lng: float | None = Query(
+        None, description="Longitude of the user location"),
     q: str | None = Query(None, description="Search text for place name"),
-    place_type: str | None = Query(None, description="Category contains (e.g., cafe)"),
+    place_type: str | None = Query(
+        None, description="Category contains (e.g., cafe)"),
     country: str | None = Query(None, description="Country filter (optional)"),
     city: str | None = Query(None, description="City filter (optional)"),
-    neighborhood: str | None = Query(None, description="Neighborhood contains"),
-    min_rating: float | None = Query(None, ge=0, le=5, description="Minimum rating"),
+    neighborhood: str | None = Query(
+        None, description="Neighborhood contains"),
+    min_rating: float | None = Query(
+        None, ge=0, le=5, description="Minimum rating"),
     price_tier: str | None = Query(None, description="$, $$, $$$, $$$$"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -965,9 +963,11 @@ async def get_trending_places(
 
     # Call Foursquare API for trending places
     # Debug service configuration
-    print(f"🔑 API Key check: {enhanced_place_data_service.foursquare_api_key[:10] if enhanced_place_data_service.foursquare_api_key else 'NONE'}...")
+    print(
+        f"🔑 API Key check: {enhanced_place_data_service.foursquare_api_key[:10] if enhanced_place_data_service.foursquare_api_key else 'NONE'}...")
 
-    print(f"🚀 About to call fetch_foursquare_trending with lat={lat}, lon={lng}, limit={limit}")
+    print(
+        f"🚀 About to call fetch_foursquare_trending with lat={lat}, lon={lng}, limit={limit}")
 
     # TEST: Direct Foursquare API call - let's try discovery method first
     try:
@@ -1032,13 +1032,15 @@ async def get_trending_places(
 
         # Extract categories
         categories_list = venue.get("categories", [])
-        categories_str = ", ".join([cat.get("name", "") for cat in categories_list]) if categories_list else None
+        categories_str = ", ".join(
+            [cat.get("name", "") for cat in categories_list]) if categories_list else None
 
         try:
             place_resp = PlaceResponse(
                 id=-1,  # Use -1 for external places without our internal ID
                 name=venue.get("name", "Unknown"),
-                address=location.get("formattedAddress", [""])[0] if location.get("formattedAddress") else location.get("address"),
+                address=location.get("formattedAddress", [""])[0] if location.get(
+                    "formattedAddress") else location.get("address"),
                 country=location.get("country"),
                 city=location.get("city"),
                 neighborhood=location.get("neighborhood"),
@@ -1047,7 +1049,8 @@ async def get_trending_places(
                 categories=categories_str,
                 rating=venue.get("rating"),
                 description=None,  # v2 API doesn't include description in trending
-                price_tier=venue.get("price", {}).get("tier") if venue.get("price") else None,
+                price_tier=venue.get("price", {}).get(
+                    "tier") if venue.get("price") else None,
                 created_at=now_ts,
                 external_id=venue.get("id"),
                 data_source="foursquare",
@@ -1120,9 +1123,11 @@ async def get_global_trending_places(
         if fsq:
             try:
                 saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(fsq, db)
-                logging.info(f"Saved {len(saved_places)} new Foursquare trending places to database (global trending)")
+                logging.info(
+                    f"Saved {len(saved_places)} new Foursquare trending places to database (global trending)")
             except Exception as e:
-                logging.warning(f"Failed to save Foursquare trending places to database (global trending): {e}")
+                logging.warning(
+                    f"Failed to save Foursquare trending places to database (global trending): {e}")
 
         now_ts = datetime.now(timezone.utc)
         items = [
@@ -1287,13 +1292,15 @@ async def nearby_places(
     """
     from ..config import settings as app_settings
     import logging
-    print(f"🚀 NEARBY ENDPOINT CALLED: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
+    print(
+        f"🚀 NEARBY ENDPOINT CALLED: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
     logging.info(
         f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
 
     # Fetch ONLY from Foursquare API - no local database results
     print(f"🔥 CALLING FOURSQUARE API: lat={lat}, lng={lng}, limit={limit}")
-    logging.info(f"DEBUG: NEARBY ENDPOINT CALLED - Fetching places from Foursquare API ONLY at lat={lat}, lng={lng}, limit={limit}")
+    logging.info(
+        f"DEBUG: NEARBY ENDPOINT CALLED - Fetching places from Foursquare API ONLY at lat={lat}, lng={lng}, limit={limit}")
 
     # Use direct Foursquare Places API search
     import httpx
@@ -1334,7 +1341,8 @@ async def nearby_places(
     # Try to save Foursquare places to database for future reference
     try:
         saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(fsq_places, db)
-        logging.info(f"Saved {len(saved_places)} new Foursquare places to database")
+        logging.info(
+            f"Saved {len(saved_places)} new Foursquare places to database")
     except Exception as e:
         logging.warning(f"Failed to save Foursquare places to database: {e}")
 
@@ -1358,10 +1366,12 @@ async def nearby_places(
 
         # Extract categories from v3 format
         categories_list = p.get("categories", [])
-        categories_str = ", ".join([cat.get("name", "") for cat in categories_list]) if categories_list else None
+        categories_str = ", ".join(
+            [cat.get("name", "") for cat in categories_list]) if categories_list else None
 
         # Use Foursquare's distance (more accurate than our calculation)
-        foursquare_distance = p.get("distance")  # Distance in meters from Foursquare API
+        # Distance in meters from Foursquare API
+        foursquare_distance = p.get("distance")
 
         try:
             fsq_items.append(
@@ -1369,13 +1379,16 @@ async def nearby_places(
                     id=-1,  # Use -1 for external places without internal ID
                     name=p.get("name", "Unknown"),
                     address=location.get("address"),
-                    city=location.get("locality"),  # v3 uses 'locality' instead of 'city'
+                    # v3 uses 'locality' instead of 'city'
+                    city=location.get("locality"),
                     neighborhood=location.get("neighborhood"),
                     latitude=p.get("latitude"),  # Use actual place coordinates
-                    longitude=p.get("longitude"),  # Use actual place coordinates
+                    # Use actual place coordinates
+                    longitude=p.get("longitude"),
                     categories=categories_str,
                     rating=p.get("rating"),
-                    price_tier=str(p.get("price")) if p.get("price") is not None else None,  # Convert int to string
+                    price_tier=str(p.get("price")) if p.get(
+                        "price") is not None else None,  # Convert int to string
                     created_at=now_ts,
                     photo_url=photo_url,
                     recent_checkins_count=0,
@@ -1386,7 +1399,8 @@ async def nearby_places(
                     formatted_address=location.get("formatted_address"),
                     distance_meters=foursquare_distance,  # Use Foursquare's distance
                     venue_created_at=None,  # v3 doesn't include this in search
-                    primary_category=categories_list[0].get("name") if categories_list else None,
+                    primary_category=categories_list[0].get(
+                        "name") if categories_list else None,
                     category_icons=None,
                     photo_urls=None,
                     external_id=p.get("fsq_place_id"),
@@ -1400,7 +1414,8 @@ async def nearby_places(
             )
         except Exception as e:
             # Skip places with mapping issues instead of crashing
-            logging.warning(f"Failed to map Foursquare place {p.get('name', 'Unknown')}: {e}")
+            logging.warning(
+                f"Failed to map Foursquare place {p.get('name', 'Unknown')}: {e}")
             continue
 
     # Sort by distance (Foursquare already filters by radius, just sort by distance)
@@ -2447,7 +2462,8 @@ async def update_check_in(
 
     # Check if user can still chat (within time window)
     time_limit = timedelta(hours=6)
-    allowed_to_chat = (datetime.now(timezone.utc) - check_in.created_at) < time_limit
+    allowed_to_chat = (datetime.now(timezone.utc) -
+                       check_in.created_at) < time_limit
 
     return CheckInResponse(
         id=check_in.id,
@@ -2457,7 +2473,8 @@ async def update_check_in(
         visibility=VisibilityEnum(check_in.visibility),
         created_at=check_in.created_at,
         expires_at=check_in.expires_at,
-        photo_url=photo_urls[0] if photo_urls else None,  # Backward compatibility
+        # Backward compatibility
+        photo_url=photo_urls[0] if photo_urls else None,
         photo_urls=photo_urls,
         allowed_to_chat=allowed_to_chat,
     )
@@ -2999,8 +3016,6 @@ async def test_external_endpoint():
     return {"message": "External endpoints are working!"}
 
 
-
-
 @router.get("/{place_id}/enrich", response_model=dict)
 async def enrich_place_data(
     place_id: int,
@@ -3044,21 +3059,21 @@ async def enrich_place_data(
             raise HTTPException(status_code=404, detail="Place not found")
 
         # Enrich place data
-        enriched_place = await enhanced_place_data_service.enrich_place_data(place)
+        enriched = await enhanced_place_data_service.enrich_place_if_needed(place, db)
 
         # Save enriched data
         await db.commit()
-        await db.refresh(enriched_place)
+        await db.refresh(place)
 
         return {
-            "id": enriched_place.id,
-            "name": enriched_place.name,
-            "rating": enriched_place.rating,
-            "categories": enriched_place.categories,
-            "website": enriched_place.website,
-            "phone": enriched_place.phone,
-            "metadata": enriched_place.place_metadata,
-            "data_source": enriched_place.data_source,
+            "id": place.id,
+            "name": place.name,
+            "rating": place.rating,
+            "categories": place.categories,
+            "website": place.website,
+            "phone": place.phone,
+            "metadata": place.place_metadata,
+            "data_source": place.data_source,
             "enriched": True
         }
 
@@ -3225,8 +3240,6 @@ async def seed_places_from_osm(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to seed places from OSM: {str(e)}"
         )
-
-
 
 
 @router.post("/enrich/{place_id}", response_model=dict)

@@ -31,17 +31,21 @@ class User(Base):
         String, nullable=False, server_default="public")
 
     # Comprehensive privacy controls (public|followers|private)
-    profile_visibility = Column(String, nullable=False, server_default="public")
-    follower_list_visibility = Column(String, nullable=False, server_default="public")
-    following_list_visibility = Column(String, nullable=False, server_default="public")
+    profile_visibility = Column(
+        String, nullable=False, server_default="public")
+    follower_list_visibility = Column(
+        String, nullable=False, server_default="public")
+    following_list_visibility = Column(
+        String, nullable=False, server_default="public")
     stats_visibility = Column(String, nullable=False, server_default="public")
-    media_default_visibility = Column(String, nullable=False, server_default="public")
+    media_default_visibility = Column(
+        String, nullable=False, server_default="public")
     search_visibility = Column(String, nullable=False, server_default="public")
 
     availability_status = Column(String, nullable=False,
                                  server_default="not_available")
     availability_mode = Column(String, nullable=False,
-                                server_default="auto")
+                               server_default="auto")
 
     # Relationships
     otp_codes = relationship("OTPCode", back_populates="user")
@@ -51,7 +55,8 @@ class User(Base):
     photos = relationship("Photo", back_populates="user")
     check_in_comments = relationship("CheckInComment", back_populates="user")
     check_in_likes = relationship("CheckInLike", back_populates="user")
-    dm_messages = relationship("DMMessage", back_populates="sender", foreign_keys="DMMessage.sender_id")
+    dm_messages = relationship(
+        "DMMessage", back_populates="sender", foreign_keys="DMMessage.sender_id")
     support_tickets = relationship("SupportTicket", back_populates="user")
     activities = relationship("Activity", back_populates="user")
     collections = relationship("UserCollection", back_populates="user")
@@ -174,6 +179,7 @@ class ExternalSearchSnapshot(Base):
     fetched_at = Column(DateTime(timezone=True),
                         server_default=func.now(), nullable=False)
 
+
 class SavedPlace(Base):
     __tablename__ = "saved_places"
 
@@ -286,7 +292,8 @@ class CheckInComment(Base):
     check_in = relationship("CheckIn", back_populates="comments")
     user = relationship("User", back_populates="check_in_comments")
     # Self-referencing relationship for replies
-    reply_to = relationship("CheckInComment", remote_side=[id], backref="replies")
+    reply_to = relationship("CheckInComment", remote_side=[
+                            id], backref="replies")
 
 
 class CheckInLike(Base):
@@ -320,13 +327,15 @@ class DMMessage(Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     # WhatsApp-like delivery status
-    delivery_status = Column(String, nullable=False, server_default='sent')  # sent/delivered/failed
+    delivery_status = Column(String, nullable=False,
+                             server_default='sent')  # sent/delivered/failed
     delivered_at = Column(DateTime(timezone=True), nullable=True)
     failed_at = Column(DateTime(timezone=True), nullable=True)
     failure_reason = Column(String, nullable=True)
 
     # Message type for better handling
-    message_type = Column(String, nullable=False, server_default='text')  # text/photo/video/voice/file/location
+    # text/photo/video/voice/file/location
+    message_type = Column(String, nullable=False, server_default='text')
 
     # Reply functionality
     reply_to_id = Column(Integer, ForeignKey(
@@ -357,20 +366,26 @@ class DMMessage(Base):
     auto_delete_duration = Column(Integer, nullable=True)  # in seconds
 
     # Forwarding
-    forwarded_from_message_id = Column(Integer, ForeignKey("dm_messages.id"), nullable=True)
-    forwarded_from_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    forwarded_from_message_id = Column(
+        Integer, ForeignKey("dm_messages.id"), nullable=True)
+    forwarded_from_user_id = Column(
+        Integer, ForeignKey("users.id"), nullable=True)
     is_forwarded = Column(Boolean, nullable=False, server_default='false')
 
     # Deleted message info (for "This message was deleted" placeholder)
     deleted_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     # Relationships
-    sender = relationship("User", back_populates="dm_messages", foreign_keys=[sender_id])
+    sender = relationship(
+        "User", back_populates="dm_messages", foreign_keys=[sender_id])
     # Self-referencing relationship for replies
-    reply_to = relationship("DMMessage", remote_side=[id], backref="replies", foreign_keys=[reply_to_id])
+    reply_to = relationship("DMMessage", remote_side=[
+                            id], backref="replies", foreign_keys=[reply_to_id])
     # Forwarding relationships
-    forwarded_from_message = relationship("DMMessage", remote_side=[id], foreign_keys=[forwarded_from_message_id])
-    forwarded_from_user = relationship("User", foreign_keys=[forwarded_from_user_id])
+    forwarded_from_message = relationship(
+        "DMMessage", remote_side=[id], foreign_keys=[forwarded_from_message_id])
+    forwarded_from_user = relationship(
+        "User", foreign_keys=[forwarded_from_user_id])
     deleted_by_user = relationship("User", foreign_keys=[deleted_by_user_id])
 
 
@@ -458,7 +473,8 @@ class UserCollection(Base):
     description = Column(Text, nullable=True)
     # Keep is_public for backward compatibility, but add standardized visibility
     is_public = Column(Boolean, default=True)
-    visibility = Column(String, nullable=False, server_default="public")  # public|followers|private
+    # public|followers|private
+    visibility = Column(String, nullable=False, server_default="public")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
