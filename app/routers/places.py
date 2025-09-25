@@ -829,7 +829,6 @@ async def get_place_details(
             # Count check-ins with photos
             photos_count=len([c for c in checkin_responses if c.photo_urls]),
             is_checked_in=False,  # TODO: Check if current user is checked in
-            recent_checkins=checkin_responses,
         )
 
         return enhanced_response
