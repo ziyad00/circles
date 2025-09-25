@@ -371,14 +371,14 @@ async def get_user_media(
         raise HTTPException(status_code=500, detail="Failed to get user media")
 
 
-@router.get("/{user_id}/check-ins", response_model=list[dict])
+@router.get("/{user_id}/check-ins", response_model=PaginatedCheckIns)
 async def get_user_checkins(
     user_id: int,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(JWTService.get_current_user),
-):
+) -> PaginatedCheckIns:
     """
     Get user's check-ins.
 
@@ -398,41 +398,45 @@ async def get_user_checkins(
             raise HTTPException(
                 status_code=403, detail="Cannot view this user's check-ins")
 
+        # Get total count
+        count_query = select(func.count(CheckIn.id)).where(
+            CheckIn.user_id == user_id)
+        count_result = await db.execute(count_query)
+        total = count_result.scalar()
+
         # Get check-ins with place info
-        checkins_query = select(
-            CheckIn.id,
-            CheckIn.place_id,
-            CheckIn.note,
-            CheckIn.visibility,
-            CheckIn.created_at,
-            CheckIn.latitude,
-            CheckIn.longitude,
-            Place.name.label('place_name'),
-            Place.address.label('place_address')
-        ).join(Place, CheckIn.place_id == Place.id).where(
+        checkins_query = select(CheckIn).where(
             CheckIn.user_id == user_id
         ).order_by(desc(CheckIn.created_at)).offset(offset).limit(limit)
 
         result = await db.execute(checkins_query)
-        checkins = result.fetchall()
+        checkins = result.scalars().all()
 
-        # Convert to response format
-        checkin_list = []
+        # Convert to CheckInResponse objects
+        checkin_responses = []
         for checkin in checkins:
-            checkin_dict = {
-                "id": checkin.id,
-                "place_id": checkin.place_id,
-                "place_name": checkin.place_name,
-                "place_address": checkin.place_address,
-                "note": checkin.note,
-                "visibility": checkin.visibility,
-                "created_at": checkin.created_at,
-                "latitude": checkin.latitude,
-                "longitude": checkin.longitude,
-            }
-            checkin_list.append(checkin_dict)
+            checkin_response = CheckInResponse(
+                id=checkin.id,
+                user_id=checkin.user_id,
+                place_id=checkin.place_id,
+                note=checkin.note,
+                visibility=checkin.visibility,
+                created_at=checkin.created_at,
+                expires_at=checkin.expires_at,
+                latitude=checkin.latitude,
+                longitude=checkin.longitude,
+                photo_url=None,  # TODO: Get photo URL from CheckInPhoto
+                photo_urls=[],   # TODO: Get photo URLs from CheckInPhoto
+                allowed_to_chat=True,  # TODO: Calculate based on time window
+            )
+            checkin_responses.append(checkin_response)
 
-        return checkin_list
+        return PaginatedCheckIns(
+            items=checkin_responses,
+            total=total,
+            limit=limit,
+            offset=offset
+        )
 
     except HTTPException:
         raise
