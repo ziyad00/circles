@@ -451,34 +451,32 @@ async def get_trending_places(
     print(
         f"🚀 About to call fetch_foursquare_trending with lat={lat}, lon={lng}, limit={limit}")
 
-    # TEST: Direct Foursquare API call - let's try discovery method first
+    # Use Foursquare v3 Places API for trending (same as nearby for consistency)
     try:
         import asyncio
         import httpx
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(30)) as client:
-            # Use official Foursquare trending venues endpoint
-            url = "https://api.foursquare.com/v2/venues/trending"
+            # Use Foursquare v3 Places API with sort by popularity for trending
+            url = "https://places-api.foursquare.com/places/search"
             headers = {
-                "Accept": "application/json"
+                "Authorization": f"Bearer {settings.foursquare_api_key}",
+                "Accept": "application/json",
+                "X-Places-Api-Version": "2025-06-17"
             }
-            # Use the foursquare_client_id from config
-            client_id = settings.foursquare_client_id
-            client_secret = settings.foursquare_client_secret
             params = {
-                "client_id": client_id,
-                "client_secret": client_secret,
                 "ll": f"{lat},{lng}",
                 "radius": 15000,
                 "limit": limit,
-                "v": "20231010"  # API version for v2
+                "sort": "POPULARITY",  # Sort by popularity for trending effect
+                "fields": "fsq_place_id,name,location,categories,distance,photos,rating,price,tel,website"
             }
 
             response = await client.get(url, headers=headers, params=params)
 
             if response.status_code == 200:
                 data = response.json()
-                venues = data.get("response", {}).get("venues", [])
+                venues = data.get("results", [])
                 fsq = venues if venues else []
             else:
                 fsq = []
@@ -494,25 +492,21 @@ async def get_trending_places(
     items = []
 
     for venue in fsq[:limit]:
-        # Extract location data - Foursquare v2 format
+        # Extract location data - Foursquare v3 format
         location = venue.get("location", {})
-        lat_val = location.get("lat", lat)  # Use search lat as fallback
-        lng_val = location.get("lng", lng)  # Use search lng as fallback
 
-        # Extract photo URL from v2 format
+        # Extract photo URL from v3 format (same as nearby endpoint)
         photo_url = None
-        if venue.get("photos", {}).get("count", 0) > 0:
-            photos = venue.get("photos", {}).get("groups", [])
+        if venue.get("photos"):
+            photos = venue.get("photos", [])
             if photos:
-                items_list = photos[0].get("items", [])
-                if items_list:
-                    first_photo = items_list[0]
-                    prefix = first_photo.get("prefix", "")
-                    suffix = first_photo.get("suffix", "")
-                    if prefix and suffix:
-                        photo_url = f"{prefix}300x300{suffix}"
+                first_photo = photos[0]
+                prefix = first_photo.get("prefix", "")
+                suffix = first_photo.get("suffix", "")
+                if prefix and suffix:
+                    photo_url = f"{prefix}300x300{suffix}"
 
-        # Extract categories
+        # Extract categories from v3 format
         categories_list = venue.get("categories", [])
         categories_str = ", ".join(
             [cat.get("name", "") for cat in categories_list]) if categories_list else None
@@ -521,33 +515,36 @@ async def get_trending_places(
             place_resp = PlaceResponse(
                 id=-1,  # Use -1 for external places without our internal ID
                 name=venue.get("name", "Unknown"),
-                address=location.get("formattedAddress", [""])[0] if location.get(
-                    "formattedAddress") else location.get("address"),
+                address=location.get("address"),
                 country=location.get("country"),
-                city=location.get("city"),
+                # v3 uses 'locality' instead of 'city'
+                city=location.get("locality"),
                 neighborhood=location.get("neighborhood"),
-                latitude=lat_val,
-                longitude=lng_val,
+                latitude=venue.get("latitude"),  # Use actual place coordinates
+                # Use actual place coordinates
+                longitude=venue.get("longitude"),
                 categories=categories_str,
                 rating=venue.get("rating"),
-                description=None,  # v2 API doesn't include description in trending
-                price_tier=venue.get("price", {}).get(
-                    "tier") if venue.get("price") else None,
+                description=None,  # v3 API doesn't include description in search
+                price_tier=str(venue.get("price")) if venue.get(
+                    "price") is not None else None,  # Convert int to string
                 created_at=now_ts,
-                external_id=venue.get("id"),
+                external_id=venue.get("fsq_place_id"),
                 data_source="foursquare",
-                fsq_id=venue.get("id"),
-                website=venue.get("url"),
-                phone=venue.get("contact", {}).get("phone"),
+                fsq_id=venue.get("fsq_place_id"),
+                website=venue.get("website"),
+                phone=venue.get("tel"),
                 place_metadata=venue,
                 photo_url=photo_url,
                 recent_checkins=[],
-                postal_code=location.get("postalCode"),
-                cross_street=location.get("crossStreet"),
-                formatted_address=location.get("formattedAddress", [""])[0] if location.get("formattedAddress") else None,
-                distance_meters=None,
-                venue_created_at=venue.get("createdAt"),
-                primary_category=categories_list[0].get("name") if categories_list else None,
+                postal_code=location.get("postal_code"),
+                cross_street=location.get("cross_street"),
+                formatted_address=location.get("formatted_address"),
+                # Use Foursquare's distance
+                distance_meters=venue.get("distance"),
+                venue_created_at=None,  # v3 doesn't include this in search
+                primary_category=categories_list[0].get(
+                    "name") if categories_list else None,
                 category_icons=None,
                 photo_urls=[photo_url] if photo_url else [],
             )
