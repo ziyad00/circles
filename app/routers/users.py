@@ -142,7 +142,7 @@ async def get_user_profile(
             raise HTTPException(status_code=404, detail="User not found")
 
         # Check if current user can view this profile
-        if not can_view_profile(current_user, user):
+        if not await can_view_profile(db, user, current_user.id):
             raise HTTPException(
                 status_code=403, detail="Cannot view this profile")
 
@@ -150,7 +150,7 @@ async def get_user_profile(
         follow_query = select(Follow).where(
             and_(
                 Follow.follower_id == current_user.id,
-                Follow.following_id == user_id
+                Follow.followee_id == user_id
             )
         )
         follow_result = await db.execute(follow_query)
@@ -159,16 +159,18 @@ async def get_user_profile(
         # Create response
         user_response = PublicUserResponse(
             id=user.id,
+            name=user.name,
             username=user.username,
-            display_name=user.display_name,
             bio=user.bio,
             avatar_url=user.avatar_url,
-            is_verified=user.is_verified,
-            followers_count=user.followers_count,
-            following_count=user.following_count,
-            checkins_count=user.checkins_count,
-            is_following=is_following,
+            availability_status=user.availability_status,
+            availability_mode=user.availability_mode,
             created_at=user.created_at,
+            followers_count=0,  # TODO: Calculate actual count
+            following_count=0,  # TODO: Calculate actual count
+            check_ins_count=0,  # TODO: Calculate actual count
+            is_followed=is_following,
+            is_blocked=False,  # TODO: Implement blocking logic
         )
 
         return user_response
