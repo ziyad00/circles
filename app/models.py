@@ -136,6 +136,9 @@ class CheckIn(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
     photo_url = Column(String, nullable=True)
+    # Location coordinates where the check-in was made
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
 
     user = relationship("User", back_populates="check_ins")
     place = relationship("Place", back_populates="check_ins")

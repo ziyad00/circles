@@ -95,7 +95,7 @@ class PlaceResponse(PlaceBase):
     # Optional representative photo for list views (latest review/check-in photo)
     photo_url: Optional[str] = None
     recent_checkins_count: int = 0
-    
+
     # Enhanced Foursquare fields
     postal_code: Optional[str] = None
     cross_street: Optional[str] = None
@@ -105,7 +105,7 @@ class PlaceResponse(PlaceBase):
     primary_category: Optional[str] = None
     category_icons: Optional[List[Dict[str, Any]]] = None
     photo_urls: Optional[List[str]] = None
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -128,7 +128,8 @@ class CheckInCreate(BaseModel):
 
 
 class CheckInUpdate(BaseModel):
-    note: Optional[str] = Field(None, max_length=500, examples=["Updated note"])
+    note: Optional[str] = Field(
+        None, max_length=500, examples=["Updated note"])
     visibility: Optional[VisibilityEnum] = Field(
         None,
         examples=[VisibilityEnum.public,
@@ -145,6 +146,9 @@ class CheckInResponse(BaseModel):
     visibility: VisibilityEnum
     created_at: datetime
     expires_at: datetime
+    # Location coordinates where the check-in was made
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     # Deprecated single photo url; keep for backward compatibility
     photo_url: Optional[str] = None
     # New: multiple photos
@@ -388,7 +392,8 @@ class CheckInPhotoResponse(BaseModel):
 class CheckInCommentCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=1000,
                          description="Comment content")
-    reply_to_id: Optional[int] = Field(None, description="ID of the comment being replied to")
+    reply_to_id: Optional[int] = Field(
+        None, description="ID of the comment being replied to")
 
 
 class CheckInCommentResponse(BaseModel):
@@ -517,14 +522,17 @@ class DMRequestDecision(BaseModel):
 
 
 class DMMessageCreate(BaseModel):
-    text: str = Field("", max_length=2000)  # Allow empty text for media-only messages
-    message_type: str = Field("text", pattern="^(text|photo|video|voice|file|location)$")
+    # Allow empty text for media-only messages
+    text: str = Field("", max_length=2000)
+    message_type: str = Field(
+        "text", pattern="^(text|photo|video|voice|file|location)$")
     reply_to_id: Optional[int] = None
 
     # Media attachments
     photo_urls: list[str] = Field(default_factory=list, max_length=10)
     video_urls: list[str] = Field(default_factory=list, max_length=5)
-    voice_urls: list[str] = Field(default_factory=list, max_length=1)  # One voice message at a time
+    # One voice message at a time
+    voice_urls: list[str] = Field(default_factory=list, max_length=1)
     voice_duration: Optional[int] = Field(None, ge=1, le=300)  # Max 5 minutes
     file_urls: list[str] = Field(default_factory=list, max_length=5)
     file_names: list[str] = Field(default_factory=list, max_length=5)
@@ -540,7 +548,8 @@ class DMMessageCreate(BaseModel):
     location_address: Optional[str] = Field(None, max_length=500)
 
     # Disappearing messages
-    auto_delete_duration: Optional[int] = Field(None, ge=5, le=604800)  # 5 seconds to 1 week
+    auto_delete_duration: Optional[int] = Field(
+        None, ge=5, le=604800)  # 5 seconds to 1 week
 
     # Forwarding
     forwarded_from_message_id: Optional[int] = None
@@ -605,7 +614,8 @@ class DMMessageResponse(BaseModel):
     # Deleted message info
     deleted_at: Optional[datetime] = None
     deleted_by_user_id: Optional[int] = None
-    is_deleted_placeholder: bool = False  # True when showing "This message was deleted"
+    # True when showing "This message was deleted"
+    is_deleted_placeholder: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -725,7 +735,8 @@ class ReactionResponse(BaseModel):
 
 class MessageForwardRequest(BaseModel):
     message_id: int
-    target_thread_ids: list[int] = Field(..., min_length=1, max_length=5)  # Limit to 5 threads
+    # Limit to 5 threads
+    target_thread_ids: list[int] = Field(..., min_length=1, max_length=5)
 
 
 class MessageSearchRequest(BaseModel):
@@ -1013,7 +1024,8 @@ class CollectionCreate(BaseModel):
     description: Optional[str] = Field(None, max_length=500)
     # Backward compatibility: support both is_public and visibility
     is_public: bool = True
-    visibility: Optional[VisibilityEnum] = Field(None, description="Standardized privacy control (overrides is_public if provided)")
+    visibility: Optional[VisibilityEnum] = Field(
+        None, description="Standardized privacy control (overrides is_public if provided)")
 
 
 class CollectionResponse(BaseModel):

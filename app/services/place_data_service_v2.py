@@ -82,18 +82,22 @@ class EnhancedPlaceDataService:
 
         Uses the actual trending endpoint that shows places with high check-in activity.
         """
-        logging.info(f"DEBUG: API key check - key: {self.foursquare_api_key[:10]}... (length: {len(self.foursquare_api_key) if self.foursquare_api_key else 0})")
+        logging.info(
+            f"DEBUG: API key check - key: {self.foursquare_api_key[:10]}... (length: {len(self.foursquare_api_key) if self.foursquare_api_key else 0})")
         if not self.foursquare_api_key or self.foursquare_api_key == "demo_key_for_testing":
-            logging.warning(f"No valid Foursquare API key: {self.foursquare_api_key}")
+            logging.warning(
+                f"No valid Foursquare API key: {self.foursquare_api_key}")
             return []
 
         cache_key = f"fsq_trending:{round(lat, 4)}:{round(lon, 4)}:{limit}:{self.trending_radius_m}:{query}:{categories}:{min_price}:{max_price}"
         cached = self._cache_get(self._cache_discovery, cache_key)
         if cached is not None:
-            logging.info(f"Returning cached trending results: {len(cached)} places")
+            logging.info(
+                f"Returning cached trending results: {len(cached)} places")
             return cached
 
-        logging.info(f"No cached results, fetching trending places from Foursquare API...")
+        logging.info(
+            f"No cached results, fetching trending places from Foursquare API...")
 
         # Use v3 API directly due to v2 connection issues
         logging.info("Using Foursquare v3 API for trending data")
@@ -136,18 +140,23 @@ class EnhancedPlaceDataService:
                 params["max_price"] = max_price
 
             try:
-                logging.info(f"Foursquare v3 API request: {url} with params: {params}")
+                logging.info(
+                    f"Foursquare v3 API request: {url} with params: {params}")
                 resp = await client.get(url, headers=headers, params=params)
-                logging.info(f"Foursquare v3 API response status: {resp.status_code}")
+                logging.info(
+                    f"Foursquare v3 API response status: {resp.status_code}")
 
                 if resp.status_code == 400:
-                    logging.warning(f"Foursquare v3 API 400 error response: {resp.text}")
+                    logging.warning(
+                        f"Foursquare v3 API 400 error response: {resp.text}")
                     if 'sort' in resp.text:
                         # Retry without sort parameter
                         params.pop("sort", None)
-                        logging.info(f"Retrying without sort parameter: {params}")
+                        logging.info(
+                            f"Retrying without sort parameter: {params}")
                         resp = await client.get(url, headers=headers, params=params)
-                        logging.info(f"Retry response status: {resp.status_code}")
+                        logging.info(
+                            f"Retry response status: {resp.status_code}")
 
                 if resp.status_code != 200:
                     logging.warning(
@@ -156,7 +165,8 @@ class EnhancedPlaceDataService:
 
                 data = resp.json()
                 venues = data.get("results", [])
-                logging.info(f"Foursquare v3 API returned {len(venues)} venues")
+                logging.info(
+                    f"Foursquare v3 API returned {len(venues)} venues")
 
                 # Use existing v3 parsing logic
                 results: List[Dict[str, Any]] = []
@@ -192,7 +202,8 @@ class EnhancedPlaceDataService:
                         price_tier = price_map.get(fsq_price)
 
                     # Get address
-                    address = location.get("formatted_address") or location.get("address")
+                    address = location.get(
+                        "formatted_address") or location.get("address")
                     city = location.get("locality") or location.get("city")
 
                     results.append({
@@ -222,7 +233,8 @@ class EnhancedPlaceDataService:
                         },
                     })
 
-                logging.info(f"Foursquare v3 API returning {len(results)} processed results")
+                logging.info(
+                    f"Foursquare v3 API returning {len(results)} processed results")
                 return results
 
             except Exception as e:
@@ -1612,7 +1624,8 @@ class EnhancedPlaceDataService:
                     categories = ", ".join(categories)
                 # If it's a list of category objects, extract names
                 elif categories and isinstance(categories[0], dict):
-                    categories = ", ".join([cat.get('name', '') for cat in categories if cat.get('name')])
+                    categories = ", ".join(
+                        [cat.get('name', '') for cat in categories if cat.get('name')])
                 else:
                     categories = None
             elif not isinstance(categories, str):

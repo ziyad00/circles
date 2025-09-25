@@ -2054,6 +2054,8 @@ async def create_check_in(
         note=payload.note,
         visibility=payload.visibility or default_vis,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        latitude=payload.latitude,
+        longitude=payload.longitude,
     )
     db.add(check_in)
     await db.commit()
@@ -2178,6 +2180,8 @@ async def create_check_in_full(
         note=note,
         visibility=visibility or default_vis,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        latitude=latitude,
+        longitude=longitude,
     )
     db.add(check_in)
     await db.flush()  # get check_in.id before committing
