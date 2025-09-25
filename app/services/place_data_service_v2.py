@@ -82,6 +82,7 @@ class EnhancedPlaceDataService:
 
         Uses the actual trending endpoint that shows places with high check-in activity.
         """
+        logging.info(f"DEBUG: API key check - key: {self.foursquare_api_key[:10]}... (length: {len(self.foursquare_api_key) if self.foursquare_api_key else 0})")
         if not self.foursquare_api_key or self.foursquare_api_key == "demo_key_for_testing":
             logging.warning(f"No valid Foursquare API key: {self.foursquare_api_key}")
             return []
@@ -258,7 +259,7 @@ class EnhancedPlaceDataService:
                 "near": city,
                 "limit": min(limit * 2, 50),
                 "sort": "POPULARITY",
-                "fields": "fsq_id,name,location,geocodes,categories,rating,stats,hours,website,tel,photos,price,popularity,verified,description,features",
+                "fields": "fsq_id,name,location,categories,rating,stats,hours,website,tel,photos,price,popularity,verified,description,features",
             }
 
             # Add search filters to Foursquare API call
@@ -1590,73 +1591,90 @@ class EnhancedPlaceDataService:
         Returns:
             Created Place object or None if it already exists
         """
-        # QUICK FIX: Completely disable save functionality to avoid categories error
-        logger.warning("Database save disabled - returning None to avoid categories list error")
-        return None
-        if False:  # pragma: no cover - disabled save path
-            try:
-                existing = await db.execute(
-                    select(Place).where(
-                        Place.external_id == place_data.get('external_id')
-                    )
+        try:
+            existing = await db.execute(
+                select(Place).where(
+                    Place.external_id == place_data.get('external_id')
                 )
-                if existing.scalar_one_or_none():
-                    logger.info(
-                        "Place with external_id %s already exists",
-                        place_data.get('external_id'),
-                    )
-                    return None
-
-                place = Place(
-                    name=place_data.get('name'),
-                    latitude=place_data.get('latitude'),
-                    longitude=place_data.get('longitude'),
-                    categories=place_data.get('categories'),
-                    rating=place_data.get('rating'),
-                    phone=place_data.get('phone'),
-                    website=place_data.get('website'),
-                    address=place_data.get('address'),
-                    city=place_data.get('city'),
-                    external_id=place_data.get('external_id'),
-                    data_source=place_data.get('data_source', 'foursquare'),
-                    price_tier=place_data.get('price_tier'),
-                    place_metadata=place_data.get('metadata', {}),
-                    last_enriched_at=datetime.now(timezone.utc),
-                )
-
-                if place.latitude is not None and place.longitude is not None:
-                    try:
-                        geo = await self.reverse_geocode_details(
-                            lat=place.latitude, lon=place.longitude
-                        )
-                        if not place.city and geo.get("city"):
-                            place.city = geo.get("city")
-                        if not getattr(place, "country", None) and geo.get("country"):
-                            place.country = geo.get("country")
-                        if not getattr(place, "neighborhood", None) and geo.get("neighborhood"):
-                            place.neighborhood = geo.get("neighborhood")
-                    except Exception as ex:
-                        logger.warning(
-                            "Failed to reverse geocode place %s: %s",
-                            place.name,
-                            ex,
-                        )
-
-                db.add(place)
-                await db.flush()
+            )
+            if existing.first():
                 logger.info(
-                    "Saved Foursquare place: %s (ID: %s)",
-                    place.name,
-                    place.id,
+                    "Place with external_id %s already exists",
+                    place_data.get('external_id'),
                 )
-                return place
-
-            except Exception as ex:
-                logger.error(
-                    "Failed to save Foursquare place to database: %s", ex
-                )
-                await db.rollback()
                 return None
+
+            # Fix categories field - convert list to string if needed
+            categories = place_data.get('categories')
+            if isinstance(categories, list):
+                # If it's a list of category names, join them
+                if categories and isinstance(categories[0], str):
+                    categories = ", ".join(categories)
+                # If it's a list of category objects, extract names
+                elif categories and isinstance(categories[0], dict):
+                    categories = ", ".join([cat.get('name', '') for cat in categories if cat.get('name')])
+                else:
+                    categories = None
+            elif not isinstance(categories, str):
+                categories = None
+
+            place = Place(
+                name=place_data.get('name'),
+                latitude=place_data.get('latitude'),
+                longitude=place_data.get('longitude'),
+                categories=categories,  # Now properly converted to string
+                rating=place_data.get('rating'),
+                phone=place_data.get('phone'),
+                website=place_data.get('website'),
+                address=place_data.get('address'),
+                city=place_data.get('city'),
+                external_id=place_data.get('external_id'),
+                data_source=place_data.get('data_source', 'foursquare'),
+                price_tier=place_data.get('price_tier'),
+                place_metadata=place_data.get('metadata', {}),
+                last_enriched_at=datetime.now(timezone.utc),
+                # Add new Foursquare fields
+                postal_code=place_data.get('postal_code'),
+                cross_street=place_data.get('cross_street'),
+                formatted_address=place_data.get('formatted_address'),
+                distance_meters=place_data.get('distance_meters'),
+                venue_created_at=place_data.get('venue_created_at'),
+                photo_url=place_data.get('photo_url'),
+            )
+
+            if place.latitude is not None and place.longitude is not None:
+                try:
+                    geo = await self.reverse_geocode_details(
+                        lat=place.latitude, lon=place.longitude
+                    )
+                    if not place.city and geo.get("city"):
+                        place.city = geo.get("city")
+                    if not getattr(place, "country", None) and geo.get("country"):
+                        place.country = geo.get("country")
+                    if not getattr(place, "neighborhood", None) and geo.get("neighborhood"):
+                        place.neighborhood = geo.get("neighborhood")
+                except Exception as ex:
+                    logger.warning(
+                        "Failed to reverse geocode place %s: %s",
+                        place.name,
+                        ex,
+                    )
+
+            db.add(place)
+            await db.flush()
+            logger.info(
+                "Saved Foursquare place: %s (ID: %s)",
+                place.name,
+                place.id,
+            )
+            return place
+
+        except Exception as ex:
+            logger.error(
+                "Failed to save Foursquare place to database: %s", ex
+            )
+            await db.rollback()
+            return None
 
     async def save_foursquare_places_to_db(self, places_data: List[Dict[str, Any]], db: AsyncSession) -> List[Place]:
         """Save multiple Foursquare places to the local database.
@@ -1669,10 +1687,10 @@ class EnhancedPlaceDataService:
             List of created Place objects
         """
         saved_places: list[Place] = []
-        # for place_data in places_data:
-        #     place = await self.save_foursquare_place_to_db(place_data, db)
-        #     if place:
-        #         saved_places.append(place)
+        for place_data in places_data:
+            place = await self.save_foursquare_place_to_db(place_data, db)
+            if place:
+                saved_places.append(place)
 
         if saved_places:
             try:

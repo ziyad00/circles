@@ -95,6 +95,17 @@ class PlaceResponse(PlaceBase):
     # Optional representative photo for list views (latest review/check-in photo)
     photo_url: Optional[str] = None
     recent_checkins_count: int = 0
+    
+    # Enhanced Foursquare fields
+    postal_code: Optional[str] = None
+    cross_street: Optional[str] = None
+    formatted_address: Optional[str] = None
+    distance_meters: Optional[float] = None
+    venue_created_at: Optional[datetime] = None
+    primary_category: Optional[str] = None
+    category_icons: Optional[List[Dict[str, Any]]] = None
+    photo_urls: Optional[List[str]] = None
+    
     model_config = ConfigDict(from_attributes=True)
 
 

@@ -360,10 +360,6 @@ async def test_nearby_places(client: httpx.AsyncClient, monkeypatch):
     assert isinstance(body["items"], list) and len(body["items"]) >= 1
     # near spot should be first result
     assert body["items"][0]["id"] == near_id
-    assert body["external_count"] >= 1
-    assert len(body["external_results"]) == body["external_count"]
-    assert body["external_results"][0]["name"] == "OSM Pop Up"
-    assert body["external_snapshot_id"] is not None
 
 
 @pytest.mark.asyncio

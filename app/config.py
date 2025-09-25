@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     # Place Data API Keys
     foursquare_api_key: Optional[str] = Field(
-        default="demo_key_for_testing", env="FOURSQUARE_API_KEY"
+        default=None, env="FOURSQUARE_API_KEY"
     )
     foursquare_client_id: Optional[str] = Field(
         default=None, env="FOURSQUARE_CLIENT_ID"
