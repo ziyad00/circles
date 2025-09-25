@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Query
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, case, and_, or_
+from sqlalchemy import select, func, case, and_, or_, desc
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
@@ -324,10 +324,41 @@ async def get_user_media(
             raise HTTPException(
                 status_code=403, detail="Cannot view this user's media")
 
-        # Simplified approach - just return empty for now
-        # This will be expanded once we have actual photo data
-        total = 0
+        # Get total count of check-in photos for this user
+        checkin_count_query = select(func.count(CheckInPhoto.id)).join(CheckIn).where(
+            and_(
+                CheckIn.user_id == user_id,
+                CheckInPhoto.url.isnot(None)
+            )
+        )
+        checkin_count_result = await db.execute(checkin_count_query)
+        total = checkin_count_result.scalar() or 0
+
+        # Get check-in photos with pagination
+        checkin_photos_query = select(
+            CheckInPhoto.url,
+            CheckInPhoto.created_at,
+            CheckIn.place_id
+        ).join(CheckIn).where(
+            and_(
+                CheckIn.user_id == user_id,
+                CheckInPhoto.url.isnot(None)
+            )
+        ).order_by(desc(CheckInPhoto.created_at)).offset(offset).limit(limit)
+
+        result = await db.execute(checkin_photos_query)
+        media_items = result.fetchall()
+
+        # Convert to expected format
         items = []
+        for item in media_items:
+            if item.url:  # Only include items with actual photos
+                media_item = {
+                    "photo_url": item.url,
+                    "created_at": item.created_at,
+                    "place_id": item.place_id,
+                }
+                items.append(media_item)
 
         return PaginatedMedia(items=items, total=total, limit=limit, offset=offset)
 
@@ -336,6 +367,76 @@ async def get_user_media(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail="Failed to get user media")
+
+
+@router.get("/{user_id}/check-ins", response_model=list[dict])
+async def get_user_checkins(
+    user_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    """
+    Get user's check-ins.
+
+    **Authentication Required:** Yes
+    """
+    try:
+        # Get user
+        user_query = select(User).where(User.id == user_id)
+        user_result = await db.execute(user_query)
+        user = user_result.scalar_one_or_none()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Check if current user can view this user's check-ins
+        if not await can_view_profile(db, user, current_user.id):
+            raise HTTPException(
+                status_code=403, detail="Cannot view this user's check-ins")
+
+        # Get check-ins with place info
+        checkins_query = select(
+            CheckIn.id,
+            CheckIn.place_id,
+            CheckIn.note,
+            CheckIn.visibility,
+            CheckIn.created_at,
+            CheckIn.latitude,
+            CheckIn.longitude,
+            Place.name.label('place_name'),
+            Place.address.label('place_address')
+        ).join(Place, CheckIn.place_id == Place.id).where(
+            CheckIn.user_id == user_id
+        ).order_by(desc(CheckIn.created_at)).offset(offset).limit(limit)
+
+        result = await db.execute(checkins_query)
+        checkins = result.fetchall()
+
+        # Convert to response format
+        checkin_list = []
+        for checkin in checkins:
+            checkin_dict = {
+                "id": checkin.id,
+                "place_id": checkin.place_id,
+                "place_name": checkin.place_name,
+                "place_address": checkin.place_address,
+                "note": checkin.note,
+                "visibility": checkin.visibility,
+                "created_at": checkin.created_at,
+                "latitude": checkin.latitude,
+                "longitude": checkin.longitude,
+            }
+            checkin_list.append(checkin_dict)
+
+        return checkin_list
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to get user check-ins")
 
 # ============================================================================
 # USER COLLECTIONS ENDPOINTS (Used by frontend)
@@ -369,7 +470,7 @@ async def list_user_collections(
             raise HTTPException(
                 status_code=403, detail="Cannot view this user's collections")
 
-        # Get collections from UserCollection table (simplified)
+        # Get collections from UserCollection table
         collections_query = select(UserCollection).where(
             UserCollection.user_id == user_id
         ).order_by(UserCollection.name)
@@ -377,14 +478,38 @@ async def list_user_collections(
         result = await db.execute(collections_query)
         collections = result.scalars().all()
 
-        # Convert to response format (simplified)
+        # Convert to response format with actual data
         collection_list = []
         for collection in collections:
+            # Get place count for this collection
+            count_query = select(func.count()).select_from(
+                select(UserCollectionPlace).where(
+                    UserCollectionPlace.collection_id == collection.id
+                ).subquery()
+            )
+            count_result = await db.execute(count_query)
+            place_count = count_result.scalar() or 0
+
+            # Get sample photos from places in this collection
+            photos_query = select(CheckInPhoto.url).join(
+                CheckIn, CheckIn.id == CheckInPhoto.check_in_id
+            ).join(
+                UserCollectionPlace, UserCollectionPlace.place_id == CheckIn.place_id
+            ).where(
+                and_(
+                    UserCollectionPlace.collection_id == collection.id,
+                    CheckInPhoto.url.isnot(None)
+                )
+            ).limit(3)
+
+            photos_result = await db.execute(photos_query)
+            photo_urls = [row[0] for row in photos_result.fetchall()]
+
             collection_dict = {
                 "id": collection.id,
                 "name": collection.name,
-                "count": 0,  # Simplified - will be updated when places are added
-                "photos": []  # Simplified - no photos for now
+                "count": place_count,
+                "photos": photo_urls
             }
             collection_list.append(collection_dict)
 
