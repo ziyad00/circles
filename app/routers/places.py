@@ -764,8 +764,14 @@ async def get_place_details(
         for checkin in recent_checkins:
             # Check if user can still chat (within time window)
             time_limit = timedelta(hours=6)
-            allowed_to_chat = (datetime.now(timezone.utc) -
-                               checkin.created_at) < time_limit
+            now = datetime.now(timezone.utc)
+            # Ensure both datetimes are timezone-aware
+            if checkin.created_at.tzinfo is None:
+                checkin_created_at = checkin.created_at.replace(
+                    tzinfo=timezone.utc)
+            else:
+                checkin_created_at = checkin.created_at
+            allowed_to_chat = (now - checkin_created_at) < time_limit
 
             # Get photo URLs for this check-in
             photo_query = select(CheckInPhoto).where(
@@ -792,6 +798,14 @@ async def get_place_details(
             )
             checkin_responses.append(checkin_resp)
 
+        # Create place stats
+        place_stats = PlaceStats(
+            place_id=place.id,
+            average_rating=place.rating,
+            reviews_count=0,  # TODO: Calculate actual reviews count
+            active_checkins=len(recent_checkins),
+        )
+
         # Create enhanced place response
         enhanced_response = EnhancedPlaceResponse(
             id=place.id,
@@ -807,16 +821,14 @@ async def get_place_details(
             description=place.description,
             price_tier=place.price_tier,
             created_at=place.created_at,
-            photo_url=place.photo_url,
-            recent_checkins_count=len(recent_checkins),
-            postal_code=place.postal_code,
-            cross_street=place.cross_street,
-            formatted_address=place.formatted_address,
-            distance_meters=place.distance_meters,
-            venue_created_at=place.venue_created_at,
-            primary_category=None,  # TODO: Extract from categories
-            category_icons=None,
-            photo_urls=[place.photo_url] if place.photo_url else [],
+            stats=place_stats,
+            current_checkins=len(recent_checkins),
+            # TODO: Calculate total check-ins
+            total_checkins=len(recent_checkins),
+            recent_reviews=0,  # TODO: Calculate recent reviews
+            # Count check-ins with photos
+            photos_count=len([c for c in checkin_responses if c.photo_urls]),
+            is_checked_in=False,  # TODO: Check if current user is checked in
             recent_checkins=checkin_responses,
         )
 
