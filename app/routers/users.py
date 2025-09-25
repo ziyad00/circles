@@ -436,7 +436,8 @@ async def get_user_checkins(
         raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to get user check-ins")
+        raise HTTPException(
+            status_code=500, detail="Failed to get user check-ins")
 
 # ============================================================================
 # USER COLLECTIONS ENDPOINTS (Used by frontend)

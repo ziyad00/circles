@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, and_
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
@@ -155,22 +155,23 @@ async def get_collection_items(
             raise HTTPException(status_code=404, detail="Collection not found")
 
         # Check if user can view this collection
-        if not can_view_collection(current_user, collection):
+        if not await can_view_collection(db, collection.user_id, current_user.id, "public" if collection.is_public else "private"):
             raise HTTPException(
                 status_code=403, detail="Cannot view this collection")
 
         # Get collection places
-        places_query = select(Place).join(UserCollectionPlace).where(
+        collection_places_query = select(UserCollectionPlace).where(
             UserCollectionPlace.collection_id == collection_id
-        ).order_by(desc(UserCollectionPlace.created_at))
-
-        # Get total count
-        count_query = select(func.count()).select_from(places_query.subquery())
-        total_result = await db.execute(count_query)
-        total = total_result.scalar()
-
-        # Apply pagination
-        places_query = places_query.offset(offset).limit(limit)
+        )
+        collection_places_result = await db.execute(collection_places_query)
+        collection_places = collection_places_result.scalars().all()
+        
+        if not collection_places:
+            return PaginatedCollectionPlaces(items=[], total=0, limit=limit, offset=offset)
+        
+        # Get places from the collection places
+        place_ids = [cp.place_id for cp in collection_places]
+        places_query = select(Place).where(Place.id.in_(place_ids))
         places_result = await db.execute(places_query)
         places = places_result.scalars().all()
 
@@ -178,10 +179,10 @@ async def get_collection_items(
         items = []
         for place in places:
             # Get sample photos from check-ins at this place
-            photos_query = select(CheckInPhoto.photo_url).join(CheckIn).where(
+            photos_query = select(CheckInPhoto.url).join(CheckIn).where(
                 and_(
                     CheckIn.place_id == place.id,
-                    CheckInPhoto.photo_url.isnot(None)
+                    CheckInPhoto.url.isnot(None)
                 )
             ).limit(3)
             photos_result = await db.execute(photos_query)
@@ -202,7 +203,7 @@ async def get_collection_items(
             )
             items.append(place_resp)
 
-        return PaginatedCollectionPlaces(items=items, total=total, limit=limit, offset=offset)
+        return PaginatedCollectionPlaces(items=items, total=len(items), limit=limit, offset=offset)
 
     except HTTPException:
         raise
