@@ -23,6 +23,104 @@ from ..schemas import (
 router = APIRouter(prefix="/collections", tags=["collections"])
 
 # ============================================================================
+# COLLECTION LISTING ENDPOINT (Used by frontend)
+# ============================================================================
+
+@router.get("/", response_model=list[CollectionResponse])
+async def list_collections(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    """
+    Get current user's collections.
+
+    **Authentication Required:** Yes
+    """
+    try:
+        # Get user's collections
+        collections_query = select(UserCollection).where(
+            UserCollection.user_id == current_user.id
+        ).order_by(UserCollection.name).offset(offset).limit(limit)
+
+        result = await db.execute(collections_query)
+        collections = result.scalars().all()
+
+        # Convert to response format
+        collection_list = []
+        for collection in collections:
+            # Get place count for this collection
+            count_query = select(func.count()).select_from(
+                select(UserCollectionPlace).where(
+                    UserCollectionPlace.collection_id == collection.id
+                ).subquery()
+            )
+            count_result = await db.execute(count_query)
+            place_count = count_result.scalar()
+
+            collection_resp = CollectionResponse(
+                id=collection.id,
+                name=collection.name,
+                description=collection.description,
+                is_public=collection.is_public,
+                place_count=place_count or 0,
+                created_at=collection.created_at,
+                updated_at=collection.updated_at,
+            )
+            collection_list.append(collection_resp)
+
+        return collection_list
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to get collections")
+
+# ============================================================================
+# COLLECTION CREATION ENDPOINT (Used by frontend)
+# ============================================================================
+
+@router.post("/", response_model=CollectionResponse)
+async def create_collection(
+    collection_create: CollectionCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    """
+    Create a new collection.
+
+    **Authentication Required:** Yes
+    """
+    try:
+        # Create new collection
+        new_collection = UserCollection(
+            user_id=current_user.id,
+            name=collection_create.name,
+            description=collection_create.description,
+            is_public=collection_create.is_public,
+        )
+
+        db.add(new_collection)
+        await db.commit()
+        await db.refresh(new_collection)
+
+        # Create response
+        collection_resp = CollectionResponse(
+            id=new_collection.id,
+            name=new_collection.name,
+            description=new_collection.description,
+            is_public=new_collection.is_public,
+            place_count=0,
+            created_at=new_collection.created_at,
+            updated_at=new_collection.updated_at,
+        )
+
+        return collection_resp
+
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to create collection")
+
+# ============================================================================
 # COLLECTION ITEMS ENDPOINT (Used by frontend)
 # ============================================================================
 

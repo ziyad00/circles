@@ -30,6 +30,8 @@ from ..models import (
     Place,
     DMThread,
     DMParticipantState,
+    UserCollection,
+    UserCollectionPlace,
 )
 from ..schemas import (
     UserUpdate,
@@ -95,10 +97,10 @@ async def search_users(
             # Check if current user can view this user's profile
             if can_view_profile(current_user, user):
                 user_resp = PublicUserSearchResponse(
-                    id=user.id,
+                id=user.id,
                     username=user.username,
                     display_name=user.display_name,
-                    bio=user.bio,
+                bio=user.bio,
                     avatar_url=user.avatar_url,
                     is_verified=user.is_verified,
                     followers_count=user.followers_count,
@@ -156,17 +158,17 @@ async def get_user_profile(
 
         # Create response
         user_response = PublicUserResponse(
-            id=user.id,
-            username=user.username,
+        id=user.id,
+        username=user.username,
             display_name=user.display_name,
-            bio=user.bio,
+        bio=user.bio,
             avatar_url=user.avatar_url,
             is_verified=user.is_verified,
             followers_count=user.followers_count,
             following_count=user.following_count,
             checkins_count=user.checkins_count,
             is_following=is_following,
-            created_at=user.created_at,
+        created_at=user.created_at,
         )
 
         return user_response
@@ -262,12 +264,12 @@ async def upload_avatar(
             raise HTTPException(
                 status_code=500, detail="Failed to upload avatar")
 
-        # Update user avatar
+    # Update user avatar
         current_user.avatar_url = avatar_url
         current_user.updated_at = datetime.now(timezone.utc)
 
-        await db.commit()
-        await db.refresh(current_user)
+    await db.commit()
+    await db.refresh(current_user)
 
         # Return updated profile
         return PublicUserResponse(
@@ -276,18 +278,19 @@ async def upload_avatar(
             display_name=current_user.display_name,
             bio=current_user.bio,
             avatar_url=current_user.avatar_url,
-            is_verified=current_user.is_verified,
+            availability_status=current_user.availability_status,
+            availability_mode=current_user.availability_mode,
+            created_at=current_user.created_at,
             followers_count=current_user.followers_count,
             following_count=current_user.following_count,
-            checkins_count=current_user.checkins_count,
-            is_following=False,
-            created_at=current_user.created_at,
+            check_in_count=current_user.check_in_count,
         )
 
     except HTTPException:
         raise
     except Exception as e:
         await db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to upload avatar")
         raise HTTPException(status_code=500, detail="Failed to upload avatar")
 
 # ============================================================================
@@ -322,61 +325,63 @@ async def get_user_media(
             raise HTTPException(
                 status_code=403, detail="Cannot view this user's media")
 
-        # Get photos from check-ins
-        checkin_photos_query = select(CheckInPhoto).join(CheckIn).where(
-            and_(
-                CheckIn.user_id == user_id,
-                CheckInPhoto.photo_url.isnot(None)
-            )
-        ).order_by(desc(CheckInPhoto.created_at))
-
-        # Get photos from saved places
-        saved_place_photos_query = select(Photo).join(SavedPlace).where(
-            and_(
-                SavedPlace.user_id == user_id,
-                Photo.photo_url.isnot(None)
-            )
-        ).order_by(desc(Photo.created_at))
-
-        # Combine queries using UNION
-        from sqlalchemy import union_all
-
-        # Create a unified query structure
-        checkin_subquery = select(
+        # Get photos from check-ins and saved places separately
+        checkin_photos_query = select(
             CheckInPhoto.photo_url.label('photo_url'),
             CheckInPhoto.created_at.label('created_at'),
-            CheckIn.place_id.label('place_id')
+            CheckIn.place_id.label('place_id'),
+            'checkin'.label('type')
         ).join(CheckIn).where(
             and_(
                 CheckIn.user_id == user_id,
                 CheckInPhoto.photo_url.isnot(None)
             )
-        )
+        ).subquery()
 
-        saved_subquery = select(
+        saved_photos_query = select(
             Photo.photo_url.label('photo_url'),
             Photo.created_at.label('created_at'),
-            SavedPlace.place_id.label('place_id')
+            SavedPlace.place_id.label('place_id'),
+            'saved'.label('type')
         ).join(SavedPlace).where(
             and_(
                 SavedPlace.user_id == user_id,
                 Photo.photo_url.isnot(None)
             )
+        ).subquery()
+
+        # Get total count from both sources
+        checkin_count = await db.execute(
+            select(func.count()).select_from(checkin_photos_query)
         )
+        saved_count = await db.execute(
+            select(func.count()).select_from(saved_photos_query)
+        )
+        total = checkin_count.scalar() + saved_count.scalar()
 
-        # Union the queries
-        union_query = union_all(
-            checkin_subquery, saved_subquery).order_by(desc('created_at'))
+        # Get items with pagination
+        # First get check-in photos
+        checkin_items_query = select(
+            checkin_photos_query.c.photo_url,
+            checkin_photos_query.c.created_at,
+            checkin_photos_query.c.place_id
+        ).order_by(desc(checkin_photos_query.c.created_at)).offset(offset).limit(limit)
 
-        # Get total count
-        count_query = select(func.count()).select_from(union_query.subquery())
-        total_result = await db.execute(count_query)
-        total = total_result.scalar()
+        checkin_result = await db.execute(checkin_items_query)
+        checkin_items = checkin_result.fetchall()
 
-        # Apply pagination
-        paginated_query = union_query.offset(offset).limit(limit)
-        result = await db.execute(paginated_query)
-        media_items = result.fetchall()
+        # Then get saved place photos
+        saved_items_query = select(
+            saved_photos_query.c.photo_url,
+            saved_photos_query.c.created_at,
+            saved_photos_query.c.place_id
+        ).order_by(desc(saved_photos_query.c.created_at)).limit(limit - len(checkin_items))
+
+        saved_result = await db.execute(saved_items_query)
+        saved_items = saved_result.fetchall()
+
+        # Combine results
+        media_items = checkin_items + saved_items
 
         # Convert to response format
         items = []
@@ -388,7 +393,7 @@ async def get_user_media(
             }
             items.append(media_item)
 
-        return PaginatedMedia(items=items, total=total, limit=limit, offset=offset)
+    return PaginatedMedia(items=items, total=total, limit=limit, offset=offset)
 
     except HTTPException:
         raise
@@ -427,26 +432,42 @@ async def list_user_collections(
             raise HTTPException(
                 status_code=403, detail="Cannot view this user's collections")
 
-        # Get collections with place counts
+        # Get collections from UserCollection table
         collections_query = select(
-            SavedPlace.collection_name,
-            func.count(SavedPlace.place_id).label('count'),
-            func.array_agg(SavedPlace.place_id).label('place_ids')
+            UserCollection,
+            func.count(UserCollectionPlace.place_id).label('place_count')
+        ).join(
+            UserCollectionPlace, UserCollection.id == UserCollectionPlace.collection_id, isouter=True
         ).where(
-            SavedPlace.user_id == user_id
-        ).group_by(SavedPlace.collection_name).order_by(SavedPlace.collection_name)
+            UserCollection.user_id == user_id
+        ).group_by(UserCollection.id).order_by(UserCollection.name)
 
         result = await db.execute(collections_query)
         collections = result.fetchall()
 
         # Convert to response format
         collection_list = []
-        for collection in collections:
+        for collection, place_count in collections:
+            # Get sample photos from places in this collection
+            photos_query = select(CheckInPhoto.photo_url).join(
+                CheckIn, CheckIn.id == CheckInPhoto.check_in_id
+            ).join(
+                UserCollectionPlace, UserCollectionPlace.place_id == CheckIn.place_id
+            ).where(
+                and_(
+                    UserCollectionPlace.collection_id == collection.id,
+                    CheckInPhoto.photo_url.isnot(None)
+                )
+            ).limit(3)
+
+            photos_result = await db.execute(photos_query)
+            photo_urls = [row[0] for row in photos_result.fetchall()]
+
             collection_dict = {
-                "id": None,  # Legacy collections don't have IDs
-                "name": collection.collection_name,
-                "count": collection.count,
-                "photos": []  # TODO: Get sample photos from places
+                "id": collection.id,
+                "name": collection.name,
+                "count": place_count or 0,
+                "photos": photo_urls
             }
             collection_list.append(collection_dict)
 
