@@ -2,7 +2,7 @@ import hashlib
 import json
 
 from ..models import Follow
-# from ..routers.activity import create_checkin_activity  # Removed unused activity router
+from ..routers.activity import create_checkin_activity
 from ..utils import can_view_checkin, haversine_distance
 from ..services.place_data_service_v2 import enhanced_place_data_service
 from ..services.storage import StorageService
@@ -48,7 +48,7 @@ from ..services.collection_sync import (
     remove_saved_place_membership,
 )
 from ..database import get_db
-from ..services.jwt_service import JWTService
+from ..auth import get_current_user
 from ..utils import haversine_distance
 from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -180,7 +180,7 @@ async def search_places(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Search places with text query and optional location filtering.
@@ -271,7 +271,7 @@ async def search_places(
 async def search_places_advanced_flexible(
     filters: AdvancedSearchFilters,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Advanced place search with flexible filtering options.
@@ -726,7 +726,7 @@ async def nearby_places(
 async def get_place_details(
     place_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get detailed information about a specific place.
@@ -827,7 +827,7 @@ async def get_whos_here(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get list of users who are currently at this place.
@@ -890,7 +890,7 @@ async def get_whos_here(
 async def create_check_in(
     payload: CheckInCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new check-in at a place.
@@ -922,8 +922,8 @@ async def create_check_in(
         await db.commit()
         await db.refresh(check_in)
 
-        # Create activity (removed - activity router not used)
-        # await create_checkin_activity(check_in, db)
+        # Create activity
+        await create_checkin_activity(check_in, db)
 
         return CheckInResponse(
             id=check_in.id,
@@ -958,7 +958,7 @@ async def create_check_in_full(
     longitude: float = Form(None),
     photos: List[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a check-in with photos.
@@ -1012,8 +1012,8 @@ async def create_check_in_full(
         await db.commit()
         await db.refresh(check_in)
 
-        # Create activity (removed - activity router not used)
-        # await create_checkin_activity(check_in, db)
+        # Create activity
+        await create_checkin_activity(check_in, db)
 
         return CheckInResponse(
             id=check_in.id,
@@ -1047,7 +1047,7 @@ async def create_check_in_full(
 async def save_place(
     payload: SavedPlaceCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Save a place to user's collections.
@@ -1113,7 +1113,7 @@ async def unsave_place(
     place_id: int,
     collection_name: str = Query(..., description="Collection name"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Remove a place from user's collections.

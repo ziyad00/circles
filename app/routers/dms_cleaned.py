@@ -42,7 +42,7 @@ from ..schemas import (
     LocationShareRequest,
 )
 from ..services.jwt_service import JWTService
-# from ..routers.users import _convert_single_to_signed_url  # Function removed in cleaned version
+from ..routers.users import _convert_single_to_signed_url
 
 router = APIRouter(
     prefix="/dms",
@@ -59,7 +59,7 @@ async def get_inbox(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get user's DM inbox with pagination.
@@ -133,7 +133,7 @@ async def get_thread_messages(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get messages from a specific thread.
@@ -216,7 +216,7 @@ async def send_message(
     thread_id: int,
     message_data: DMMessageCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Send a message to a thread.
@@ -300,7 +300,7 @@ async def send_message(
 async def open_dm(
     request: DMOpenCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Open or create a DM thread with another user.

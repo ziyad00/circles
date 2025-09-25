@@ -6,12 +6,8 @@ from .routers.auth import router as auth_router
 from .routers.places import router as places_router
 from .routers.dms import router as dms_router
 from .routers.follow import router as follow_router
-from .routers.settings import router as settings_router
 from .routers.users import router as users_router
-from .routers.support import router as support_router
 from .routers.dms_ws import router as dms_ws_router
-from .routers.checkins import router as checkins_router
-from .routers.activity import router as activity_router
 from .routers.onboarding import router as onboarding_router
 from .routers.collections import router as collections_router
 from .database import create_tables
@@ -164,12 +160,8 @@ app.include_router(auth_router)
 app.include_router(places_router)
 app.include_router(dms_router)
 app.include_router(follow_router)
-app.include_router(settings_router)
 app.include_router(users_router)
-app.include_router(support_router)
 app.include_router(dms_ws_router)
-app.include_router(checkins_router)
-app.include_router(activity_router)
 app.include_router(onboarding_router)
 app.include_router(collections_router)
 

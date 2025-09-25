@@ -58,7 +58,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 async def search_users(
     filters: UserSearchFilters,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Search for users with various filters.
@@ -123,7 +123,7 @@ async def search_users(
 async def get_user_profile(
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get public user profile information.
@@ -182,7 +182,7 @@ async def get_user_profile(
 async def update_my_profile(
     user_update: UserUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Update current user's profile.
@@ -243,7 +243,7 @@ async def update_my_profile(
 async def upload_avatar(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Upload user avatar.
@@ -301,7 +301,7 @@ async def get_user_media(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get user's media (photos from check-ins and saved places).
@@ -406,7 +406,7 @@ async def list_user_collections(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(JWTService.get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get user's collections (saved places grouped by collection name).

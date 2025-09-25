@@ -6,7 +6,7 @@ from ..database import get_db
 from ..models import User, Follow
 from ..services.jwt_service import JWTService
 from ..schemas import PaginatedFollowers, PaginatedFollowing, FollowUserResponse, FollowStatusResponse
-# from ..routers.activity import create_follow_activity  # Removed unused activity router
+from ..routers.activity import create_follow_activity
 from ..services.storage import StorageService
 from ..utils import can_view_follower_list, can_view_following_list
 from ..services.block_service import has_user_blocked
@@ -77,17 +77,17 @@ async def follow_user(user_id: int, current_user: User = Depends(JWTService.get_
         new_follow = Follow(follower_id=current_user.id, followee_id=user_id)
         db.add(new_follow)
 
-        # Create activity for the follow within the same transaction (removed - activity router not used)
-        # try:
-        #     await create_follow_activity(
-        #         db=db,
-        #         follower_id=current_user.id,
-        #         followee_id=user_id,
-        #         followee_name=target.name or f"User {target.id}"
-        #     )
-        # except Exception as e:
-        #     # Log error but don't fail the follow creation
-        #     print(f"Failed to create activity for follow {current_user.id} -> {user_id}: {e}")
+        # Create activity for the follow within the same transaction
+        try:
+            await create_follow_activity(
+                db=db,
+                follower_id=current_user.id,
+                followee_id=user_id,
+                followee_name=target.name or f"User {target.id}"
+            )
+        except Exception as e:
+            # Log error but don't fail the follow creation
+            print(f"Failed to create activity for follow {current_user.id} -> {user_id}: {e}")
 
         # Commit everything together
         await db.commit()
@@ -244,8 +244,7 @@ async def list_user_followers(
     # Check if current user can view this user's follower list
     can_view = await can_view_follower_list(db, target_user, current_user.id)
     if not can_view:
-        raise HTTPException(
-            status_code=403, detail="Cannot view follower list")
+        raise HTTPException(status_code=403, detail="Cannot view follower list")
 
     # Users who follow target_user
     followers_subq = select(Follow).where(
@@ -305,8 +304,7 @@ async def list_user_following(
     # Check if current user can view this user's following list
     can_view = await can_view_following_list(db, target_user, current_user.id)
     if not can_view:
-        raise HTTPException(
-            status_code=403, detail="Cannot view following list")
+        raise HTTPException(status_code=403, detail="Cannot view following list")
 
     subq = select(Follow).where(
         Follow.follower_id == user_id).subquery()
