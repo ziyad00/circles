@@ -26,6 +26,7 @@ router = APIRouter(prefix="/collections", tags=["collections"])
 # COLLECTION LISTING ENDPOINT (Used by frontend)
 # ============================================================================
 
+
 @router.get("/", response_model=list[CollectionResponse])
 async def list_collections(
     limit: int = Query(20, ge=1, le=100),
@@ -61,10 +62,11 @@ async def list_collections(
 
             collection_resp = CollectionResponse(
                 id=collection.id,
+                user_id=collection.user_id,
                 name=collection.name,
                 description=collection.description,
                 is_public=collection.is_public,
-                place_count=place_count or 0,
+                visibility="public" if collection.is_public else "private",
                 created_at=collection.created_at,
                 updated_at=collection.updated_at,
             )
@@ -73,11 +75,13 @@ async def list_collections(
         return collection_list
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Failed to get collections")
+        raise HTTPException(
+            status_code=500, detail="Failed to get collections")
 
 # ============================================================================
 # COLLECTION CREATION ENDPOINT (Used by frontend)
 # ============================================================================
+
 
 @router.post("/", response_model=CollectionResponse)
 async def create_collection(
@@ -106,10 +110,11 @@ async def create_collection(
         # Create response
         collection_resp = CollectionResponse(
             id=new_collection.id,
+            user_id=new_collection.user_id,
             name=new_collection.name,
             description=new_collection.description,
             is_public=new_collection.is_public,
-            place_count=0,
+            visibility="public" if new_collection.is_public else "private",
             created_at=new_collection.created_at,
             updated_at=new_collection.updated_at,
         )
@@ -118,11 +123,13 @@ async def create_collection(
 
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to create collection")
+        raise HTTPException(
+            status_code=500, detail="Failed to create collection")
 
 # ============================================================================
 # COLLECTION ITEMS ENDPOINT (Used by frontend)
 # ============================================================================
+
 
 @router.get("/{collection_id}/items", response_model=PaginatedCollectionPlaces)
 async def get_collection_items(
@@ -139,7 +146,8 @@ async def get_collection_items(
     """
     try:
         # Get collection
-        collection_query = select(UserCollection).where(UserCollection.id == collection_id)
+        collection_query = select(UserCollection).where(
+            UserCollection.id == collection_id)
         collection_result = await db.execute(collection_query)
         collection = collection_result.scalar_one_or_none()
 
@@ -148,7 +156,8 @@ async def get_collection_items(
 
         # Check if user can view this collection
         if not can_view_collection(current_user, collection):
-            raise HTTPException(status_code=403, detail="Cannot view this collection")
+            raise HTTPException(
+                status_code=403, detail="Cannot view this collection")
 
         # Get collection places
         places_query = select(Place).join(UserCollectionPlace).where(
@@ -198,11 +207,13 @@ async def get_collection_items(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Failed to get collection items")
+        raise HTTPException(
+            status_code=500, detail="Failed to get collection items")
 
 # ============================================================================
 # COLLECTION UPDATE ENDPOINT (Used by frontend)
 # ============================================================================
+
 
 @router.put("/{collection_id}", response_model=CollectionResponse)
 async def update_collection(
@@ -218,7 +229,8 @@ async def update_collection(
     """
     try:
         # Get collection
-        collection_query = select(UserCollection).where(UserCollection.id == collection_id)
+        collection_query = select(UserCollection).where(
+            UserCollection.id == collection_id)
         collection_result = await db.execute(collection_query)
         collection = collection_result.scalar_one_or_none()
 
@@ -227,7 +239,8 @@ async def update_collection(
 
         # Check if user owns this collection
         if collection.user_id != current_user.id:
-            raise HTTPException(status_code=403, detail="Cannot update this collection")
+            raise HTTPException(
+                status_code=403, detail="Cannot update this collection")
 
         # Update collection
         if collection_update.name is not None:
@@ -244,7 +257,8 @@ async def update_collection(
 
         # Get place count
         count_query = select(func.count()).select_from(
-            select(UserCollectionPlace).where(UserCollectionPlace.collection_id == collection_id).subquery()
+            select(UserCollectionPlace).where(
+                UserCollectionPlace.collection_id == collection_id).subquery()
         )
         count_result = await db.execute(count_query)
         place_count = count_result.scalar()
@@ -266,4 +280,5 @@ async def update_collection(
         raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update collection")
+        raise HTTPException(
+            status_code=500, detail="Failed to update collection")

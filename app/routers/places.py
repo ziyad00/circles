@@ -256,7 +256,7 @@ async def search_places(
                 venue_created_at=place.venue_created_at,
                 primary_category=None,  # TODO: Extract from categories
                 category_icons=None,
-                photo_urls=None,
+                photo_urls=[place.photo_url] if place.photo_url else [],
             )
             items.append(place_resp)
 
@@ -364,7 +364,7 @@ async def search_places_advanced_flexible(
                 venue_created_at=place.venue_created_at,
                 primary_category=None,
                 category_icons=None,
-                photo_urls=None,
+                photo_urls=[place.photo_url] if place.photo_url else [],
             )
             items.append(place_resp)
 
@@ -541,7 +541,15 @@ async def get_trending_places(
                 phone=venue.get("contact", {}).get("phone"),
                 place_metadata=venue,
                 photo_url=photo_url,
-                recent_checkins=[]
+                recent_checkins=[],
+                postal_code=location.get("postalCode"),
+                cross_street=location.get("crossStreet"),
+                formatted_address=location.get("formattedAddress", [""])[0] if location.get("formattedAddress") else None,
+                distance_meters=None,
+                venue_created_at=venue.get("createdAt"),
+                primary_category=categories_list[0].get("name") if categories_list else None,
+                category_icons=None,
+                photo_urls=[photo_url] if photo_url else [],
             )
             items.append(place_resp)
         except Exception as e:
@@ -618,7 +626,8 @@ async def nearby_places(
             params = {
                 "ll": f"{lat},{lng}",
                 "radius": radius_m,
-                "limit": limit
+                "limit": limit,
+                "fields": "fsq_place_id,name,location,categories,distance,photos,rating,price,tel,website"
             }
 
             response = await client.get(url, headers=headers, params=params)
@@ -661,7 +670,10 @@ async def nearby_places(
             photos = p.get("photos", [])
             if photos:
                 first_photo = photos[0]
-                photo_url = first_photo.get("url")
+                prefix = first_photo.get("prefix", "")
+                suffix = first_photo.get("suffix", "")
+                if prefix and suffix:
+                    photo_url = f"{prefix}300x300{suffix}"
 
         # Extract categories from v3 format
         categories_list = p.get("categories", [])
@@ -698,7 +710,7 @@ async def nearby_places(
                 primary_category=categories_list[0].get(
                     "name") if categories_list else None,
                 category_icons=None,
-                photo_urls=None,
+                photo_urls=[photo_url] if photo_url else [],
             )
             fsq_items.append(place_resp)
         except Exception as e:
@@ -807,7 +819,7 @@ async def get_place_details(
             venue_created_at=place.venue_created_at,
             primary_category=None,  # TODO: Extract from categories
             category_icons=None,
-            photo_urls=None,
+            photo_urls=[place.photo_url] if place.photo_url else [],
             recent_checkins=checkin_responses,
         )
 
