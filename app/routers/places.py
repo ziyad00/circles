@@ -646,6 +646,7 @@ async def nearby_places(
         return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
     # Try to save Foursquare places to database for future reference
+    saved_places = []
     try:
         saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(fsq_places, db)
         logging.info(
@@ -653,11 +654,14 @@ async def nearby_places(
     except Exception as e:
         logging.warning(f"Failed to save Foursquare places to database: {e}")
 
-    # Convert Foursquare results to PlaceResponse objects
+    # Convert saved database places to PlaceResponse objects (use database IDs)
     now_ts = datetime.now(timezone.utc)
     fsq_items: list[PlaceResponse] = []
 
-    for p in fsq_places[:limit]:
+    # Use saved places if available, otherwise fall back to raw Foursquare data
+    places_to_use = saved_places[:limit] if saved_places else fsq_places[:limit]
+    
+    for i, p in enumerate(places_to_use):
         # Extract location data from Foursquare v3 format
         location = p.get("location", {})
 
@@ -682,33 +686,59 @@ async def nearby_places(
         foursquare_distance = p.get("distance")
 
         try:
-            place_resp = PlaceResponse(
-                id=-1,  # Use -1 for external places
-                name=p.get("name", "Unknown"),
-                address=location.get("address"),
-                # v3 uses 'locality' instead of 'city'
-                city=location.get("locality"),
-                neighborhood=location.get("neighborhood"),
-                latitude=p.get("latitude"),  # Use actual place coordinates
-                # Use actual place coordinates
-                longitude=p.get("longitude"),
-                categories=categories_str,
-                rating=p.get("rating"),
-                price_tier=str(p.get("price")) if p.get(
-                    "price") is not None else None,  # Convert int to string
-                created_at=now_ts,
-                photo_url=photo_url,
-                recent_checkins_count=0,
-                postal_code=location.get("postal_code"),
-                cross_street=location.get("cross_street"),
-                formatted_address=location.get("formatted_address"),
-                distance_meters=foursquare_distance,  # Use Foursquare's distance
-                venue_created_at=None,  # v3 doesn't include this in search
-                primary_category=categories_list[0].get(
-                    "name") if categories_list else None,
-                category_icons=None,
-                photo_urls=[photo_url] if photo_url else [],
-            )
+            # Check if this is a saved database Place object or raw Foursquare data
+            if hasattr(p, 'id'):  # This is a saved Place object from database
+                place_resp = PlaceResponse(
+                    id=p.id,  # Use the actual database ID
+                    name=p.name or "Unknown",
+                    address=p.address,
+                    city=p.city,
+                    neighborhood=p.neighborhood,
+                    latitude=p.latitude,
+                    longitude=p.longitude,
+                    categories=p.categories,
+                    rating=p.rating,
+                    price_tier=p.price_tier,
+                    created_at=p.created_at or now_ts,
+                    photo_url=p.photo_url,
+                    recent_checkins_count=0,
+                    postal_code=p.postal_code,
+                    cross_street=p.cross_street,
+                    formatted_address=p.formatted_address,
+                    distance_meters=p.distance_meters,
+                    venue_created_at=p.venue_created_at,
+                    primary_category=p.categories.split(',')[0] if p.categories else None,
+                    category_icons=None,
+                    photo_urls=[p.photo_url] if p.photo_url else [],
+                )
+            else:  # This is raw Foursquare data
+                place_resp = PlaceResponse(
+                    id=-1,  # Use -1 for external places not yet saved
+                    name=p.get("name", "Unknown"),
+                    address=location.get("address"),
+                    # v3 uses 'locality' instead of 'city'
+                    city=location.get("locality"),
+                    neighborhood=location.get("neighborhood"),
+                    latitude=p.get("latitude"),  # Use actual place coordinates
+                    # Use actual place coordinates
+                    longitude=p.get("longitude"),
+                    categories=categories_str,
+                    rating=p.get("rating"),
+                    price_tier=str(p.get("price")) if p.get(
+                        "price") is not None else None,  # Convert int to string
+                    created_at=now_ts,
+                    photo_url=photo_url,
+                    recent_checkins_count=0,
+                    postal_code=location.get("postal_code"),
+                    cross_street=location.get("cross_street"),
+                    formatted_address=location.get("formatted_address"),
+                    distance_meters=foursquare_distance,  # Use Foursquare's distance
+                    venue_created_at=None,  # v3 doesn't include this in search
+                    primary_category=categories_list[0].get(
+                        "name") if categories_list else None,
+                    category_icons=None,
+                    photo_urls=[photo_url] if photo_url else [],
+                )
             fsq_items.append(place_resp)
         except Exception as e:
             # Skip places with mapping issues instead of crashing
@@ -743,6 +773,10 @@ async def get_place_details(
     **Authentication Required:** Yes
     """
     try:
+        # Validate place_id
+        if place_id <= 0:
+            raise HTTPException(status_code=400, detail="Invalid place ID")
+        
         # Get place with related data
         query = select(Place).where(Place.id == place_id)
         result = await db.execute(query)
@@ -839,6 +873,53 @@ async def get_place_details(
         logging.error(f"Error getting place details: {e}")
         raise HTTPException(
             status_code=500, detail="Failed to get place details")
+
+
+@router.get("/{place_id}/photos", response_model=list[str])
+async def get_place_photos(
+    place_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    """
+    Get photos for a specific place.
+
+    **Authentication Required:** Yes
+    """
+    try:
+        # Validate place_id
+        if place_id <= 0:
+            raise HTTPException(status_code=400, detail="Invalid place ID")
+        
+        # Check if place exists
+        place_query = select(Place).where(Place.id == place_id)
+        place_result = await db.execute(place_query)
+        place = place_result.scalar_one_or_none()
+        
+        if not place:
+            raise HTTPException(status_code=404, detail="Place not found")
+        
+        # Get photos from check-ins for this place
+        photos_query = select(CheckInPhoto.url).join(
+            CheckIn, CheckInPhoto.check_in_id == CheckIn.id
+        ).where(
+            CheckIn.place_id == place_id,
+            CheckInPhoto.url.isnot(None)
+        ).offset(offset).limit(limit)
+        
+        result = await db.execute(photos_query)
+        photos = result.scalars().all()
+        
+        return list(photos)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500, detail="Failed to get place photos")
 
 
 @router.get("/{place_id}/whos-here", response_model=PaginatedWhosHere)

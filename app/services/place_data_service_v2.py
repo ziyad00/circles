@@ -1601,20 +1601,22 @@ class EnhancedPlaceDataService:
             db: Database session
 
         Returns:
-            Created Place object or None if it already exists
+            Place object (existing or newly created)
         """
         try:
             existing = await db.execute(
                 select(Place).where(
                     Place.external_id == place_data.get('external_id')
-                )
             )
-            if existing.first():
+            )
+            existing_place = existing.first()
+            if existing_place:
                 logger.info(
-                    "Place with external_id %s already exists",
+                    "Place with external_id %s already exists (ID: %s)",
                     place_data.get('external_id'),
+                    existing_place.id,
                 )
-                return None
+                return existing_place
 
             # Fix categories field - convert list to string if needed
             categories = place_data.get('categories')
