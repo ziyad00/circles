@@ -264,12 +264,12 @@ async def upload_avatar(
             raise HTTPException(
                 status_code=500, detail="Failed to upload avatar")
 
-    # Update user avatar
+        # Update user avatar
         current_user.avatar_url = avatar_url
         current_user.updated_at = datetime.now(timezone.utc)
 
-    await db.commit()
-    await db.refresh(current_user)
+        await db.commit()
+        await db.refresh(current_user)
 
         # Return updated profile
         return PublicUserResponse(
@@ -290,7 +290,6 @@ async def upload_avatar(
         raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to upload avatar")
         raise HTTPException(status_code=500, detail="Failed to upload avatar")
 
 # ============================================================================
@@ -393,7 +392,7 @@ async def get_user_media(
             }
             items.append(media_item)
 
-    return PaginatedMedia(items=items, total=total, limit=limit, offset=offset)
+        return PaginatedMedia(items=items, total=total, limit=limit, offset=offset)
 
     except HTTPException:
         raise
