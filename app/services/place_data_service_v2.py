@@ -25,6 +25,8 @@ class EnhancedPlaceDataService:
 
     def __init__(self):
         self.foursquare_api_key = getattr(settings, 'foursquare_api_key', None)
+        self.foursquare_client_id = getattr(settings, 'foursquare_client_id', None)
+        self.foursquare_client_secret = getattr(settings, 'foursquare_client_secret', None)
         self.enrichment_ttl_hot = settings.enrich_ttl_hot_days
         self.enrichment_ttl_cold = settings.enrich_ttl_cold_days
         self.max_enrichment_distance = settings.enrich_max_distance_m
@@ -136,8 +138,8 @@ class EnhancedPlaceDataService:
                 "ll": f"{lat},{lon}",
                 "limit": limit,
                 "radius": self.trending_radius_m,
-                "client_id": "5T23EOYWM05NXX5VUNAZEY4WXJNSQ4Q5J115EVM5BNWUC3LV",
-                "client_secret": "YBYIORTLA2DUPRYQDGF0T5URS23AWIMUU22SHAOHU4OAWFIT",
+                "client_id": self.foursquare_client_id,
+                "client_secret": self.foursquare_client_secret,
                 "v": "20231010"  # API version date
             }
 
