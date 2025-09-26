@@ -112,7 +112,8 @@ class EnhancedPlaceDataService:
             self._cache_set(self._cache_discovery, cache_key, results)
             return results
         except Exception as e:
-            logging.warning(f"v2 trending failed: {e}, falling back to v3 popularity sort")
+            logging.warning(
+                f"v2 trending failed: {e}, falling back to v3 popularity sort")
             results = await self._fetch_foursquare_trending_v3_fallback(lat, lon, limit, query, categories, min_price, max_price)
             # Cache the results
             self._cache_set(self._cache_discovery, cache_key, results)
@@ -145,8 +146,10 @@ class EnhancedPlaceDataService:
             logging.info(f"v2 trending response: {resp.status_code}")
 
             if resp.status_code != 200:
-                logging.error(f"v2 trending failed: {resp.status_code}, response: {resp.text}")
-                raise Exception(f"v2 trending failed with status {resp.status_code}")
+                logging.error(
+                    f"v2 trending failed: {resp.status_code}, response: {resp.text}")
+                raise Exception(
+                    f"v2 trending failed with status {resp.status_code}")
 
             data = resp.json()
             venues = data.get("response", {}).get("venues", [])
@@ -181,10 +184,11 @@ class EnhancedPlaceDataService:
                     }
                     results.append(converted_venue)
                 except Exception as e:
-                    logging.warning(f"Failed to convert v2 venue {venue.get('name', 'unknown')}: {e}")
+                    logging.warning(
+                        f"Failed to convert v2 venue {venue.get('name', 'unknown')}: {e}")
                     continue
 
-            return results
+            return await self._enrich_places_with_photos(results)
 
     async def _fetch_foursquare_trending_v3_fallback(
         self,
@@ -323,11 +327,103 @@ class EnhancedPlaceDataService:
 
                 logging.info(
                     f"Foursquare v3 API returning {len(results)} processed results")
-                return results
+                return await self._enrich_places_with_photos(results)
 
             except Exception as e:
                 logging.error(f"Error in Foursquare v3 fallback: {e}")
                 return []
+
+    async def _enrich_places_with_photos(
+        self,
+        venues: List[Dict[str, Any]],
+        limit_per_venue: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Ensure each venue has photo URLs by calling the v3 photos endpoint when needed."""
+        if not venues:
+            return venues
+
+        if not self.foursquare_api_key or self.foursquare_api_key == "demo_key_for_testing":
+            return venues
+
+        venues_needing_photos: list[tuple[int, Dict[str, Any]]] = [
+            (idx, v) for idx, v in enumerate(venues) if not v.get("photos")
+        ]
+        if not venues_needing_photos:
+            return venues
+
+        timeout = httpx.Timeout(settings.http_timeout_seconds)
+        semaphore = asyncio.Semaphore(5)
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async def fetch(idx: int, venue: Dict[str, Any]):
+                fsq_id = venue.get("fsq_place_id") or venue.get("fsq_id")
+                if not fsq_id:
+                    return idx, []
+                async with semaphore:
+                    photos = await self._fetch_place_photos(client, fsq_id, limit_per_venue)
+                    return idx, photos
+
+            tasks = [fetch(idx, venue)
+                     for idx, venue in venues_needing_photos]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in results:
+            if isinstance(result, Exception):
+                logging.warning(f"Failed to enrich place photos: {result}")
+                continue
+
+            idx, photos = result
+            if photos:
+                venues[idx]["photos"] = photos
+
+        return venues
+
+    async def _fetch_place_photos(
+        self,
+        client: httpx.AsyncClient,
+        fsq_id: str,
+        limit: int = 5,
+    ) -> List[str]:
+        """Fetch photo URLs for a single Foursquare place."""
+        url = f"https://places-api.foursquare.com/places/{fsq_id}/photos"
+        headers = {
+            "Authorization": f"Bearer {self.foursquare_api_key}",
+            "X-Places-Api-Version": "2025-06-17",
+            "Accept": "application/json",
+        }
+        params = {"limit": limit}
+
+        try:
+            resp = await client.get(url, headers=headers, params=params)
+            if resp.status_code != 200:
+                logging.debug(
+                    f"Photo fetch for {fsq_id} failed with status {resp.status_code}: {resp.text}")
+                return []
+
+            data = resp.json()
+            # Endpoint may return list or dict with "results"
+            items: Any
+            if isinstance(data, list):
+                items = data
+            elif isinstance(data, dict):
+                items = data.get("results", [])
+            else:
+                items = []
+
+            photo_urls: list[str] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                prefix = item.get("prefix")
+                suffix = item.get("suffix")
+                if prefix and suffix:
+                    photo_urls.append(f"{prefix}300x300{suffix}")
+
+            return photo_urls
+
+        except Exception as exc:
+            logging.debug(f"Photo fetch for {fsq_id} raised error: {exc}")
+            return []
 
     async def fetch_foursquare_nearby(
         self,
@@ -348,16 +444,19 @@ class EnhancedPlaceDataService:
             f"Fetching nearby places from Foursquare API: lat={lat}, lon={lon}, radius={radius_m}m")
 
         if not self.foursquare_api_key or self.foursquare_api_key == "demo_key_for_testing":
-            logging.warning(f"No valid Foursquare API key: {self.foursquare_api_key}")
+            logging.warning(
+                f"No valid Foursquare API key: {self.foursquare_api_key}")
             return []
 
         cache_key = f"fsq_nearby:{round(lat, 4)}:{round(lon, 4)}:{limit}:{radius_m}:{query or 'none'}:{categories or 'none'}:{min_price or 'none'}:{max_price or 'none'}"
         cached = self._cache_get(self._cache_discovery, cache_key)
         if cached is not None:
-            logging.info(f"Returning cached nearby results: {len(cached)} places")
+            logging.info(
+                f"Returning cached nearby results: {len(cached)} places")
             return cached
 
-        logging.info("No cached results, fetching nearby places from Foursquare API...")
+        logging.info(
+            "No cached results, fetching nearby places from Foursquare API...")
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(settings.http_timeout_seconds)) as client:
             url = "https://places-api.foursquare.com/places/search"
@@ -385,26 +484,33 @@ class EnhancedPlaceDataService:
                 params["max_price"] = max_price
 
             try:
-                logging.info(f"Foursquare v3 nearby API request: {url} with params: {params}")
+                logging.info(
+                    f"Foursquare v3 nearby API request: {url} with params: {params}")
                 resp = await client.get(url, headers=headers, params=params)
-                logging.info(f"Foursquare v3 nearby API response status: {resp.status_code}")
+                logging.info(
+                    f"Foursquare v3 nearby API response status: {resp.status_code}")
 
                 if resp.status_code == 400:
-                    logging.warning(f"Foursquare v3 nearby API 400 error response: {resp.text}")
+                    logging.warning(
+                        f"Foursquare v3 nearby API 400 error response: {resp.text}")
                     if 'sort' in resp.text or 'DISTANCE' in resp.text:
                         # Retry without sort parameter - DISTANCE sort might not be supported
                         params.pop("sort", None)
-                        logging.info(f"Retrying nearby without sort parameter: {params}")
-                        resp = await client.get(url, headers=headers, params=params)
-                        logging.info(f"Nearby retry response status: {resp.status_code}")
+                        logging.info(
+                            f"Retrying nearby without sort parameter: {params}")
+                    resp = await client.get(url, headers=headers, params=params)
+                    logging.info(
+                        f"Nearby retry response status: {resp.status_code}")
 
                 if resp.status_code != 200:
-                    logging.warning(f"Foursquare v3 nearby failed: {resp.status_code}, response: {resp.text}")
+                    logging.warning(
+                        f"Foursquare v3 nearby failed: {resp.status_code}, response: {resp.text}")
                     return []
 
                 data = resp.json()
                 venues = data.get("results", [])
-                logging.info(f"Foursquare v3 nearby API returned {len(venues)} venues")
+                logging.info(
+                    f"Foursquare v3 nearby API returned {len(venues)} venues")
 
                 # Process venues the same way as trending
                 results = []
@@ -478,13 +584,15 @@ class EnhancedPlaceDataService:
                             },
                         })
                     except Exception as e:
-                        logging.warning(f"Error processing nearby venue {v.get('fsq_place_id', 'unknown')}: {e}")
+                        logging.warning(
+                            f"Error processing nearby venue {v.get('fsq_place_id', 'unknown')}: {e}")
                         continue
 
                 # Cache the results
                 self._cache_set(self._cache_discovery, cache_key, results)
 
-                logging.info(f"Foursquare v3 nearby API returning {len(results)} processed results")
+                logging.info(
+                    f"Foursquare v3 nearby API returning {len(results)} processed results")
                 return results
 
             except Exception as e:
@@ -1913,7 +2021,9 @@ class EnhancedPlaceDataService:
                 distance_meters=place_data.get('distance_meters'),
                 venue_created_at=place_data.get('venue_created_at'),
                 photo_url=primary_photo,  # Primary photo
-                additional_photos=json.dumps(additional_photos) if additional_photos else None,  # Additional photos as JSON string
+                # Additional photos as JSON string
+                additional_photos=json.dumps(
+                    additional_photos) if additional_photos else None,
             )
 
             if place.latitude is not None and place.longitude is not None:
@@ -1948,6 +2058,34 @@ class EnhancedPlaceDataService:
                 "Failed to save Foursquare place to database: %s", ex
             )
             await db.rollback()
+
+            # If database schema is missing columns, create a temporary Place object
+            # without saving to database (for API response purposes)
+            if "column" in str(ex).lower() and "does not exist" in str(ex).lower():
+                logger.warning(
+                    "Database schema missing columns - creating temporary Place object")
+                place = Place(
+                    name=place_data.get('name'),
+                    latitude=place_data.get('latitude'),
+                    longitude=place_data.get('longitude'),
+                    categories=place_data.get('categories'),
+                    rating=place_data.get('rating'),
+                    phone=place_data.get('phone'),
+                    website=place_data.get('website'),
+                    address=place_data.get('address'),
+                    city=place_data.get('city'),
+                    external_id=place_data.get('external_id'),
+                    data_source=place_data.get('data_source', 'foursquare'),
+                    price_tier=place_data.get('price_tier'),
+                    place_metadata=json.dumps(place_data.get('metadata', {})),
+                    last_enriched_at=datetime.now(timezone.utc),
+                    # Skip the problematic columns for now
+                )
+                # Set a temporary ID for API response purposes
+                place.id = hash(place_data.get(
+                    'external_id', place_data.get('name', ''))) % 1000000
+                return place
+
             return None
 
     async def save_foursquare_places_to_db(self, places_data: List[Dict[str, Any]], db: AsyncSession) -> List[Place]:
