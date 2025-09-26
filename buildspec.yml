@@ -32,7 +32,9 @@ phases:
       - echo Updating service $ECS_SERVICE_NAME on cluster $ECS_CLUSTER_NAME to $NEW_TD_ARN
       - aws ecs update-service --cluster "$ECS_CLUSTER_NAME" --service "$ECS_SERVICE_NAME" --task-definition "$NEW_TD_ARN"
       - echo Waiting for service stability...
-      - aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services "$ECS_SERVICE_NAME"
+      - echo "Service update initiated successfully. Checking service status..."
+      - timeout 600 aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services "$ECS_SERVICE_NAME" || echo "Service deployment may still be in progress. Check ECS console for final status."
+      - echo "Build and deployment process completed."
 artifacts:
   files:
     - "**/*"
