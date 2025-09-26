@@ -2,7 +2,15 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    UploadFile,
+    File,
+    HTTPException,
+    Query,
+    status,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, desc, asc
 
@@ -48,6 +56,7 @@ from ..schemas import (
 )
 from .dms_ws import manager
 from ..config import settings
+from ..exceptions import ImageTooLargeError
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +73,7 @@ def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
                     signed_urls.append(StorageService.generate_signed_url(url))
                 except Exception as exc:  # pragma: no cover - fallback path
                     logger.warning("Failed to sign photo URL %s: %s", url, exc)
-                    signed_urls.append(url)
+                signed_urls.append(url)
         elif url:
             signed_urls.append(url)
     return signed_urls
@@ -89,7 +98,8 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
         try:
             if "s3.amazonaws.com" in photo_url and "/" in photo_url:
                 if "/circles-media" in photo_url:
-                    s3_key = photo_url.split("/circles-media", 1)[1].lstrip("/")
+                    s3_key = photo_url.split(
+                        "/circles-media", 1)[1].lstrip("/")
                 else:
                     s3_key = photo_url.split(".s3.amazonaws.com/", 1)[1]
             else:
@@ -100,7 +110,7 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
                 "Failed to re-sign S3 photo URL %s: %s", photo_url, exc)
             return photo_url
 
-    return photo_url
+        return photo_url
 
 
 def _collect_place_photos(place: Place) -> list[str]:
@@ -113,13 +123,16 @@ def _collect_place_photos(place: Place) -> list[str]:
     additional = getattr(place, "additional_photos", None)
     if additional:
         try:
-            parsed = json.loads(additional) if isinstance(additional, str) else additional
+            parsed = json.loads(additional) if isinstance(
+                additional, str) else additional
             if isinstance(parsed, list):
                 photo_candidates.extend(
-                    _convert_to_signed_urls([p for p in parsed if isinstance(p, str)])
+                    _convert_to_signed_urls(
+                        [p for p in parsed if isinstance(p, str)])
                 )
         except json.JSONDecodeError:
-            logger.warning("Failed to parse additional_photos for place %s", place.id)
+            logger.warning(
+                "Failed to parse additional_photos for place %s", place.id)
 
     seen: set[str] = set()
     unique: list[str] = []
@@ -221,7 +234,8 @@ async def get_user_profile(
             raise HTTPException(status_code=404, detail="User not found")
 
         if not await can_view_profile(db, user, current_user.id):
-            raise HTTPException(status_code=403, detail="Cannot view this profile")
+            raise HTTPException(
+                status_code=403, detail="Cannot view this profile")
 
         # Check if current user follows this user
         follow_query = select(Follow).where(
@@ -353,7 +367,7 @@ async def upload_avatar(
         max_bytes = int(settings.avatar_max_mb) * 1024 * 1024
         if len(content) > max_bytes:
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=f"Avatar file size must be less than {settings.avatar_max_mb}MB",
             )
 
@@ -401,6 +415,12 @@ async def upload_avatar(
             is_blocked=None,
         )
 
+    except ImageTooLargeError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=str(exc),
+        ) from exc
     except HTTPException:
         raise
     except Exception as exc:  # pragma: no cover - defensive fallback

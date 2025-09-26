@@ -40,7 +40,7 @@ def _convert_to_signed_url(url: str | None) -> str | None:
         return None
     if url.startswith("http"):
         return url
-    
+
     # For local storage, return the full URL
     if settings.storage_backend == "local":
         return f"http://localhost:8000{url}"
@@ -97,8 +97,8 @@ async def _fetch_collection_responses(
         photos_query = (
             select(CheckInPhoto.url)
             .join(CheckIn, CheckInPhoto.check_in_id == CheckIn.id)
-        .join(
-            UserCollectionPlace,
+            .join(
+                UserCollectionPlace,
                 UserCollectionPlace.place_id == CheckIn.place_id,
             )
             .where(
@@ -162,7 +162,8 @@ async def create_collection(
     """Create a new collection for the current user."""
     normalized_name = collection_create.name.strip()
     if not normalized_name:
-        raise HTTPException(status_code=400, detail="Collection name cannot be empty")
+        raise HTTPException(
+            status_code=400, detail="Collection name cannot be empty")
 
     existing = await db.execute(
         select(UserCollection).where(
@@ -171,7 +172,8 @@ async def create_collection(
         )
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Collection name already exists")
+        raise HTTPException(
+            status_code=400, detail="Collection name already exists")
 
     new_collection = UserCollection(
         user_id=current_user.id,
@@ -219,9 +221,11 @@ async def get_collection_items(
         db,
         collection.user_id,
         current_user.id,
-        collection.visibility or ("public" if collection.is_public else "private"),
+        collection.visibility or (
+            "public" if collection.is_public else "private"),
     ):
-        raise HTTPException(status_code=403, detail="Cannot view this collection")
+        raise HTTPException(
+            status_code=403, detail="Cannot view this collection")
 
     total = (
         await db.execute(
@@ -269,7 +273,8 @@ async def get_collection_items(
 
         checkin_count = (
             await db.execute(
-                select(func.count(CheckIn.id)).where(CheckIn.place_id == place.id)
+                select(func.count(CheckIn.id)).where(
+                    CheckIn.place_id == place.id)
             )
         ).scalar_one()
 
@@ -321,12 +326,14 @@ async def update_collection(
         raise HTTPException(status_code=404, detail="Collection not found")
 
     if collection.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Cannot update this collection")
+        raise HTTPException(
+            status_code=403, detail="Cannot update this collection")
 
     if collection_update.name is not None:
         new_name = collection_update.name.strip()
         if not new_name:
-            raise HTTPException(status_code=400, detail="Collection name cannot be empty")
+            raise HTTPException(
+                status_code=400, detail="Collection name cannot be empty")
 
         duplicate = await db.execute(
             select(UserCollection).where(
@@ -336,7 +343,8 @@ async def update_collection(
             )
         )
         if duplicate.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Collection name already exists")
+            raise HTTPException(
+                status_code=400, detail="Collection name already exists")
         collection.name = new_name
         await db.execute(
             sa.update(SavedPlace)

@@ -224,7 +224,8 @@ async def get_check_in_comments(
     check_in_id: int,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    threaded: bool = Query(False, description="Return comments in threaded format"),
+    threaded: bool = Query(
+        False, description="Return comments in threaded format"),
     current_user: User = Depends(JWTService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -331,7 +332,8 @@ async def add_check_in_comment(
                 detail="Reply target comment not found or doesn't belong to this check-in"
             )
         # Store quoted text for reply context
-        reply_to_text = reply_comment.content[:200] + ("..." if len(reply_comment.content) > 200 else "")
+        reply_to_text = reply_comment.content[:200] + \
+            ("..." if len(reply_comment.content) > 200 else "")
 
     # Create comment
     comment = CheckInComment(

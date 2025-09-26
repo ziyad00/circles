@@ -113,9 +113,10 @@ class AWSSecretsService:
         # Try environment variables first (for local dev)
         env_client_id = os.environ.get('FOURSQUARE_CLIENT_ID')
         env_client_secret = os.environ.get('FOURSQUARE_CLIENT_SECRET')
-        
+
         if env_client_id and env_client_secret:
-            logger.info("Using Foursquare credentials from environment variables")
+            logger.info(
+                "Using Foursquare credentials from environment variables")
             return {
                 'client_id': env_client_id,
                 'client_secret': env_client_secret
@@ -123,7 +124,8 @@ class AWSSecretsService:
 
         # Check if boto3 is available
         if not BOTO3_AVAILABLE:
-            logger.warning("boto3 not available. Cannot access AWS Secrets Manager.")
+            logger.warning(
+                "boto3 not available. Cannot access AWS Secrets Manager.")
             return {}
 
         # Fallback to AWS Secrets Manager
@@ -132,7 +134,8 @@ class AWSSecretsService:
                 logger.warning("AWS client not available")
                 return {}
 
-            logger.info("Retrieving Foursquare credentials from AWS Secrets Manager...")
+            logger.info(
+                "Retrieving Foursquare credentials from AWS Secrets Manager...")
 
             response = self.secrets_client.get_secret_value(
                 SecretId='circles/dev/foursquare/credentials'
@@ -143,7 +146,8 @@ class AWSSecretsService:
             client_secret = secret_data.get('client_secret')
 
             if client_id and client_secret:
-                logger.info("Successfully retrieved Foursquare credentials from AWS Secrets Manager")
+                logger.info(
+                    "Successfully retrieved Foursquare credentials from AWS Secrets Manager")
                 return {
                     'client_id': client_id,
                     'client_secret': client_secret
@@ -158,7 +162,8 @@ class AWSSecretsService:
             return {}
 
         except Exception as e:
-            logger.error(f"Unexpected error retrieving Foursquare credentials: {e}")
+            logger.error(
+                f"Unexpected error retrieving Foursquare credentials: {e}")
             return {}
 
 

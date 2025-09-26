@@ -221,10 +221,12 @@ def _collect_place_photos(place: Place) -> list[str]:
                 parsed = additional
             if isinstance(parsed, list):
                 photo_candidates.extend(
-                    _convert_to_signed_urls([p for p in parsed if isinstance(p, str)])
+                    _convert_to_signed_urls(
+                        [p for p in parsed if isinstance(p, str)])
                 )
         except json.JSONDecodeError:
-            logging.warning("Failed to parse additional_photos for place %s", place.id)
+            logging.warning(
+                "Failed to parse additional_photos for place %s", place.id)
 
     seen: set[str] = set()
     unique: list[str] = []
@@ -872,7 +874,8 @@ async def get_trending_places(
             if hasattr(place, "additional_photos") and place.additional_photos:
                 try:
                     if isinstance(place.additional_photos, str):
-                        additional_photos_list = json.loads(place.additional_photos)
+                        additional_photos_list = json.loads(
+                            place.additional_photos)
                     elif isinstance(place.additional_photos, list):
                         additional_photos_list = list(place.additional_photos)
                 except json.JSONDecodeError:
@@ -1038,6 +1041,7 @@ async def nearby_places(
         logger.error("Error fetching nearby places: %s", fetch_error)
         return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
+    # Process the fetched places
     now_ts = datetime.now(timezone.utc)
     hours_window = 24
     fsq_items: list[PlaceResponse] = []
@@ -1190,7 +1194,8 @@ async def get_place_details(
             signed_photo_urls = _convert_to_signed_urls(raw_photo_urls)
 
             if not signed_photo_urls and checkin.photo_url:
-                single_signed = _convert_single_to_signed_url(checkin.photo_url)
+                single_signed = _convert_single_to_signed_url(
+                    checkin.photo_url)
                 if single_signed:
                     signed_photo_urls = [single_signed]
 
@@ -1259,7 +1264,8 @@ async def get_place_details(
             created_at=place.created_at,
             stats=place_stats,
             current_checkins=len(recent_checkins),
-            total_checkins=len(recent_checkins),  # TODO: Calculate actual total check-ins
+            # TODO: Calculate actual total check-ins
+            total_checkins=len(recent_checkins),
             recent_reviews=0,  # TODO: Calculate recent reviews
             photos_count=len(unique_photos),
             is_checked_in=False,  # TODO: Check if current user is checked in
@@ -1635,7 +1641,8 @@ async def create_place_chat_message(
 ):
     text = (payload.text or "").strip()
     if not text:
-        raise HTTPException(status_code=400, detail="Message text cannot be empty")
+        raise HTTPException(
+            status_code=400, detail="Message text cannot be empty")
 
     place = await _get_place_or_404(db, place_id)
     await _ensure_user_can_chat(db, place_id, current_user.id)
@@ -1649,7 +1656,8 @@ async def create_place_chat_message(
     await db.commit()
     await db.refresh(message)
 
-    response_model = _serialize_place_chat_message_response(message, current_user)
+    response_model = _serialize_place_chat_message_response(
+        message, current_user)
 
     payload_dict = {
         "type": "message",
@@ -1841,48 +1849,46 @@ async def save_place(
         desired_name = normalize_collection_name(payload.list_name)
         await ensure_default_collection(db, current_user.id)
 
-        existing_query = select(SavedPlace).where(
-            and_(
-                SavedPlace.user_id == current_user.id,
-                SavedPlace.place_id == payload.place_id,
-            )
-        )
-        existing_result = await db.execute(existing_query)
-        existing = existing_result.scalar_one_or_none()
-
-        if existing and normalize_collection_name(existing.list_name) == desired_name:
-            # Idempotent response when already saved in the desired collection
-            await db.refresh(existing)
-            collection_name = (
-                existing.collection.name
-                if existing.collection
-                else existing.list_name
-            )
-            return SavedPlaceResponse(
-                id=existing.id,
-                user_id=existing.user_id,
-                place_id=existing.place_id,
-                collection_id=existing.collection_id,
-                list_name=collection_name,
-                created_at=existing.created_at,
-                place=place,
-            )
-
         saved_place = await ensure_saved_place_entry(
             db,
             current_user.id,
             payload.place_id,
             desired_name,
         )
+        # Ensure the SavedPlace has a linked collection ID
+        if saved_place.collection_id is None:
+            if saved_place.collection is not None:
+                saved_place.collection_id = saved_place.collection.id
+            else:
+                collection_row = await db.execute(
+                    select(UserCollection.id, UserCollection.name)
+                    .where(
+                        and_(
+                            UserCollection.user_id == current_user.id,
+                            func.lower(UserCollection.name)
+                            == desired_name.lower(),
+                        )
+                    )
+                    .limit(1)
+                )
+                collection = collection_row.first()
+                if collection:
+                    saved_place.collection_id = collection.id
+                    saved_place.list_name = collection.name
 
         await db.commit()
         await db.refresh(saved_place)
 
-        collection_name = (
-            saved_place.collection.name
-            if saved_place.collection
-            else saved_place.list_name
-        )
+        collection_name = saved_place.list_name
+        if saved_place.collection_id:
+            name_row = await db.execute(
+                select(UserCollection.name).where(
+                    UserCollection.id == saved_place.collection_id
+                )
+            )
+            fetched_name = name_row.scalar_one_or_none()
+            if fetched_name:
+                collection_name = fetched_name
 
         return SavedPlaceResponse(
             id=saved_place.id,
@@ -1897,9 +1903,12 @@ async def save_place(
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Error saving place: {e}")
+        logging.error("Error saving place: %s", e)
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to save place")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save place: {e}",
+        )
 
 
 @router.delete("/saved/{place_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1927,7 +1936,8 @@ async def unsave_place(
 
         if collection_name:
             normalized_name = normalize_collection_name(collection_name)
-            filters.append(func.lower(UserCollection.name) == normalized_name.lower())
+            filters.append(func.lower(UserCollection.name)
+                           == normalized_name.lower())
 
         query = query.where(and_(*filters))
         result = await db.execute(query)
