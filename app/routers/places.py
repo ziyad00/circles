@@ -90,10 +90,10 @@ def _parse_time_window(time_window: str) -> timedelta:
             return timedelta(days=days)
         else:
             # Default to 24h if parsing fails
-            return timedelta(hours=24)
+            return timedelta(hours=settings.checkin_expiry_hours)
     except (ValueError, AttributeError):
-        # Default to 24h if parsing fails
-        return timedelta(hours=24)
+        # Default to configured expiry if parsing fails
+        return timedelta(hours=settings.checkin_expiry_hours)
 
 
 async def _get_dynamic_limit_based_on_checkins(db: AsyncSession, time_window: str) -> int:
@@ -1175,7 +1175,7 @@ async def get_place_details(
         aggregated_photo_urls: list[str] = []
         place_photo_candidates = _collect_place_photos(place)
         now = datetime.now(timezone.utc)
-        time_limit = timedelta(hours=6)
+        time_limit = timedelta(hours=settings.photo_aggregation_hours)
 
         for checkin in recent_checkins:
             checkin_created_at = (
@@ -1701,7 +1701,7 @@ async def create_check_in(
             place_id=payload.place_id,
             note=payload.note,
             visibility=payload.visibility or default_vis,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=settings.checkin_expiry_hours),
             latitude=payload.latitude,
             longitude=payload.longitude,
         )
@@ -1765,7 +1765,7 @@ async def create_check_in_full(
             place_id=place_id,
             note=note,
             visibility=visibility or default_vis,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=settings.checkin_expiry_hours),
             latitude=latitude,
             longitude=longitude,
         )

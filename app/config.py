@@ -133,6 +133,12 @@ class Settings(BaseSettings):
     place_chat_window_hours: int = Field(
         default=12, env="PLACE_CHAT_WINDOW_HOURS"
     )
+    checkin_expiry_hours: int = Field(
+        default=24, env="CHECKIN_EXPIRY_HOURS"
+    )
+    photo_aggregation_hours: int = Field(
+        default=6, env="PHOTO_AGGREGATION_HOURS"
+    )
 
     # Auto-seeding
     autoseed_enabled: bool = Field(default=True, env="AUTOSEED_ENABLED")
