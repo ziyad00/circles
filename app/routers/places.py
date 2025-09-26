@@ -78,6 +78,31 @@ router = APIRouter(prefix="/places", tags=["places"])
 logger = logging.getLogger(__name__)
 
 
+def _get_all_place_photos(place) -> list[str]:
+    """Helper function to get all photos for a place, combining photo_url and additional_photos."""
+    all_photos = []
+
+    # Add primary photo
+    if place.photo_url:
+        all_photos.append(place.photo_url)
+
+    # Add additional photos
+    if hasattr(place, "additional_photos") and place.additional_photos:
+        try:
+            if isinstance(place.additional_photos, str):
+                additional_list = json.loads(place.additional_photos)
+            elif isinstance(place.additional_photos, list):
+                additional_list = list(place.additional_photos)
+            else:
+                additional_list = []
+
+            all_photos.extend(additional_list)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"Failed to parse additional_photos for place {getattr(place, 'name', 'unknown')}")
+
+    return all_photos
+
+
 def _parse_time_window(time_window: str) -> timedelta:
     """Parse time window string to timedelta object."""
     try:
@@ -587,7 +612,7 @@ async def search_places(
                 venue_created_at=place.venue_created_at,
                 primary_category=None,  # TODO: Extract from categories
                 category_icons=None,
-                photo_urls=[place.photo_url] if place.photo_url else [],
+                photo_urls=_get_all_place_photos(place),
             )
             items.append(place_resp)
 
@@ -695,7 +720,7 @@ async def search_places_advanced_flexible(
                 venue_created_at=place.venue_created_at,
                 primary_category=None,
                 category_icons=None,
-                photo_urls=[place.photo_url] if place.photo_url else [],
+                photo_urls=_get_all_place_photos(place),
             )
             items.append(place_resp)
 
