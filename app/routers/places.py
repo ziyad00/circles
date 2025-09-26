@@ -60,8 +60,6 @@ from ..services.collection_sync import (
     remove_saved_place_membership,
 )
 from ..database import get_db
-from ..services.jwt_service import JWTService
-from ..utils import haversine_distance
 from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, desc, asc, text
@@ -96,34 +94,69 @@ async def _get_dynamic_limit_based_on_checkins(db: AsyncSession, time_window: st
     """Calculate dynamic limit based on people who can currently chat (within chat window)."""
     try:
         from ..config import settings
-        
+
         # Use the chat window from config (default 12 hours)
         chat_window_hours = settings.place_chat_window_hours
-        chat_since_time = datetime.now(timezone.utc) - timedelta(hours=chat_window_hours)
-        
+        chat_since_time = datetime.now(
+            timezone.utc) - timedelta(hours=chat_window_hours)
+
         # Count unique users who can currently chat (have check-ins within chat window)
         # This represents people who are "present" and can interact
         chat_users_count_query = select(func.count(func.distinct(CheckIn.user_id))).where(
             and_(
                 CheckIn.created_at >= chat_since_time,
-                CheckIn.expires_at > datetime.now(timezone.utc)  # Check-in hasn't expired
+                CheckIn.expires_at > datetime.now(
+                    timezone.utc)  # Check-in hasn't expired
             )
         )
         result = await db.execute(chat_users_count_query)
         chat_users_count = result.scalar() or 0
-        
+
         # Calculate dynamic limit: minimum 3, maximum 50, based on people who can chat
         # Scale factor: every 2 people who can chat adds 1 to the limit
         # This makes the limit more responsive to actual social activity
         dynamic_limit = max(3, min(50, 3 + (chat_users_count // 2)))
-        
-        logger.info(f"Chat window: {chat_window_hours}h, People who can chat: {chat_users_count}, Dynamic limit: {dynamic_limit}")
+
+        logger.info(
+            f"Chat window: {chat_window_hours}h, People who can chat: {chat_users_count}, Dynamic limit: {dynamic_limit}")
         return dynamic_limit
-        
+
     except Exception as e:
         logger.error(f"Error calculating dynamic limit: {e}")
         # Fallback to default limit of 3
         return 3
+
+
+def _time_window_to_hours(time_window: str) -> int:
+    mapping = {
+        "1h": 1,
+        "6h": 6,
+        "24h": 24,
+        "7d": 24 * 7,
+        "30d": 24 * 30,
+    }
+    return mapping.get(time_window, 24)
+
+
+async def _get_recent_checkins_count(
+    db: AsyncSession,
+    place_id: int,
+    hours: int,
+) -> int:
+    try:
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        stmt = select(func.count(func.distinct(CheckIn.user_id))).where(
+            and_(CheckIn.place_id == place_id, CheckIn.created_at >= since)
+        )
+        result = await db.execute(stmt)
+        return int(result.scalar() or 0)
+    except Exception as exc:
+        logger.warning(
+            "Failed to compute recent check-in count for place %s: %s",
+            place_id,
+            exc,
+        )
+        return 0
 
 
 def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
@@ -131,46 +164,69 @@ def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
     signed_urls: list[str] = []
     for url in photo_urls:
         if url and not url.startswith("http"):
-            try:
-                signed_urls.append(StorageService.generate_signed_url(url))
-            except Exception as exc:  # pragma: no cover - fallback path
-                logger.warning("Failed to sign photo URL %s: %s", url, exc)
-                signed_urls.append(url)
-        else:
+            # For local storage, return the full URL
+            if settings.storage_backend == "local":
+                signed_urls.append(f"http://localhost:8000{url}")
+            else:
+                # For S3, generate signed URL
+                try:
+                    signed_urls.append(StorageService.generate_signed_url(url))
+                except Exception as exc:  # pragma: no cover - fallback path
+                    logger.warning("Failed to sign photo URL %s: %s", url, exc)
+                    signed_urls.append(url)
+        elif url:
             signed_urls.append(url)
     return signed_urls
 
 
 def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
-    """Convert a single S3 key/URL to a signed URL."""
+    """Convert a single storage key or S3 URL to a signed URL."""
     if not photo_url:
         return None
 
     if not photo_url.startswith("http"):
-        try:
-            return StorageService.generate_signed_url(photo_url)
-        except Exception as exc:  # pragma: no cover - fallback path
-            logger.warning(
-                "Failed to sign single photo URL %s: %s", photo_url, exc)
-            return photo_url
-
-    if "s3.amazonaws.com" in photo_url or "circles-media" in photo_url:
-        try:
-            if "s3.amazonaws.com" in photo_url and "/" in photo_url:
-                if "/circles-media" in photo_url:
-                    s3_key = photo_url.split(
-                        "/circles-media", 1)[1].lstrip("/")
-                else:
-                    s3_key = photo_url.split(".s3.amazonaws.com/", 1)[1]
-            else:
-                s3_key = photo_url.split(".amazonaws.com/", 1)[1]
-            return StorageService.generate_signed_url(s3_key)
-        except Exception as exc:  # pragma: no cover - fallback path
-            logger.warning(
-                "Failed to re-sign S3 photo URL %s: %s", photo_url, exc)
-            return photo_url
-
+        # For local storage, return the full URL
+        if settings.storage_backend == "local":
+            return f"http://localhost:8000{photo_url}"
+        else:
+            # For S3, generate signed URL
+            try:
+                return StorageService.generate_signed_url(photo_url)
+            except Exception as exc:  # pragma: no cover - fallback path
+                logger.warning(
+                    "Failed to sign single photo URL %s: %s", photo_url, exc)
     return photo_url
+
+
+def _collect_place_photos(place: Place) -> list[str]:
+    """Return a deduplicated list of signed photo URLs for a place."""
+    photo_candidates: list[str] = []
+
+    primary = _convert_single_to_signed_url(place.photo_url)
+    if primary:
+        photo_candidates.append(primary)
+
+    if place.additional_photos:
+        try:
+            additional = place.additional_photos
+            if isinstance(additional, str):
+                parsed = json.loads(additional)
+            else:
+                parsed = additional
+            if isinstance(parsed, list):
+                photo_candidates.extend(
+                    _convert_to_signed_urls([p for p in parsed if isinstance(p, str)])
+                )
+        except json.JSONDecodeError:
+            logging.warning("Failed to parse additional_photos for place %s", place.id)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for url in photo_candidates:
+        if url and url not in seen:
+            seen.add(url)
+            unique.append(url)
+    return unique
 
 # ============================================================================
 # LOOKUP ENDPOINTS (Used by frontend)
@@ -223,7 +279,6 @@ async def get_cities(
     """
     try:
         query = select(Place.city).distinct().where(Place.city.isnot(None))
-
         if country:
             query = query.where(Place.country == country)
 
@@ -480,7 +535,12 @@ async def search_places_advanced_flexible(
             )
             items.append(place_resp)
 
-        return PaginatedPlaces(items=items, total=total, limit=filters.limit, offset=filters.offset)
+        return PaginatedPlaces(
+            items=items,
+            total=total,
+            limit=filters.limit,
+            offset=filters.offset,
+        )
 
     except Exception as e:
         logging.error(f"Error in advanced place search: {e}")
@@ -554,145 +614,165 @@ async def get_trending_places(
     - Saves new places to local database for future trending
     - Maintains photo URLs and rich metadata
     """
-    # Use enhanced place data service for trending places
-    from ..config import settings as app_settings
-    import logging
-
-    # Calculate dynamic limit based on people who can chat if not provided
     if limit is None:
-        limit = await _get_dynamic_limit_based_on_checkins(db, time_window)  # time_window still used for trending
-        logging.info(
-            f"Using dynamic limit: {limit} (based on people who can chat)")
+        limit = await _get_dynamic_limit_based_on_checkins(db, time_window)
+        logger.info(
+            "Using dynamic limit: %s (based on people who can chat)",
+            limit,
+        )
     else:
-        logging.info(f"Using provided limit: {limit}")
+        logger.info("Using provided limit: %s", limit)
 
-    logging.info(
-        f"Trending places request: lat={lat}, lng={lng}, limit={limit}, offset={offset}, time_window={time_window}")
+    logger.info(
+        "Trending places request: lat=%s, lng=%s, limit=%s, offset=%s, time_window=%s",
+        lat,
+        lng,
+        limit,
+        offset,
+        time_window,
+    )
 
-    # Coordinates are required for Foursquare trending API
     if lat is None or lng is None:
-        logging.warning("lat and lng are required for trending places")
+        logger.warning("lat and lng are required for trending places")
         return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
-    # Always fetch fresh trending data from Foursquare API
-    logging.info("Fetching fresh trending data from Foursquare API")
-
-    # Initialize places_to_use to ensure it's always defined
-    places_to_use = []
+    places_to_use: list[Place] = []
 
     try:
         fsq_places = await enhanced_place_data_service.fetch_foursquare_trending(
-            lat=lat, lon=lng, limit=limit
+            lat=lat,
+            lon=lng,
+            limit=limit,
         )
-        logging.info(f"Got {len(fsq_places)} places from Foursquare API")
+        logger.info("Got %s places from Foursquare API", len(fsq_places))
 
         if not fsq_places:
-            logging.info("No places returned from Foursquare API")
+            logger.info("No places returned from Foursquare API")
             return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
-        # Save places to database and get them back with database IDs
         try:
-            saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(fsq_places, db)
+            saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(
+                fsq_places,
+                db,
+            )
             await db.commit()
-            logging.info(f"Saved {len(saved_places)} places to database")
-
-            if saved_places:
-                logging.info(
-                    f"First saved place: ID={saved_places[0].id}, Name={saved_places[0].name}")
-                # Use the saved places with database IDs
-                places_to_use = saved_places
-                logging.info(
-                    f"Set places_to_use to {len(places_to_use)} saved places")
-            else:
-                logging.warning(
-                    "No places were saved to database - falling back to empty results")
-                places_to_use = []
-
+            logger.info("Saved %s places to database", len(saved_places))
         except Exception as save_error:
-            logging.error(
-                f"Failed to save Foursquare places to database: {save_error}")
+            logger.error(
+                "Failed to save Foursquare places to database: %s",
+                save_error,
+            )
             await db.rollback()
-            places_to_use = []
-
-    except Exception as e:
-        logging.error(f"Failed to fetch Foursquare trending places: {e}")
+        else:
+            if saved_places:
+                logger.info(
+                    "First saved place: ID=%s, Name=%s",
+                    saved_places[0].id,
+                    saved_places[0].name,
+                )
+                places_to_use = saved_places
+                logger.info(
+                    "Set places_to_use to %s saved places", len(places_to_use)
+                )
+            else:
+                logger.warning(
+                    "No places were saved to database - falling back to empty results"
+                )
+    except Exception as fetch_error:
+        logger.error(
+            "Failed to fetch Foursquare trending places: %s",
+            fetch_error,
+        )
         return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
-    # Convert database places to PlaceResponse objects (use database IDs)
     now_ts = datetime.now(timezone.utc)
+    hours_window = _time_window_to_hours(time_window)
     fsq_items: list[PlaceResponse] = []
 
-    logging.info(f"Using {len(places_to_use)} places from database")
+    logger.info("Using %s places from database", len(places_to_use))
     if places_to_use:
-        logging.info(
-            f"First place to use: {type(places_to_use[0])} - {places_to_use[0].name}")
-        logging.info(f"First place ID: {places_to_use[0].id}")
+        logger.info(
+            "First place to use: %s - %s",
+            type(places_to_use[0]),
+            places_to_use[0].name,
+        )
+        logger.info("First place ID: %s", places_to_use[0].id)
     else:
-        logging.warning("No places to use - returning empty results")
+        logger.warning("No places to use - returning empty results")
 
-    for i, p in enumerate(places_to_use):
+    for place in places_to_use:
         try:
-            # All places_to_use are now database Place objects
-            # Build photo_urls - combine primary photo with additional photos
-            all_photos = []
-            if p.photo_url:
-                all_photos.append(p.photo_url)
+            all_photos: list[str] = []
+            if place.photo_url:
+                all_photos.append(place.photo_url)
 
-            # Parse additional_photos from JSON string to list
-            additional_photos_list = []
-            if hasattr(p, 'additional_photos') and p.additional_photos:
+            additional_photos_list: list[str] = []
+            if hasattr(place, "additional_photos") and place.additional_photos:
                 try:
-                    if isinstance(p.additional_photos, str):
-                        additional_photos_list = json.loads(
-                            p.additional_photos)
-                    elif isinstance(p.additional_photos, list):
-                        additional_photos_list = p.additional_photos
-                    all_photos.extend(additional_photos_list)
+                    if isinstance(place.additional_photos, str):
+                        additional_photos_list = json.loads(place.additional_photos)
+                    elif isinstance(place.additional_photos, list):
+                        additional_photos_list = list(place.additional_photos)
                 except json.JSONDecodeError:
-                    logging.warning(
-                        f"Failed to parse additional_photos JSON for place {p.name}")
+                    logger.warning(
+                        "Failed to parse additional_photos JSON for place %s",
+                        place.name,
+                    )
+                else:
+                    all_photos.extend(additional_photos_list)
 
-            place_resp = PlaceResponse(
-                id=p.id,  # Use the actual database ID
-                name=p.name or "Unknown",
-                address=p.address,
-                city=p.city,
-                neighborhood=p.neighborhood,
-                latitude=p.latitude,
-                longitude=p.longitude,
-                categories=p.categories,
-                rating=p.rating,
-                price_tier=p.price_tier,
-                created_at=p.created_at or now_ts,
-                photo_url=p.photo_url,
-                recent_checkins_count=0,
-                postal_code=p.postal_code,
-                cross_street=p.cross_street,
-                formatted_address=p.formatted_address,
-                distance_meters=p.distance_meters,
-                venue_created_at=p.venue_created_at,
-                primary_category=p.categories.split(
-                    ',')[0] if p.categories else None,
-                category_icons=None,
-                photo_urls=all_photos,  # All photos (primary + additional)
-                # Additional photos only (parsed from JSON)
-                additional_photos=additional_photos_list,
+            recent_count = await _get_recent_checkins_count(
+                db,
+                place.id,
+                hours_window,
             )
-            fsq_items.append(place_resp)
-        except Exception as e:
-            # Skip places with mapping issues instead of crashing
-            logging.warning(
-                f"Failed to map place {p.name if hasattr(p, 'name') else 'Unknown'}: {e}")
-            continue
 
-    # Sort by distance (Foursquare already provides this, but ensure it)
-    fsq_items.sort(key=lambda x: x.distance_meters or float('inf'))
+            fsq_items.append(
+                PlaceResponse(
+                    id=place.id,
+                    name=place.name or "Unknown",
+                    address=place.address,
+                    country=place.country,
+                    city=place.city,
+                    neighborhood=place.neighborhood,
+                    latitude=place.latitude,
+                    longitude=place.longitude,
+                    categories=place.categories,
+                    rating=place.rating,
+                    description=place.description,
+                    price_tier=place.price_tier,
+                    created_at=place.created_at or now_ts,
+                    photo_url=place.photo_url,
+                    recent_checkins_count=recent_count,
+                    postal_code=place.postal_code,
+                    cross_street=place.cross_street,
+                    formatted_address=place.formatted_address,
+                    distance_meters=place.distance_meters,
+                    venue_created_at=place.venue_created_at,
+                    primary_category=(
+                        place.categories.split(",")[0]
+                        if place.categories
+                        else None
+                    ),
+                    category_icons=None,
+                    photo_urls=all_photos,
+                    additional_photos=additional_photos_list,
+                )
+            )
+        except Exception as map_error:
+            logger.warning(
+                "Failed to map place %s: %s",
+                getattr(place, "name", "Unknown"),
+                map_error,
+            )
+
+    fsq_items.sort(key=lambda item: item.distance_meters or float("inf"))
 
     return PaginatedPlaces(
         items=fsq_items,
         total=len(fsq_items),
         limit=limit,
-        offset=offset
+        offset=offset,
     )
 
 
@@ -739,125 +819,142 @@ async def nearby_places(
     - Location-based exploration with user activity
     - Distance-sorted place lists with check-in data
     """
-    from ..config import settings as app_settings
-    import logging
-
-    # Calculate dynamic limit based on people who can chat if not provided
     if limit is None:
-        limit = await _get_dynamic_limit_based_on_checkins(db, "24h")  # time_window not used anymore
-        logging.info(
-            f"Using dynamic limit: {limit} (based on people who can chat)")
+        limit = await _get_dynamic_limit_based_on_checkins(db, "24h")
+        logger.info(
+            "Using dynamic limit: %s (based on people who can chat)",
+            limit,
+        )
     else:
-        logging.info(f"Using provided limit: {limit}")
+        logger.info("Using provided limit: %s", limit)
 
-    print(
-        f"🚀 NEARBY ENDPOINT CALLED: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
-    logging.info(
-        f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
+    logger.info(
+        "Nearby places request: lat=%s, lng=%s, radius=%s, limit=%s, offset=%s",
+        lat,
+        lng,
+        radius_m,
+        limit,
+        offset,
+    )
 
-    # Use the same pattern as trending endpoint for consistency
     if lat is None or lng is None:
         return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
-    # Fetch places using enhanced place data service (same as trending)
-    enhanced_place_data_service = EnhancedPlaceDataService()
+    service = EnhancedPlaceDataService()
+    places_to_use: list[Place] = []
 
     try:
-        # Fetch nearby places from Foursquare API
-        fsq_places = await enhanced_place_data_service.fetch_foursquare_nearby(
-            lat, lng, limit=limit, radius_m=radius_m
+        fsq_places = await service.fetch_foursquare_nearby(
+            lat,
+            lng,
+            limit=limit,
+            radius_m=radius_m,
         )
 
         if not fsq_places:
-            logging.info("No places returned from Foursquare API")
+            logger.info("No places returned from Foursquare API")
             return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
-        # Save places to database and get them back with database IDs (like trending endpoint)
-        saved_places = []
         try:
-            saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(fsq_places, db)
+            saved_places = await service.save_foursquare_places_to_db(
+                fsq_places,
+                db,
+            )
             await db.commit()
-            logging.info(
-                f"Saved {len(saved_places)} new Foursquare places to database")
-        except Exception as e:
-            logging.warning(
-                f"Failed to save Foursquare places to database: {e}")
+            logger.info(
+                "Saved %s new Foursquare places to database",
+                len(saved_places),
+            )
+            places_to_use = saved_places[:limit] if saved_places else []
+        except Exception as save_error:
+            logger.warning(
+                "Failed to save Foursquare places to database: %s",
+                save_error,
+            )
             await db.rollback()
+    except Exception as fetch_error:
+        logger.error("Error fetching nearby places: %s", fetch_error)
+        return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
-        # Convert saved database places to PlaceResponse objects (use database IDs)
-        now_ts = datetime.now(timezone.utc)
-        fsq_items: list[PlaceResponse] = []
+    now_ts = datetime.now(timezone.utc)
+    hours_window = 24
+    fsq_items: list[PlaceResponse] = []
 
-        # Use saved places with database IDs (like trending endpoint)
-        places_to_use = saved_places[:limit] if saved_places else []
+    for place in places_to_use:
+        try:
+            all_photos: list[str] = []
+            if place.photo_url:
+                all_photos.append(place.photo_url)
 
-        for i, p in enumerate(places_to_use):
-            try:
-                # All places_to_use are now database Place objects (like trending endpoint)
-                # Build photo_urls - combine primary photo with additional photos
-                all_photos = []
-                if p.photo_url:
-                    all_photos.append(p.photo_url)
+            additional_photos_list: list[str] = []
+            if hasattr(place, "additional_photos") and place.additional_photos:
+                try:
+                    if isinstance(place.additional_photos, str):
+                        additional_photos_list = json.loads(
+                            place.additional_photos
+                        )
+                    elif isinstance(place.additional_photos, list):
+                        additional_photos_list = list(place.additional_photos)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Failed to parse additional_photos JSON for place %s",
+                        place.name,
+                    )
+                else:
+                    all_photos.extend(additional_photos_list)
 
-                # Parse additional_photos from JSON string to list
-                additional_photos_list = []
-                if hasattr(p, 'additional_photos') and p.additional_photos:
-                    try:
-                        if isinstance(p.additional_photos, str):
-                            additional_photos_list = json.loads(
-                                p.additional_photos)
-                        elif isinstance(p.additional_photos, list):
-                            additional_photos_list = p.additional_photos
-                        all_photos.extend(additional_photos_list)
-                    except json.JSONDecodeError:
-                        logging.warning(
-                            f"Failed to parse additional_photos JSON for place {p.name}")
+            recent_count = await _get_recent_checkins_count(
+                db,
+                place.id,
+                hours_window,
+            )
 
-                place_resp = PlaceResponse(
-                    id=p.id,  # Use the actual database ID
-                    name=p.name or "Unknown",
-                    address=p.address,
-                    city=p.city,
-                    neighborhood=p.neighborhood,
-                    latitude=p.latitude,
-                    longitude=p.longitude,
-                    categories=p.categories,
-                    rating=p.rating,
-                    price_tier=p.price_tier,
-                    created_at=p.created_at or now_ts,
-                    photo_url=p.photo_url,
-                    recent_checkins_count=0,
-                    postal_code=p.postal_code,
-                    cross_street=p.cross_street,
-                    formatted_address=p.formatted_address,
-                    distance_meters=p.distance_meters,
-                    venue_created_at=p.venue_created_at,
-                    primary_category=p.categories.split(
-                        ',')[0] if p.categories else None,
+            fsq_items.append(
+                PlaceResponse(
+                    id=place.id,
+                    name=place.name or "Unknown",
+                    address=place.address,
+                    country=place.country,
+                    city=place.city,
+                    neighborhood=place.neighborhood,
+                    latitude=place.latitude,
+                    longitude=place.longitude,
+                    categories=place.categories,
+                    rating=place.rating,
+                    description=place.description,
+                    price_tier=place.price_tier,
+                    created_at=place.created_at or now_ts,
+                    photo_url=place.photo_url,
+                    recent_checkins_count=recent_count,
+                    postal_code=place.postal_code,
+                    cross_street=place.cross_street,
+                    formatted_address=place.formatted_address,
+                    distance_meters=place.distance_meters,
+                    venue_created_at=place.venue_created_at,
+                    primary_category=(
+                        place.categories.split(",")[0]
+                        if place.categories
+                        else None
+                    ),
                     category_icons=None,
-                    photo_urls=all_photos,  # All photos (primary + additional)
-                    # Additional photos only (parsed from JSON)
+                    photo_urls=all_photos,
                     additional_photos=additional_photos_list,
                 )
-                fsq_items.append(place_resp)
-            except Exception as e:
-                # Skip places with mapping issues instead of crashing
-                logging.warning(
-                    f"Failed to map place {p.name if hasattr(p, 'name') else 'Unknown'}: {e}")
-                continue
+            )
+        except Exception as map_error:
+            logger.warning(
+                "Failed to map place %s: %s",
+                getattr(place, "name", "Unknown"),
+                map_error,
+            )
 
-        # Sort by distance (Foursquare already provides this, but ensure it)
-        fsq_items.sort(key=lambda x: x.distance_meters or float('inf'))
-
-    except Exception as e:
-        logging.error(f"Error fetching nearby places: {e}")
-        return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
+    fsq_items.sort(key=lambda item: item.distance_meters or float("inf"))
 
     return PaginatedPlaces(
         items=fsq_items,
         total=len(fsq_items),
         limit=limit,
-        offset=offset
+        offset=offset,
     )
 
 # ============================================================================
@@ -889,61 +986,78 @@ async def get_place_details(
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
 
-        # Get recent check-ins for this place
-        recent_checkins_query = select(CheckIn).where(
-            CheckIn.place_id == place_id
-        ).order_by(desc(CheckIn.created_at)).limit(10)
+        saved_result = await db.execute(
+            select(SavedPlace.id).where(
+                and_(
+                    SavedPlace.user_id == current_user.id,
+                    SavedPlace.place_id == place_id,
+                )
+            )
+        )
+        is_saved = saved_result.scalar_one_or_none() is not None
 
+        recent_checkins_query = (
+            select(CheckIn)
+            .where(CheckIn.place_id == place_id)
+            .order_by(desc(CheckIn.created_at))
+            .limit(10)
+        )
         recent_checkins_result = await db.execute(recent_checkins_query)
         recent_checkins = recent_checkins_result.scalars().all()
 
-        # Convert check-ins to response format
-        checkin_responses = []
+        checkin_responses: list[CheckInResponse] = []
+        aggregated_photo_urls: list[str] = []
+        place_photo_candidates = _collect_place_photos(place)
+        now = datetime.now(timezone.utc)
+        time_limit = timedelta(hours=6)
+
         for checkin in recent_checkins:
-            # Check if user can still chat (within time window)
-            time_limit = timedelta(hours=6)
-            now = datetime.now(timezone.utc)
-            # Ensure both datetimes are timezone-aware
-            if checkin.created_at.tzinfo is None:
-                checkin_created_at = checkin.created_at.replace(
-                    tzinfo=timezone.utc)
-            else:
-                checkin_created_at = checkin.created_at
+            checkin_created_at = (
+                checkin.created_at.replace(tzinfo=timezone.utc)
+                if checkin.created_at.tzinfo is None
+                else checkin.created_at
+            )
             allowed_to_chat = (now - checkin_created_at) < time_limit
 
-            # Get photo URLs for this check-in
             photo_query = select(CheckInPhoto).where(
-                CheckInPhoto.check_in_id == checkin.id)
+                CheckInPhoto.check_in_id == checkin.id
+            )
             photo_result = await db.execute(photo_query)
             photos = photo_result.scalars().all()
             raw_photo_urls = [photo.url for photo in photos if photo.url]
             signed_photo_urls = _convert_to_signed_urls(raw_photo_urls)
 
             if not signed_photo_urls and checkin.photo_url:
-                single_signed = _convert_single_to_signed_url(
-                    checkin.photo_url)
+                single_signed = _convert_single_to_signed_url(checkin.photo_url)
                 if single_signed:
                     signed_photo_urls = [single_signed]
 
-            checkin_resp = CheckInResponse(
-                id=checkin.id,
-                user_id=checkin.user_id,
-                place_id=checkin.place_id,
-                note=checkin.note,
-                visibility=checkin.visibility,
-                created_at=checkin.created_at,
-                expires_at=checkin.expires_at,
-                latitude=checkin.latitude,
-                longitude=checkin.longitude,
-                # Backward compatibility
-                photo_url=signed_photo_urls[0] if signed_photo_urls else _convert_single_to_signed_url(
-                    checkin.photo_url),
-                photo_urls=signed_photo_urls,
-                allowed_to_chat=allowed_to_chat,
-            )
-            checkin_responses.append(checkin_resp)
+            if not signed_photo_urls and place_photo_candidates:
+                signed_photo_urls = place_photo_candidates[:1]
 
-        # Create place stats
+            aggregated_photo_urls.extend(signed_photo_urls)
+
+            checkin_responses.append(
+                CheckInResponse(
+                    id=checkin.id,
+                    user_id=checkin.user_id,
+                    place_id=checkin.place_id,
+                    note=checkin.note,
+                    visibility=checkin.visibility,
+                    created_at=checkin.created_at,
+                    expires_at=checkin.expires_at,
+                    latitude=checkin.latitude,
+                    longitude=checkin.longitude,
+                    photo_url=(
+                        signed_photo_urls[0]
+                        if signed_photo_urls
+                        else _convert_single_to_signed_url(checkin.photo_url)
+                    ),
+                    photo_urls=signed_photo_urls,
+                    allowed_to_chat=allowed_to_chat,
+                )
+            )
+
         place_stats = PlaceStats(
             place_id=place.id,
             average_rating=place.rating,
@@ -951,8 +1065,21 @@ async def get_place_details(
             active_checkins=len(recent_checkins),
         )
 
-        # Create enhanced place response
-        enhanced_response = EnhancedPlaceResponse(
+        if place_photo_candidates:
+            aggregated_photo_urls[0:0] = place_photo_candidates
+
+        seen_urls: set[str] = set()
+        unique_photos: list[str] = []
+        for url in aggregated_photo_urls:
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                unique_photos.append(url)
+
+        primary_photo = unique_photos[0] if unique_photos else None
+        if not primary_photo and place_photo_candidates:
+            primary_photo = place_photo_candidates[0]
+
+        return EnhancedPlaceResponse(
             id=place.id,
             name=place.name,
             address=place.address,
@@ -965,18 +1092,17 @@ async def get_place_details(
             rating=place.rating,
             description=place.description,
             price_tier=place.price_tier,
+            photo_url=primary_photo,
+            photos=unique_photos,
             created_at=place.created_at,
             stats=place_stats,
             current_checkins=len(recent_checkins),
-            # TODO: Calculate total check-ins
-            total_checkins=len(recent_checkins),
+            total_checkins=len(recent_checkins),  # TODO: Calculate actual total check-ins
             recent_reviews=0,  # TODO: Calculate recent reviews
-            # Count check-ins with photos
-            photos_count=len([c for c in checkin_responses if c.photo_urls]),
+            photos_count=len(unique_photos),
             is_checked_in=False,  # TODO: Check if current user is checked in
+            is_saved=is_saved,
         )
-
-        return enhanced_response
 
     except HTTPException:
         raise
@@ -1012,18 +1138,33 @@ async def get_place_photos(
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
 
-        # Get photos from check-ins for this place
-        photos_query = select(CheckInPhoto.url).join(
-            CheckIn, CheckInPhoto.check_in_id == CheckIn.id
-        ).where(
-            CheckIn.place_id == place_id,
-            CheckInPhoto.url.isnot(None)
-        ).offset(offset).limit(limit)
+        photos_query = (
+            select(CheckInPhoto.url)
+            .join(CheckIn, CheckInPhoto.check_in_id == CheckIn.id)
+            .where(
+                CheckIn.place_id == place_id,
+                CheckInPhoto.url.isnot(None),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
 
         result = await db.execute(photos_query)
         photos = result.scalars().all()
 
-        return _convert_to_signed_urls([p for p in photos if p])
+        signed_photos = _convert_to_signed_urls([p for p in photos if p])
+
+        place_photo_candidates = _collect_place_photos(place)
+        ordered = place_photo_candidates + signed_photos
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for url in ordered:
+            if url and url not in seen:
+                seen.add(url)
+                deduped.append(url)
+
+        return deduped
 
     except HTTPException:
         raise
@@ -1103,10 +1244,11 @@ async def get_whos_here(
     """
     try:
         from ..config import settings
-        
+
         # Get recent check-ins for this place (within chat window from config)
         chat_window_hours = settings.place_chat_window_hours
-        time_limit = datetime.now(timezone.utc) - timedelta(hours=chat_window_hours)
+        time_limit = datetime.now(timezone.utc) - \
+            timedelta(hours=chat_window_hours)
 
         query = select(CheckIn).join(User).where(
             and_(
@@ -1177,7 +1319,6 @@ async def create_check_in(
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
 
-        # Create check-in
         default_vis = "public"
         check_in = CheckIn(
             user_id=current_user.id,
@@ -1192,9 +1333,6 @@ async def create_check_in(
         db.add(check_in)
         await db.commit()
         await db.refresh(check_in)
-
-        # Create activity (removed - activity router not used)
-        # await create_checkin_activity(check_in, db)
 
         return CheckInResponse(
             id=check_in.id,
@@ -1245,7 +1383,6 @@ async def create_check_in_full(
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
 
-        # Create check-in
         default_vis = "public"
         check_in = CheckIn(
             user_id=current_user.id,
@@ -1258,26 +1395,27 @@ async def create_check_in_full(
         )
 
         db.add(check_in)
-        await db.flush()  # Get the ID
+        await db.flush()  # Get the ID before committing
 
-        # Handle photo uploads
-        photo_urls = []
+        photo_urls: list[str] = []
         if photos:
             storage_service = StorageService()
             for photo in photos:
                 try:
-                    photo_url = await storage_service.upload_photo(photo, f"checkins/{check_in.id}")
+                    photo_url = await storage_service.upload_photo(
+                        photo,
+                        f"checkins/{check_in.id}",
+                    )
                     if photo_url:
-                        # Save photo to database
-                        checkin_photo = CheckInPhoto(
-                            check_in_id=check_in.id,
-                            url=photo_url
+                        db.add(
+                            CheckInPhoto(
+                                check_in_id=check_in.id,
+                                url=photo_url,
+                            )
                         )
-                        db.add(checkin_photo)
                         photo_urls.append(photo_url)
-                except Exception as e:
-                    logging.warning(f"Failed to upload photo: {e}")
-                    # Continue with other photos
+                except Exception as upload_error:
+                    logging.warning("Failed to upload photo: %s", upload_error)
 
         await db.commit()
         await db.refresh(check_in)
@@ -1335,7 +1473,6 @@ async def save_place(
         desired_name = normalize_collection_name(payload.list_name)
         await ensure_default_collection(db, current_user.id)
 
-        # Check if already saved in the same collection (one collection per place rule)
         existing_query = select(SavedPlace).where(
             and_(
                 SavedPlace.user_id == current_user.id,
@@ -1346,8 +1483,22 @@ async def save_place(
         existing = existing_result.scalar_one_or_none()
 
         if existing and normalize_collection_name(existing.list_name) == desired_name:
-            raise HTTPException(
-                status_code=400, detail="Place already saved in this collection")
+            # Idempotent response when already saved in the desired collection
+            await db.refresh(existing)
+            collection_name = (
+                existing.collection.name
+                if existing.collection
+                else existing.list_name
+            )
+            return SavedPlaceResponse(
+                id=existing.id,
+                user_id=existing.user_id,
+                place_id=existing.place_id,
+                collection_id=existing.collection_id,
+                list_name=collection_name,
+                created_at=existing.created_at,
+                place=place,
+            )
 
         saved_place = await ensure_saved_place_entry(
             db,
@@ -1359,7 +1510,11 @@ async def save_place(
         await db.commit()
         await db.refresh(saved_place)
 
-        collection_name = saved_place.collection.name if saved_place.collection else saved_place.list_name
+        collection_name = (
+            saved_place.collection.name
+            if saved_place.collection
+            else saved_place.list_name
+        )
 
         return SavedPlaceResponse(
             id=saved_place.id,
@@ -1382,7 +1537,8 @@ async def save_place(
 @router.delete("/saved/{place_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def unsave_place(
     place_id: int,
-    collection_name: str = Query(..., description="Collection name"),
+    collection_name: Optional[str] = Query(
+        None, description="Optional collection name. If omitted, any saved instance will be removed."),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(JWTService.get_current_user),
 ):
@@ -1392,20 +1548,20 @@ async def unsave_place(
     **Authentication Required:** Yes
     """
     try:
-        normalized_name = normalize_collection_name(collection_name)
-
         # Find saved place entry for this user/place and collection
-        query = (
-            select(SavedPlace)
-            .join(UserCollection, SavedPlace.collection_id == UserCollection.id)
-            .where(
-                and_(
-                    SavedPlace.user_id == current_user.id,
-                    SavedPlace.place_id == place_id,
-                    func.lower(UserCollection.name) == normalized_name.lower(),
-                )
-            )
-        )
+        query = select(SavedPlace).join(
+            UserCollection, SavedPlace.collection_id == UserCollection.id)
+
+        filters = [
+            SavedPlace.user_id == current_user.id,
+            SavedPlace.place_id == place_id,
+        ]
+
+        if collection_name:
+            normalized_name = normalize_collection_name(collection_name)
+            filters.append(func.lower(UserCollection.name) == normalized_name.lower())
+
+        query = query.where(and_(*filters))
         result = await db.execute(query)
         saved_place = result.scalar_one_or_none()
 
@@ -1417,7 +1573,6 @@ async def unsave_place(
             db,
             current_user.id,
             place_id,
-            list_name=saved_place.list_name,
             collection_id=saved_place.collection_id,
         )
         await db.delete(saved_place)

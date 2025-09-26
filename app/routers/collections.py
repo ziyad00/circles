@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..database import get_db
 from ..services.collection_sync import ensure_default_collection
 from ..services.jwt_service import JWTService
@@ -39,10 +40,16 @@ def _convert_to_signed_url(url: str | None) -> str | None:
         return None
     if url.startswith("http"):
         return url
-    try:
-        return StorageService.generate_signed_url(url)
-    except Exception:
-        return url
+    
+    # For local storage, return the full URL
+    if settings.storage_backend == "local":
+        return f"http://localhost:8000{url}"
+    else:
+        # For S3, generate signed URL
+        try:
+            return StorageService.generate_signed_url(url)
+        except Exception:
+            return url
 
 
 def _convert_to_signed_urls(urls: List[str]) -> List[str]:
@@ -90,8 +97,8 @@ async def _fetch_collection_responses(
         photos_query = (
             select(CheckInPhoto.url)
             .join(CheckIn, CheckInPhoto.check_in_id == CheckIn.id)
-            .join(
-                UserCollectionPlace,
+        .join(
+            UserCollectionPlace,
                 UserCollectionPlace.place_id == CheckIn.place_id,
             )
             .where(
@@ -282,7 +289,11 @@ async def get_collection_items(
                 photo_urls=combined_photo_urls,
                 checkin_count=checkin_count or 0,
                 user_checkin_photos=signed_user_photos,
-                added_at=association.added_at or collection.created_at or datetime.now(timezone.utc),
+                added_at=(
+                    association.added_at
+                    or collection.created_at
+                    or datetime.now(timezone.utc)
+                ),
             )
         )
 

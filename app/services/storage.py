@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from typing import Optional
 
 from ..config import settings
@@ -74,6 +75,30 @@ class StorageService:
         if settings.storage_backend == "s3":
             return await StorageService._save_checkin_s3(check_in_id, filename, content)
         return await StorageService._save_checkin_local(check_in_id, filename, content)
+
+    @staticmethod
+    async def upload_photo(file, key_prefix: str) -> str:
+        """Backward compatible helper used by older routers to upload photos."""
+        if file is None:
+            raise ValueError("No file provided for upload")
+
+        filename = getattr(file, "filename", None) or "upload.jpg"
+        content = await file.read()
+        _validate_image_or_raise(filename, content)
+
+        key_prefix = (key_prefix or "").strip("/ ")
+
+        try:
+            if key_prefix.startswith("checkins/"):
+                check_in_id = int(key_prefix.split("/", 1)[1].split("/", 1)[0])
+                return await StorageService.save_checkin_photo(check_in_id, filename, content)
+            if key_prefix.startswith("avatars/"):
+                user_id = int(key_prefix.split("/", 1)[1].split("/", 1)[0])
+                return await StorageService.save_avatar(user_id, filename, content)
+        except (IndexError, ValueError) as exc:
+            logger.warning("Failed to parse upload key '%s': %s", key_prefix, exc)
+
+        return await StorageService._save_generic(key_prefix, filename, content)
 
     @staticmethod
     async def _save_local(review_id: int, filename: str, content: bytes) -> str:
@@ -192,7 +217,6 @@ class StorageService:
     async def _save_checkin_s3(check_in_id: int, filename: str, content: bytes) -> str:
         import boto3
         from botocore.config import Config as BotoConfig
-        import asyncio
 
         cfg = StorageService._resolved_s3_config()
 
@@ -223,6 +247,60 @@ class StorageService:
         key = await asyncio.to_thread(_upload_checkin_to_s3)
 
         # Return the S3 key instead of full URL - signed URLs will be generated on-demand
+        return key
+
+    @staticmethod
+    async def _save_generic(path: str, filename: str, content: bytes) -> str:
+        if settings.storage_backend == "s3":
+            return await StorageService._save_generic_s3(path, filename, content)
+        return await StorageService._save_generic_local(path, filename, content)
+
+    @staticmethod
+    async def _save_generic_local(path: str, filename: str, content: bytes) -> str:
+        sanitized = path.strip("/ ") if path else "uploads"
+        media_root = os.path.abspath(os.path.join(os.getcwd(), "media"))
+        target_dir = os.path.join(media_root, sanitized)
+        os.makedirs(target_dir, exist_ok=True)
+        target_path = os.path.join(target_dir, filename)
+        with open(target_path, "wb") as f:
+            f.write(content)
+        return f"/media/{sanitized}/{filename}"
+
+    @staticmethod
+    async def _save_generic_s3(path: str, filename: str, content: bytes) -> str:
+        import boto3
+        from botocore.config import Config as BotoConfig
+
+        cfg = StorageService._resolved_s3_config()
+        if not cfg["bucket"]:
+            raise ValueError(
+                "S3 bucket is not configured. Set S3_BUCKET or APP_S3_BUCKET.")
+
+        sanitized = path.strip("/ ") if path else "uploads"
+
+        def _upload_generic_to_s3():
+            session = boto3.session.Session(
+                aws_access_key_id=settings.s3_access_key_id,
+                aws_secret_access_key=settings.s3_secret_access_key,
+                region_name=cfg["region"],
+            )
+            s3 = session.client(
+                "s3",
+                endpoint_url=cfg["endpoint"],
+                config=BotoConfig(
+                    s3={"addressing_style": "path" if cfg["use_path_style"] else "auto"}),
+            )
+            key = f"{sanitized}/{filename}"
+            bucket_name = cfg["bucket"] or "circles-media-259c"
+            s3.put_object(
+                Bucket=bucket_name,
+                Key=key,
+                Body=content,
+                ContentType=_guess_content_type(filename),
+            )
+            return key
+
+        key = await asyncio.to_thread(_upload_generic_to_s3)
         return key
 
     @staticmethod

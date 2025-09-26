@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -56,12 +57,15 @@ def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
     signed_urls: list[str] = []
     for url in photo_urls:
         if url and not url.startswith("http"):
-            try:
-                signed_urls.append(StorageService.generate_signed_url(url))
-            except Exception as exc:  # pragma: no cover - fallback path
-                logger.warning("Failed to sign photo URL %s: %s", url, exc)
-                signed_urls.append(url)
-        else:
+            if settings.storage_backend == "local":
+                signed_urls.append(f"http://localhost:8000{url}")
+            else:
+                try:
+                    signed_urls.append(StorageService.generate_signed_url(url))
+                except Exception as exc:  # pragma: no cover - fallback path
+                    logger.warning("Failed to sign photo URL %s: %s", url, exc)
+                    signed_urls.append(url)
+        elif url:
             signed_urls.append(url)
     return signed_urls
 
@@ -72,6 +76,8 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
         return None
 
     if not photo_url.startswith("http"):
+        if settings.storage_backend == "local":
+            return f"http://localhost:8000{photo_url}"
         try:
             return StorageService.generate_signed_url(photo_url)
         except Exception as exc:  # pragma: no cover - fallback path
@@ -83,8 +89,7 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
         try:
             if "s3.amazonaws.com" in photo_url and "/" in photo_url:
                 if "/circles-media" in photo_url:
-                    s3_key = photo_url.split(
-                        "/circles-media", 1)[1].lstrip("/")
+                    s3_key = photo_url.split("/circles-media", 1)[1].lstrip("/")
                 else:
                     s3_key = photo_url.split(".s3.amazonaws.com/", 1)[1]
             else:
@@ -95,7 +100,34 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
                 "Failed to re-sign S3 photo URL %s: %s", photo_url, exc)
             return photo_url
 
-        return photo_url
+    return photo_url
+
+
+def _collect_place_photos(place: Place) -> list[str]:
+    photo_candidates: list[str] = []
+
+    primary = _convert_single_to_signed_url(getattr(place, "photo_url", None))
+    if primary:
+        photo_candidates.append(primary)
+
+    additional = getattr(place, "additional_photos", None)
+    if additional:
+        try:
+            parsed = json.loads(additional) if isinstance(additional, str) else additional
+            if isinstance(parsed, list):
+                photo_candidates.extend(
+                    _convert_to_signed_urls([p for p in parsed if isinstance(p, str)])
+                )
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse additional_photos for place %s", place.id)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for url in photo_candidates:
+        if url and url not in seen:
+            seen.add(url)
+            unique.append(url)
+    return unique
 
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -188,10 +220,8 @@ async def get_user_profile(
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        # Check if current user can view this profile
-            if not await can_view_profile(db, user, current_user.id):
-                raise HTTPException(
-                    status_code=403, detail="Cannot view this profile")
+        if not await can_view_profile(db, user, current_user.id):
+            raise HTTPException(status_code=403, detail="Cannot view this profile")
 
         # Check if current user follows this user
         follow_query = select(Follow).where(
@@ -507,6 +537,17 @@ async def get_user_checkins(
         for checkin_id, url in photo_rows.all():
             photos_by_checkin.setdefault(checkin_id, []).append(url)
 
+        place_ids = {ci.place_id for ci in paginated_checkins}
+        place_map: dict[int, Place] = {}
+        place_photo_map: dict[int, list[str]] = {}
+        if place_ids:
+            place_rows = await db.execute(
+                select(Place).where(Place.id.in_(place_ids))
+            )
+            for place in place_rows.scalars().all():
+                place_map[place.id] = place
+                place_photo_map[place.id] = _collect_place_photos(place)
+
         chat_window = timedelta(hours=settings.place_chat_window_hours)
         now = datetime.now(timezone.utc)
 
@@ -522,12 +563,24 @@ async def get_user_checkins(
                 if single_signed:
                     signed_photos = [single_signed]
 
+            if not signed_photos:
+                place_photos = place_photo_map.get(checkin.place_id)
+                if place_photos:
+                    signed_photos = place_photos[:1]
+
             if checkin.created_at.tzinfo is None:
                 created_at = checkin.created_at.replace(tzinfo=timezone.utc)
             else:
                 created_at = checkin.created_at
 
             allowed_to_chat = (now - created_at) <= chat_window
+
+            photo_url = signed_photos[0] if signed_photos else _convert_single_to_signed_url(
+                checkin.photo_url)
+            if not photo_url:
+                place_photos = place_photo_map.get(checkin.place_id)
+                if place_photos:
+                    photo_url = place_photos[0]
 
             checkin_responses.append(
                 CheckInResponse(
@@ -540,8 +593,7 @@ async def get_user_checkins(
                     expires_at=checkin.expires_at,
                     latitude=checkin.latitude,
                     longitude=checkin.longitude,
-                    photo_url=signed_photos[0] if signed_photos else _convert_single_to_signed_url(
-                        checkin.photo_url),
+                    photo_url=photo_url,
                     photo_urls=signed_photos,
                     allowed_to_chat=allowed_to_chat,
                 )
@@ -588,7 +640,6 @@ async def list_user_collections(
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        # Check if current user can view this user's collections
         if not await can_view_profile(db, user, current_user.id):
             raise HTTPException(
                 status_code=403, detail="Cannot view this user's collections")

@@ -337,6 +337,8 @@ class EnhancedPlaceResponse(BaseModel):
     description: Optional[str] = None
     # Price tier as $, $$, $$$, $$$$
     price_tier: Optional[str] = None
+    photo_url: Optional[str] = None
+    photos: list[str] = []
     # Human-friendly opening hours string (if available)
     opening_hours: Optional[str] = None
     # Direct link to Google Maps directions/search for this place

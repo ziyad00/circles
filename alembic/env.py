@@ -28,17 +28,32 @@ target_metadata = Base.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
-# must be postgresql+asyncpg://...
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Ensure Alembic always uses a synchronous driver
+
+
+def _synchronous_url(async_url: str) -> str:
+    url = make_url(async_url)
+    driver = url.drivername
+
+    if driver == "postgresql+asyncpg":
+        url = url.set(drivername="postgresql+psycopg")
+    elif driver in {"postgresql+psycopg_async", "postgresql+psycopg2"}:
+        url = url.set(drivername="postgresql+psycopg")
+    elif driver == "sqlite+aiosqlite":
+        url = url.set(drivername="sqlite+pysqlite")
+    elif "+" in driver:
+        # Fallback: drop async suffix if present
+        url = url.set(drivername=driver.split("+")[0])
+
+    return str(url)
+
+
+sync_database_url = _synchronous_url(settings.database_url)
+config.set_main_option("sqlalchemy.url", sync_database_url)
 
 
 def get_url():
-    # Build a sync URL for Alembic using psycopg (v3) driver
-    parsed_url = make_url(settings.database_url)
-    return (
-        f"postgresql+psycopg://{parsed_url.username}:{parsed_url.password}"
-        f"@{parsed_url.host}:{parsed_url.port}/{parsed_url.database}"
-    )
+    return sync_database_url
 
 
 def run_migrations_offline() -> None:

@@ -498,8 +498,8 @@ class EnhancedPlaceDataService:
                         params.pop("sort", None)
                         logging.info(
                             f"Retrying nearby without sort parameter: {params}")
-                    resp = await client.get(url, headers=headers, params=params)
-                    logging.info(
+                        resp = await client.get(url, headers=headers, params=params)
+                        logging.info(
                         f"Nearby retry response status: {resp.status_code}")
 
                 if resp.status_code != 200:
