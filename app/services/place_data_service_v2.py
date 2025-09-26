@@ -171,7 +171,6 @@ class EnhancedPlaceDataService:
                             "locality": location.get("city"),
                             "region": location.get("state"),
                             "country": location.get("country"),
-                            "postal_code": location.get("postalCode"),
                             "formatted_address": location.get("formattedAddress", [None])[0] if location.get("formattedAddress") else None
                         },
                         "latitude": location.get("lat"),
@@ -2015,7 +2014,6 @@ class EnhancedPlaceDataService:
                 place_metadata=json.dumps(place_data.get('metadata', {})),
                 last_enriched_at=datetime.now(timezone.utc),
                 # Add new Foursquare fields
-                postal_code=place_data.get('postal_code'),
                 cross_street=place_data.get('cross_street'),
                 formatted_address=place_data.get('formatted_address'),
                 distance_meters=place_data.get('distance_meters'),
