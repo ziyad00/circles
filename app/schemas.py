@@ -286,6 +286,45 @@ class PaginatedWhosHere(BaseModel):
     offset: int
 
 
+class PlaceChatRoom(BaseModel):
+    id: int
+    place_id: int
+    place_name: str
+    created_at: datetime
+    expires_at: datetime
+    active_users_count: int
+    is_active: bool
+    has_joined: bool
+    last_message: Optional[str] = None
+    last_message_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlaceChatMessageCreate(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000)
+
+
+class PlaceChatMessageResponse(BaseModel):
+    id: str
+    room_id: int
+    place_id: int
+    user_id: int
+    author_id: str
+    author_name: str
+    author_avatar_url: Optional[str] = None
+    text: str
+    created_at: datetime
+    status: str = "sent"
+
+
+class PaginatedPlaceChatMessages(BaseModel):
+    items: list[PlaceChatMessageResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class UserSearchFilters(BaseModel):
     q: Optional[str] = None
     has_avatar: Optional[bool] = None

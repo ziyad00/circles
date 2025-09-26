@@ -9,7 +9,7 @@ import logging
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
-from ..models import DMThread, DMParticipantState, DMMessage, User, CheckIn
+from ..models import DMThread, DMParticipantState, DMMessage, User, CheckIn, PlaceChatMessage
 from ..config import settings
 from ..services.storage import StorageService
 from ..services.place_chat_service import create_private_reply_from_place_chat
@@ -111,13 +111,49 @@ async def place_chat_ws(websocket: WebSocket, place_id: int, db: AsyncSession = 
                 text = (data.get("text") or "").strip()
                 if not text:
                     continue
-                payload = {
-                    "type": "message",
+                if len(text) > 2000:
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": "Message too long (max 2000 characters)",
+                    })
+                    continue
+
+                chat_message = PlaceChatMessage(
+                    place_id=place_id,
+                    user_id=user_id,
+                    text=text,
+                )
+                db.add(chat_message)
+                try:
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": "Failed to send message",
+                    })
+                    continue
+
+                await db.refresh(chat_message)
+                sender_info = await _get_user_info(db, user_id)
+                message_payload = {
+                    "id": str(chat_message.id),
+                    "room_id": place_id,
                     "place_id": place_id,
                     "user_id": user_id,
-                    "text": text,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "author_id": str(user_id),
+                    "author_name": sender_info.get("name") or f"User {user_id}",
+                    "author_avatar_url": sender_info.get("avatar_url"),
+                    "text": chat_message.text,
+                    "created_at": chat_message.created_at.isoformat(),
+                    "status": "sent",
                 }
+                payload = {
+                    "type": "message",
+                    "message": message_payload,
+                }
+                # Echo to sender
+                await websocket.send_json(payload)
                 await manager.broadcast(thread_id, user_id, payload)
                 continue
 

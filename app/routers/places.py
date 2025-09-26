@@ -41,6 +41,10 @@ from ..schemas import (
     ExternalPlaceResult,
     DMMessageResponse,
     PlaceChatPrivateReply,
+    PlaceChatRoom,
+    PlaceChatMessageCreate,
+    PlaceChatMessageResponse,
+    PaginatedPlaceChatMessages,
 )
 from ..models import (
     Place,
@@ -52,6 +56,7 @@ from ..models import (
     CheckInPhoto,
     ExternalSearchSnapshot,
     UserCollection,
+    PlaceChatMessage,
 )
 from ..services.collection_sync import (
     ensure_default_collection,
@@ -60,12 +65,13 @@ from ..services.collection_sync import (
     remove_saved_place_membership,
 )
 from ..database import get_db
-from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, desc, asc, text
 from sqlalchemy.orm import selectinload, joinedload
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, timedelta
+from .dms_ws import manager
 
 router = APIRouter(prefix="/places", tags=["places"])
 
@@ -227,6 +233,162 @@ def _collect_place_photos(place: Place) -> list[str]:
             seen.add(url)
             unique.append(url)
     return unique
+
+
+async def _ensure_user_can_chat(
+    db: AsyncSession,
+    place_id: int,
+    user_id: int,
+) -> CheckIn:
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(hours=int(settings.place_chat_window_hours))
+
+    query = (
+        select(CheckIn)
+        .where(
+            CheckIn.user_id == user_id,
+            CheckIn.place_id == place_id,
+            CheckIn.created_at >= window_start,
+            CheckIn.expires_at > now,
+        )
+        .order_by(desc(CheckIn.created_at))
+    )
+
+    result = await db.execute(query)
+    checkin = result.scalar_one_or_none()
+    if not checkin:
+        raise HTTPException(
+            status_code=403,
+            detail="You need a recent check-in at this place to use the chat",
+        )
+    return checkin
+
+
+async def _build_place_chat_room(
+    db: AsyncSession,
+    place: Place,
+    current_user_id: int,
+) -> PlaceChatRoom:
+    now = datetime.now(timezone.utc)
+    window_hours = int(settings.place_chat_window_hours)
+    window_delta = timedelta(hours=window_hours)
+    window_start = now - window_delta
+
+    active_users_query = select(func.count(func.distinct(CheckIn.user_id))).where(
+        CheckIn.place_id == place.id,
+        CheckIn.created_at >= window_start,
+        CheckIn.expires_at > now,
+    )
+    active_users_count = int((await db.execute(active_users_query)).scalar() or 0)
+
+    latest_checkin_query = select(func.max(CheckIn.created_at)).where(
+        CheckIn.place_id == place.id,
+        CheckIn.created_at >= window_start,
+    )
+    latest_checkin = (await db.execute(latest_checkin_query)).scalar()
+    expires_at = (latest_checkin + window_delta) if latest_checkin else now
+
+    membership_query = select(CheckIn.id).where(
+        CheckIn.user_id == current_user_id,
+        CheckIn.place_id == place.id,
+        CheckIn.created_at >= window_start,
+        CheckIn.expires_at > now,
+    )
+    has_joined = bool((await db.execute(membership_query)).scalar_one_or_none())
+
+    last_message_query = (
+        select(PlaceChatMessage)
+        .where(PlaceChatMessage.place_id == place.id)
+        .order_by(desc(PlaceChatMessage.created_at))
+        .limit(1)
+    )
+    last_message_row = (await db.execute(last_message_query)).scalar_one_or_none()
+
+    last_message_text = last_message_row.text if last_message_row else None
+    last_message_at = last_message_row.created_at if last_message_row else None
+
+    created_at = place.created_at or now
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    return PlaceChatRoom(
+        id=place.id,
+        place_id=place.id,
+        place_name=place.name,
+        created_at=created_at,
+        expires_at=expires_at,
+        active_users_count=active_users_count,
+        is_active=active_users_count > 0 and expires_at > now,
+        has_joined=has_joined,
+        last_message=last_message_text,
+        last_message_at=last_message_at,
+    )
+
+
+def _serialize_place_chat_message_response(
+    message: PlaceChatMessage,
+    user: User,
+) -> PlaceChatMessageResponse:
+    author_name = user.name or user.username or f"User {user.id}"
+    avatar = _convert_single_to_signed_url(user.avatar_url)
+    created_at = message.created_at
+    if created_at and created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+
+    return PlaceChatMessageResponse(
+        id=str(message.id),
+        room_id=message.place_id,
+        place_id=message.place_id,
+        user_id=user.id,
+        author_id=str(user.id),
+        author_name=author_name,
+        author_avatar_url=avatar,
+        text=message.text,
+        created_at=created_at,
+        status="sent",
+    )
+
+
+async def _get_place_or_404(db: AsyncSession, place_id: int) -> Place:
+    res = await db.execute(select(Place).where(Place.id == place_id))
+    place = res.scalar_one_or_none()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+    return place
+
+
+async def _send_place_chat_payload_to_user(
+    place_id: int,
+    user_id: int,
+    payload: dict,
+) -> None:
+    thread_id = -int(place_id)
+    connection = manager.active.get(thread_id, {}).get(user_id)
+    if not connection:
+        return
+    websocket, _ = connection
+    try:
+        await websocket.send_json(payload)
+    except Exception:
+        manager.disconnect(thread_id, user_id, websocket)
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:  # pragma: no cover - validation path
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid datetime format. Use ISO 8601.",
+        ) from exc
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed
 
 # ============================================================================
 # LOOKUP ENDPOINTS (Used by frontend)
@@ -1112,7 +1274,7 @@ async def get_place_details(
             status_code=500, detail="Failed to get place details")
 
 
-@router.get("/{place_id}/photos", response_model=list[str])
+@router.get("/{place_id}/photos", response_model=PaginatedPhotos)
 async def get_place_photos(
     place_id: int,
     limit: int = Query(20, ge=1, le=100),
@@ -1121,16 +1283,14 @@ async def get_place_photos(
     current_user: User = Depends(JWTService.get_current_user),
 ):
     """
-    Get photos for a specific place.
+    Get photos for a specific place (check-in photos with signed URLs).
 
     **Authentication Required:** Yes
     """
     try:
-        # Validate place_id
         if place_id <= 0:
             raise HTTPException(status_code=400, detail="Invalid place ID")
 
-        # Check if place exists
         place_query = select(Place).where(Place.id == place_id)
         place_result = await db.execute(place_query)
         place = place_result.scalar_one_or_none()
@@ -1138,33 +1298,66 @@ async def get_place_photos(
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
 
-        photos_query = (
-            select(CheckInPhoto.url)
+        total_query = (
+            select(func.count(CheckInPhoto.id))
             .join(CheckIn, CheckInPhoto.check_in_id == CheckIn.id)
-            .where(
-                CheckIn.place_id == place_id,
-                CheckInPhoto.url.isnot(None),
-            )
+            .where(CheckIn.place_id == place_id, CheckInPhoto.url.isnot(None))
+        )
+        total_result = await db.execute(total_query)
+        total = total_result.scalar() or 0
+
+        photos_query = (
+            select(CheckInPhoto, CheckIn)
+            .join(CheckIn, CheckInPhoto.check_in_id == CheckIn.id)
+            .where(CheckIn.place_id == place_id, CheckInPhoto.url.isnot(None))
+            .order_by(desc(CheckInPhoto.created_at))
             .offset(offset)
             .limit(limit)
         )
 
-        result = await db.execute(photos_query)
-        photos = result.scalars().all()
+        rows = await db.execute(photos_query)
+        photo_rows = rows.all()
 
-        signed_photos = _convert_to_signed_urls([p for p in photos if p])
+        items: list[PhotoResponse] = []
+        for photo, checkin in photo_rows:
+            signed_url = _convert_single_to_signed_url(photo.url)
+            items.append(
+                PhotoResponse(
+                    id=photo.id,
+                    user_id=checkin.user_id,
+                    place_id=checkin.place_id,
+                    review_id=None,
+                    url=signed_url or photo.url,
+                    caption=None,
+                    created_at=photo.created_at,
+                )
+            )
 
         place_photo_candidates = _collect_place_photos(place)
-        ordered = place_photo_candidates + signed_photos
 
-        deduped: list[str] = []
-        seen: set[str] = set()
-        for url in ordered:
-            if url and url not in seen:
-                seen.add(url)
-                deduped.append(url)
+        if not items and place_photo_candidates:
+            fallback_urls = place_photo_candidates[offset: offset + limit]
+            total = len(place_photo_candidates)
+            now_ts = datetime.now(timezone.utc)
+            for idx, url in enumerate(fallback_urls):
+                items.append(
+                    PhotoResponse(
+                        id=-(idx + 1),
+                        user_id=0,
+                        place_id=place.id,
+                        review_id=None,
+                        url=url,
+                        caption=None,
+                        created_at=place.created_at or now_ts,
+                    )
+                )
 
-        return deduped
+        return PaginatedPhotos(
+            items=items,
+            total=total if items else len(place_photo_candidates),
+            limit=limit,
+            offset=offset,
+        )
 
     except HTTPException:
         raise
@@ -1268,31 +1461,206 @@ async def get_whos_here(
         result = await db.execute(query)
         checkins = result.scalars().all()
 
-        # Convert to WhosHereItem
+        if not checkins:
+            return PaginatedWhosHere(
+                items=[],
+                total=total or 0,
+                limit=limit,
+                offset=offset,
+            )
+
+        checkin_ids = [checkin.id for checkin in checkins]
+        place_ids = {checkin.place_id for checkin in checkins}
+
+        photos_by_checkin: dict[int, list[str]] = {}
+        if checkin_ids:
+            photo_rows = await db.execute(
+                select(CheckInPhoto.check_in_id, CheckInPhoto.url)
+                .where(CheckInPhoto.check_in_id.in_(checkin_ids))
+                .order_by(CheckInPhoto.check_in_id)
+            )
+            for checkin_id, url in photo_rows.all():
+                if url:
+                    photos_by_checkin.setdefault(checkin_id, []).append(url)
+
+        place_photo_map: dict[int, list[str]] = {}
+        if place_ids:
+            place_rows = await db.execute(select(Place).where(Place.id.in_(place_ids)))
+            for place in place_rows.scalars():
+                place_photo_map[place.id] = _collect_place_photos(place)
+
         items = []
         for checkin in checkins:
-            # Get user info
             user_query = select(User).where(User.id == checkin.user_id)
             user_result = await db.execute(user_query)
             user = user_result.scalar_one_or_none()
 
-            if user:
-                item = WhosHereItem(
+            if not user:
+                continue
+
+            signed_photos = _convert_to_signed_urls(
+                photos_by_checkin.get(checkin.id, [])
+            )
+
+            if not signed_photos and checkin.photo_url:
+                single = _convert_single_to_signed_url(checkin.photo_url)
+                if single:
+                    signed_photos = [single]
+
+            if not signed_photos:
+                place_photos = place_photo_map.get(checkin.place_id)
+                if place_photos:
+                    signed_photos = place_photos[:1]
+
+            avatar_url = _convert_single_to_signed_url(user.avatar_url)
+
+            items.append(
+                WhosHereItem(
                     check_in_id=checkin.id,
                     user_id=user.id,
                     user_name=user.name or user.username,
                     username=user.username,
-                    user_avatar_url=user.avatar_url,
+                    user_avatar_url=avatar_url or user.avatar_url,
                     created_at=checkin.created_at,
-                    photo_urls=[]  # TODO: Get actual photo URLs from CheckInPhoto
+                    photo_urls=signed_photos,
                 )
-                items.append(item)
+            )
 
-        return PaginatedWhosHere(items=items, total=total, limit=limit, offset=offset)
+        return PaginatedWhosHere(
+            items=items,
+            total=total or len(items),
+            limit=limit,
+            offset=offset,
+        )
 
     except Exception as e:
         logging.error(f"Error getting who's here: {e}")
         raise HTTPException(status_code=500, detail="Failed to get who's here")
+
+# ============================================================================
+# PLACE CHAT ENDPOINTS (Room chat support)
+# ============================================================================
+
+
+@router.get("/{place_id}/chat/room", response_model=PlaceChatRoom)
+async def get_place_chat_room(
+    place_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    place = await _get_place_or_404(db, place_id)
+    return await _build_place_chat_room(db, place, current_user.id)
+
+
+@router.post("/{place_id}/chat/join", response_model=PlaceChatRoom)
+async def join_place_chat(
+    place_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    place = await _get_place_or_404(db, place_id)
+    await _ensure_user_can_chat(db, place_id, current_user.id)
+    return await _build_place_chat_room(db, place, current_user.id)
+
+
+@router.post("/{place_id}/chat/leave", status_code=status.HTTP_204_NO_CONTENT)
+async def leave_place_chat(
+    place_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    # Chat membership is derived from check-ins; this endpoint exists for client symmetry.
+    await _get_place_or_404(db, place_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{place_id}/chat/messages", response_model=PaginatedPlaceChatMessages)
+async def list_place_chat_messages(
+    place_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    since: Optional[str] = Query(
+        None, description="Return messages created after this ISO 8601 timestamp"
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    await _ensure_user_can_chat(db, place_id, current_user.id)
+    filters = [PlaceChatMessage.place_id == place_id]
+
+    window_start = datetime.now(timezone.utc) - timedelta(
+        hours=int(settings.place_chat_window_hours)
+    )
+    filters.append(PlaceChatMessage.created_at >= window_start)
+
+    since_dt: Optional[datetime] = None
+    if since:
+        since_dt = _parse_iso_datetime(since)
+        filters.append(PlaceChatMessage.created_at > since_dt)
+
+    total_query = select(func.count()).select_from(
+        select(PlaceChatMessage.id).where(*filters).subquery()
+    )
+    total = int((await db.execute(total_query)).scalar() or 0)
+
+    query = (
+        select(PlaceChatMessage, User)
+        .join(User, PlaceChatMessage.user_id == User.id)
+        .where(*filters)
+        .order_by(PlaceChatMessage.created_at.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+
+    rows = await db.execute(query)
+    items = [
+        _serialize_place_chat_message_response(message, user)
+        for message, user in rows.all()
+    ]
+
+    return PaginatedPlaceChatMessages(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/{place_id}/chat/messages", response_model=PlaceChatMessageResponse)
+async def create_place_chat_message(
+    place_id: int,
+    payload: PlaceChatMessageCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Message text cannot be empty")
+
+    place = await _get_place_or_404(db, place_id)
+    await _ensure_user_can_chat(db, place_id, current_user.id)
+
+    message = PlaceChatMessage(
+        place_id=place.id,
+        user_id=current_user.id,
+        text=text,
+    )
+    db.add(message)
+    await db.commit()
+    await db.refresh(message)
+
+    response_model = _serialize_place_chat_message_response(message, current_user)
+
+    payload_dict = {
+        "type": "message",
+        "message": response_model.model_dump(mode="json"),
+    }
+
+    # Notify other participants in the room
+    await manager.broadcast(-place_id, current_user.id, payload_dict)
+    await _send_place_chat_payload_to_user(place_id, current_user.id, payload_dict)
+
+    return response_model
 
 # ============================================================================
 # CHECK-IN ENDPOINTS (Used by frontend)

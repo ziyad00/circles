@@ -32,6 +32,72 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     await create_tables()
 
+    # Run database migration to add missing columns
+    try:
+        from .database import get_db
+        import asyncpg
+        import os
+        
+        async def add_missing_columns():
+            """Add missing columns to places table"""
+            db_url = os.getenv('APP_DATABASE_URL')
+            if not db_url:
+                logger.warning("APP_DATABASE_URL not found, skipping migration")
+                return
+            
+            # Convert SQLAlchemy URL to asyncpg format
+            if 'postgresql+asyncpg://' in db_url:
+                db_url = db_url.replace('postgresql+asyncpg://', 'postgresql://')
+            
+            try:
+                conn = await asyncpg.connect(db_url)
+                
+                # Check which columns exist
+                result = await conn.fetch('''
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'places'
+                ''')
+                existing_columns = {row['column_name'] for row in result}
+                logger.info(f'Existing columns: {sorted(existing_columns)}')
+                
+                # Define required columns from the model
+                required_columns = {
+                    'postal_code': 'VARCHAR',
+                    'cross_street': 'VARCHAR', 
+                    'formatted_address': 'TEXT',
+                    'distance_meters': 'FLOAT',
+                    'venue_created_at': 'TIMESTAMP WITH TIME ZONE',
+                    'photo_url': 'VARCHAR',
+                    'additional_photos': 'JSONB'
+                }
+                
+                # Add missing columns
+                added_columns = []
+                for column_name, column_type in required_columns.items():
+                    if column_name not in existing_columns:
+                        logger.info(f'Adding column: {column_name} {column_type}')
+                        await conn.execute(f'ALTER TABLE places ADD COLUMN {column_name} {column_type}')
+                        added_columns.append(column_name)
+                    else:
+                        logger.info(f'Column {column_name} already exists')
+                
+                if added_columns:
+                    logger.info(f'Successfully added columns: {added_columns}')
+                else:
+                    logger.info('All required columns already exist')
+                    
+            except Exception as e:
+                logger.error(f'Error adding columns: {e}')
+            finally:
+                if 'conn' in locals():
+                    await conn.close()
+        
+        await add_missing_columns()
+        
+    except Exception as e:
+        logger.error(f"Migration error: {e}")
+
     # Auto-seed Saudi cities data if needed
     # TODO: Temporarily disable auto-seeding to fix save errors
     # try:

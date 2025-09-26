@@ -3,6 +3,7 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
+import uuid
 
 Base = declarative_base()
 
@@ -320,6 +321,23 @@ class CheckInLike(Base):
     # Ensure a user can only like a check-in once
     __table_args__ = (UniqueConstraint(
         'check_in_id', 'user_id', name='uq_checkin_like'),)
+
+
+class PlaceChatMessage(Base):
+    __tablename__ = "place_chat_messages"
+
+    id = Column(String(36), primary_key=True,
+                default=lambda: str(uuid.uuid4()))
+    place_id = Column(Integer, ForeignKey(
+        "places.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey(
+        "users.id", ondelete="CASCADE"), nullable=False, index=True)
+    text = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True),
+                        server_default=func.now(), nullable=False)
+
+    place = relationship("Place")
+    user = relationship("User")
 
 
 class DMMessage(Base):
