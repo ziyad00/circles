@@ -74,6 +74,51 @@ router = APIRouter(prefix="/places", tags=["places"])
 logger = logging.getLogger(__name__)
 
 
+def _parse_time_window(time_window: str) -> timedelta:
+    """Parse time window string to timedelta object."""
+    try:
+        time_window = time_window.lower().strip()
+        if time_window.endswith('h'):
+            hours = int(time_window[:-1])
+            return timedelta(hours=hours)
+        elif time_window.endswith('d'):
+            days = int(time_window[:-1])
+            return timedelta(days=days)
+        else:
+            # Default to 24h if parsing fails
+            return timedelta(hours=24)
+    except (ValueError, AttributeError):
+        # Default to 24h if parsing fails
+        return timedelta(hours=24)
+
+
+async def _get_dynamic_limit_based_on_checkins(db: AsyncSession, time_window: str) -> int:
+    """Calculate dynamic limit based on current check-ins count in the time window."""
+    try:
+        # Parse time window
+        window_delta = _parse_time_window(time_window)
+        since_time = datetime.now(timezone.utc) - window_delta
+        
+        # Count check-ins in the time window
+        checkins_count_query = select(func.count(CheckIn.id)).where(
+            CheckIn.created_at >= since_time
+        )
+        result = await db.execute(checkins_count_query)
+        checkins_count = result.scalar() or 0
+        
+        # Calculate dynamic limit: minimum 3, maximum 50, based on check-ins
+        # Scale factor: every 10 check-ins adds 1 to the limit
+        dynamic_limit = max(3, min(50, 3 + (checkins_count // 10)))
+        
+        logger.info(f"Time window: {time_window}, Check-ins count: {checkins_count}, Dynamic limit: {dynamic_limit}")
+        return dynamic_limit
+        
+    except Exception as e:
+        logger.error(f"Error calculating dynamic limit: {e}")
+        # Fallback to default limit of 3
+        return 3
+
+
 def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
     """Convert raw storage keys to signed URLs when needed."""
     signed_urls: list[str] = []
@@ -440,7 +485,7 @@ async def search_places_advanced_flexible(
 async def get_trending_places(
     time_window: str = Query(
         "24h", description="Time window: 1h, 6h, 24h, 7d, 30d"),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(None, ge=1, le=100, description="Override dynamic limit (optional)"),
     offset: int = Query(0, ge=0),
     lat: float | None = Query(
         None, description="Latitude of the user location"),
@@ -486,6 +531,12 @@ async def get_trending_places(
     - Photos: 1 point each
     - Unique users: 2 points each
 
+    **Dynamic Limit:**
+    - If limit is not provided, automatically calculates based on current check-ins count
+    - Formula: min(50, max(3, 3 + (check_ins_count // 10)))
+    - Higher activity = more places returned (up to 50 max, minimum 3)
+    - Override with explicit limit parameter if needed
+
     **Foursquare Enhancement:**
     - Adds external discoveries when local results are insufficient
     - Saves new places to local database for future trending
@@ -494,8 +545,16 @@ async def get_trending_places(
     # Use enhanced place data service for trending places
     from ..config import settings as app_settings
     import logging
+    
+    # Calculate dynamic limit based on check-ins count if not provided
+    if limit is None:
+        limit = await _get_dynamic_limit_based_on_checkins(db, time_window)
+        logging.info(f"Using dynamic limit: {limit} (based on check-ins in {time_window})")
+    else:
+        logging.info(f"Using provided limit: {limit}")
+    
     logging.info(
-        f"Trending places request: lat={lat}, lng={lng}, limit={limit}, offset={offset}")
+        f"Trending places request: lat={lat}, lng={lng}, limit={limit}, offset={offset}, time_window={time_window}")
 
     # Coordinates are required for Foursquare trending API
     if lat is None or lng is None:
@@ -629,8 +688,9 @@ async def nearby_places(
     lat: float,
     lng: float,
     radius_m: int = 1000,
-    limit: int = 20,
+    limit: int = Query(None, ge=1, le=100, description="Override dynamic limit (optional)"),
     offset: int = 0,
+    time_window: str = Query("24h", description="Time window for dynamic limit calculation: 1h, 6h, 24h, 7d, 30d"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -653,6 +713,13 @@ async def nearby_places(
     - `lat`/`lng`: Search center coordinates
     - `radius_m`: Search radius in meters (default: 1000m)
     - `limit`/`offset`: Standard pagination
+    - `time_window`: Time window for dynamic limit calculation (default: 24h)
+
+    **Dynamic Limit:**
+    - If limit is not provided, automatically calculates based on current check-ins count
+    - Formula: min(50, max(3, 3 + (check_ins_count // 10)))
+    - Higher activity = more places returned (up to 50 max, minimum 3)
+    - Override with explicit limit parameter if needed
 
     **Use Cases:**
     - Discover nearby places with social context
@@ -661,10 +728,18 @@ async def nearby_places(
     """
     from ..config import settings as app_settings
     import logging
+    
+    # Calculate dynamic limit based on check-ins count if not provided
+    if limit is None:
+        limit = await _get_dynamic_limit_based_on_checkins(db, time_window)
+        logging.info(f"Using dynamic limit: {limit} (based on check-ins in {time_window})")
+    else:
+        logging.info(f"Using provided limit: {limit}")
+    
     print(
-        f"🚀 NEARBY ENDPOINT CALLED: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
+        f"🚀 NEARBY ENDPOINT CALLED: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}, time_window={time_window}")
     logging.info(
-        f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
+        f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}, time_window={time_window}")
 
     # Use the same pattern as trending endpoint for consistency
     if lat is None or lng is None:
@@ -932,7 +1007,7 @@ async def get_place_photos(
         result = await db.execute(photos_query)
         photos = result.scalars().all()
 
-        return list(photos)
+        return _convert_to_signed_urls([p for p in photos if p])
 
     except HTTPException:
         raise
@@ -1188,8 +1263,7 @@ async def create_check_in_full(
         await db.commit()
         await db.refresh(check_in)
 
-        # Create activity (removed - activity router not used)
-        # await create_checkin_activity(check_in, db)
+        signed_photo_urls = _convert_to_signed_urls(photo_urls)
 
         return CheckInResponse(
             id=check_in.id,
@@ -1201,8 +1275,8 @@ async def create_check_in_full(
             expires_at=check_in.expires_at,
             latitude=check_in.latitude,
             longitude=check_in.longitude,
-            photo_url=photo_urls[0] if photo_urls else None,
-            photo_urls=photo_urls,
+            photo_url=signed_photo_urls[0] if signed_photo_urls else None,
+            photo_urls=signed_photo_urls,
             allowed_to_chat=True,
         )
 
