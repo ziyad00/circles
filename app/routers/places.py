@@ -93,24 +93,31 @@ def _parse_time_window(time_window: str) -> timedelta:
 
 
 async def _get_dynamic_limit_based_on_checkins(db: AsyncSession, time_window: str) -> int:
-    """Calculate dynamic limit based on current check-ins count in the time window."""
+    """Calculate dynamic limit based on people who can currently chat (within chat window)."""
     try:
-        # Parse time window
-        window_delta = _parse_time_window(time_window)
-        since_time = datetime.now(timezone.utc) - window_delta
+        from ..config import settings
         
-        # Count check-ins in the time window
-        checkins_count_query = select(func.count(CheckIn.id)).where(
-            CheckIn.created_at >= since_time
+        # Use the chat window from config (default 12 hours)
+        chat_window_hours = settings.place_chat_window_hours
+        chat_since_time = datetime.now(timezone.utc) - timedelta(hours=chat_window_hours)
+        
+        # Count unique users who can currently chat (have check-ins within chat window)
+        # This represents people who are "present" and can interact
+        chat_users_count_query = select(func.count(func.distinct(CheckIn.user_id))).where(
+            and_(
+                CheckIn.created_at >= chat_since_time,
+                CheckIn.expires_at > datetime.now(timezone.utc)  # Check-in hasn't expired
+            )
         )
-        result = await db.execute(checkins_count_query)
-        checkins_count = result.scalar() or 0
+        result = await db.execute(chat_users_count_query)
+        chat_users_count = result.scalar() or 0
         
-        # Calculate dynamic limit: minimum 3, maximum 50, based on check-ins
-        # Scale factor: every 10 check-ins adds 1 to the limit
-        dynamic_limit = max(3, min(50, 3 + (checkins_count // 10)))
+        # Calculate dynamic limit: minimum 3, maximum 50, based on people who can chat
+        # Scale factor: every 2 people who can chat adds 1 to the limit
+        # This makes the limit more responsive to actual social activity
+        dynamic_limit = max(3, min(50, 3 + (chat_users_count // 2)))
         
-        logger.info(f"Time window: {time_window}, Check-ins count: {checkins_count}, Dynamic limit: {dynamic_limit}")
+        logger.info(f"Chat window: {chat_window_hours}h, People who can chat: {chat_users_count}, Dynamic limit: {dynamic_limit}")
         return dynamic_limit
         
     except Exception as e:
@@ -143,21 +150,24 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
         try:
             return StorageService.generate_signed_url(photo_url)
         except Exception as exc:  # pragma: no cover - fallback path
-            logger.warning("Failed to sign single photo URL %s: %s", photo_url, exc)
+            logger.warning(
+                "Failed to sign single photo URL %s: %s", photo_url, exc)
             return photo_url
 
     if "s3.amazonaws.com" in photo_url or "circles-media" in photo_url:
         try:
             if "s3.amazonaws.com" in photo_url and "/" in photo_url:
                 if "/circles-media" in photo_url:
-                    s3_key = photo_url.split("/circles-media", 1)[1].lstrip("/")
+                    s3_key = photo_url.split(
+                        "/circles-media", 1)[1].lstrip("/")
                 else:
                     s3_key = photo_url.split(".s3.amazonaws.com/", 1)[1]
             else:
                 s3_key = photo_url.split(".amazonaws.com/", 1)[1]
             return StorageService.generate_signed_url(s3_key)
         except Exception as exc:  # pragma: no cover - fallback path
-            logger.warning("Failed to re-sign S3 photo URL %s: %s", photo_url, exc)
+            logger.warning(
+                "Failed to re-sign S3 photo URL %s: %s", photo_url, exc)
             return photo_url
 
     return photo_url
@@ -485,7 +495,8 @@ async def search_places_advanced_flexible(
 async def get_trending_places(
     time_window: str = Query(
         "24h", description="Time window: 1h, 6h, 24h, 7d, 30d"),
-    limit: int = Query(None, ge=1, le=100, description="Override dynamic limit (optional)"),
+    limit: int = Query(None, ge=1, le=100,
+                       description="Override dynamic limit (optional)"),
     offset: int = Query(0, ge=0),
     lat: float | None = Query(
         None, description="Latitude of the user location"),
@@ -532,9 +543,10 @@ async def get_trending_places(
     - Unique users: 2 points each
 
     **Dynamic Limit:**
-    - If limit is not provided, automatically calculates based on current check-ins count
-    - Formula: min(50, max(3, 3 + (check_ins_count // 10)))
-    - Higher activity = more places returned (up to 50 max, minimum 3)
+    - If limit is not provided, automatically calculates based on people who can currently chat
+    - Counts unique users with active check-ins within the chat window (default 12h)
+    - Formula: min(50, max(3, 3 + (people_who_can_chat // 2)))
+    - More people present = more places returned (up to 50 max, minimum 3)
     - Override with explicit limit parameter if needed
 
     **Foursquare Enhancement:**
@@ -545,14 +557,15 @@ async def get_trending_places(
     # Use enhanced place data service for trending places
     from ..config import settings as app_settings
     import logging
-    
-    # Calculate dynamic limit based on check-ins count if not provided
+
+    # Calculate dynamic limit based on people who can chat if not provided
     if limit is None:
-        limit = await _get_dynamic_limit_based_on_checkins(db, time_window)
-        logging.info(f"Using dynamic limit: {limit} (based on check-ins in {time_window})")
+        limit = await _get_dynamic_limit_based_on_checkins(db, time_window)  # time_window still used for trending
+        logging.info(
+            f"Using dynamic limit: {limit} (based on people who can chat)")
     else:
         logging.info(f"Using provided limit: {limit}")
-    
+
     logging.info(
         f"Trending places request: lat={lat}, lng={lng}, limit={limit}, offset={offset}, time_window={time_window}")
 
@@ -688,9 +701,9 @@ async def nearby_places(
     lat: float,
     lng: float,
     radius_m: int = 1000,
-    limit: int = Query(None, ge=1, le=100, description="Override dynamic limit (optional)"),
+    limit: int = Query(None, ge=1, le=100,
+                       description="Override dynamic limit (optional)"),
     offset: int = 0,
-    time_window: str = Query("24h", description="Time window for dynamic limit calculation: 1h, 6h, 24h, 7d, 30d"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -713,12 +726,12 @@ async def nearby_places(
     - `lat`/`lng`: Search center coordinates
     - `radius_m`: Search radius in meters (default: 1000m)
     - `limit`/`offset`: Standard pagination
-    - `time_window`: Time window for dynamic limit calculation (default: 24h)
 
     **Dynamic Limit:**
-    - If limit is not provided, automatically calculates based on current check-ins count
-    - Formula: min(50, max(3, 3 + (check_ins_count // 10)))
-    - Higher activity = more places returned (up to 50 max, minimum 3)
+    - If limit is not provided, automatically calculates based on people who can currently chat
+    - Counts unique users with active check-ins within the chat window (default 12h)
+    - Formula: min(50, max(3, 3 + (people_who_can_chat // 2)))
+    - More people present = more places returned (up to 50 max, minimum 3)
     - Override with explicit limit parameter if needed
 
     **Use Cases:**
@@ -728,18 +741,19 @@ async def nearby_places(
     """
     from ..config import settings as app_settings
     import logging
-    
-    # Calculate dynamic limit based on check-ins count if not provided
+
+    # Calculate dynamic limit based on people who can chat if not provided
     if limit is None:
-        limit = await _get_dynamic_limit_based_on_checkins(db, time_window)
-        logging.info(f"Using dynamic limit: {limit} (based on check-ins in {time_window})")
+        limit = await _get_dynamic_limit_based_on_checkins(db, "24h")  # time_window not used anymore
+        logging.info(
+            f"Using dynamic limit: {limit} (based on people who can chat)")
     else:
         logging.info(f"Using provided limit: {limit}")
-    
+
     print(
-        f"🚀 NEARBY ENDPOINT CALLED: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}, time_window={time_window}")
+        f"🚀 NEARBY ENDPOINT CALLED: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
     logging.info(
-        f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}, time_window={time_window}")
+        f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
 
     # Use the same pattern as trending endpoint for consistency
     if lat is None or lng is None:
@@ -906,7 +920,8 @@ async def get_place_details(
             signed_photo_urls = _convert_to_signed_urls(raw_photo_urls)
 
             if not signed_photo_urls and checkin.photo_url:
-                single_signed = _convert_single_to_signed_url(checkin.photo_url)
+                single_signed = _convert_single_to_signed_url(
+                    checkin.photo_url)
                 if single_signed:
                     signed_photo_urls = [single_signed]
 
@@ -921,7 +936,8 @@ async def get_place_details(
                 latitude=checkin.latitude,
                 longitude=checkin.longitude,
                 # Backward compatibility
-                photo_url=signed_photo_urls[0] if signed_photo_urls else _convert_single_to_signed_url(checkin.photo_url),
+                photo_url=signed_photo_urls[0] if signed_photo_urls else _convert_single_to_signed_url(
+                    checkin.photo_url),
                 photo_urls=signed_photo_urls,
                 allowed_to_chat=allowed_to_chat,
             )
@@ -1086,8 +1102,11 @@ async def get_whos_here(
     **Authentication Required:** Yes
     """
     try:
-        # Get recent check-ins for this place (within last 6 hours)
-        time_limit = datetime.now(timezone.utc) - timedelta(hours=6)
+        from ..config import settings
+        
+        # Get recent check-ins for this place (within chat window from config)
+        chat_window_hours = settings.place_chat_window_hours
+        time_limit = datetime.now(timezone.utc) - timedelta(hours=chat_window_hours)
 
         query = select(CheckIn).join(User).where(
             and_(
