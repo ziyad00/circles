@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # Database settings
     database_url: str = Field(
         default="postgresql+asyncpg://postgres:password@postgres:5432/circles",
-        env="DATABASE_URL",
+        env="APP_DATABASE_URL",  # Use APP_DATABASE_URL for AWS deployment
     )
     # OTP settings
     otp_secret_key: str = Field(
@@ -37,7 +37,8 @@ class Settings(BaseSettings):
         default="your-jwt-secret-key-change-in-production", env="JWT_SECRET_KEY"
     )
     jwt_algorithm: str = Field(default="HS256", env="JWT_ALGORITHM")
-    jwt_expiry_minutes: int = Field(default=10080, env="JWT_EXPIRY_MINUTES")  # 1 week = 7 * 24 * 60 = 10,080 minutes
+    # 1 week = 7 * 24 * 60 = 10,080 minutes
+    jwt_expiry_minutes: int = Field(default=10080, env="JWT_EXPIRY_MINUTES")
 
     # Storage settings
     storage_backend: str = Field(

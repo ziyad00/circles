@@ -234,3 +234,7 @@ crash.*.log
 
 # Always commit provider lockfile
 !**/.terraform.lock.hcl
+# Temporary AWS files - do not commit
+current-secret.json
+current-task-definition.json
+*.json.bak
