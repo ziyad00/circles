@@ -1720,6 +1720,14 @@ async def create_check_in(
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
 
+        # Verify user exists in database (to avoid foreign key constraint errors)
+        user_query = select(User).where(User.id == current_user.id)
+        user_result = await db.execute(user_query)
+        db_user = user_result.scalar_one_or_none()
+
+        if not db_user:
+            raise HTTPException(status_code=404, detail="User not found in database")
+
         default_vis = "public"
         check_in = CheckIn(
             user_id=current_user.id,
