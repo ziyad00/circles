@@ -238,3 +238,8 @@ crash.*.log
 current-secret.json
 current-task-definition.json
 *.json.bak
+# Temporary/debug files
+aws_token.tmp
+test_*.py
+fix_*.py
+fix_*.sql
