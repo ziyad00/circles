@@ -13,6 +13,8 @@ from ..schemas import (
     PaginatedCheckInLikes,
     DetailedCheckInResponse,
     CheckInStats,
+    CheckInResponse,
+    CheckInCreate,
 )
 from ..services.jwt_service import JWTService
 from ..utils import can_view_checkin
@@ -85,6 +87,30 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
 
 
 router = APIRouter(prefix="/check-ins", tags=["check-ins"])
+
+
+@router.post("", response_model=CheckInResponse)
+async def create_check_in_simple(
+    place_id: int,
+    note: str = None,
+    visibility: str = "public",
+    latitude: float = None,
+    longitude: float = None,
+    current_user: User = Depends(JWTService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a basic check-in (redirect to places router for now)"""
+    from ..routers.places import create_check_in
+
+    payload = CheckInCreate(
+        place_id=place_id,
+        note=note,
+        visibility=visibility,
+        latitude=latitude,
+        longitude=longitude
+    )
+
+    return await create_check_in(payload, db, current_user)
 
 
 @router.get("/{check_in_id}", response_model=DetailedCheckInResponse)

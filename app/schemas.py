@@ -104,7 +104,8 @@ class PlaceResponse(PlaceBase):
     venue_created_at: Optional[datetime] = None
     primary_category: Optional[str] = None
     category_icons: Optional[List[Dict[str, Any]]] = None
-    photo_urls: Optional[List[str]] = None
+    photo_urls: Optional[List[str]] = None  # All photos (primary + additional) for backward compatibility
+    additional_photos: Optional[List[str]] = None  # Additional photos (excluding primary)
 
     model_config = ConfigDict(from_attributes=True)
 

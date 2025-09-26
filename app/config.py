@@ -37,7 +37,7 @@ class Settings(BaseSettings):
         default="your-jwt-secret-key-change-in-production", env="JWT_SECRET_KEY"
     )
     jwt_algorithm: str = Field(default="HS256", env="JWT_ALGORITHM")
-    jwt_expiry_minutes: int = Field(default=30, env="JWT_EXPIRY_MINUTES")
+    jwt_expiry_minutes: int = Field(default=10080, env="JWT_EXPIRY_MINUTES")  # 1 week = 7 * 24 * 60 = 10,080 minutes
 
     # Storage settings
     storage_backend: str = Field(
@@ -122,6 +122,10 @@ class Settings(BaseSettings):
     )
     fsq_trending_radius_m: int = Field(
         default=5000, env="FSQ_TRENDING_RADIUS_M"
+    )
+    # If true, use real v2 trending endpoint instead of v3 popularity sort
+    fsq_use_real_trending: bool = Field(
+        default=True, env="FSQ_USE_REAL_TRENDING"
     )
 
     # Place chat (ephemeral, check-in gated)

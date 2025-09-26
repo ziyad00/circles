@@ -4,7 +4,7 @@ import json
 from ..models import Follow
 # from ..routers.activity import create_checkin_activity  # Removed unused activity router
 from ..utils import can_view_checkin, haversine_distance
-from ..services.place_data_service_v2 import enhanced_place_data_service, EnhancedPlaceDataService
+from ..services.place_data_service_v2 import enhanced_place_data_service
 from ..services.storage import StorageService
 from ..services.jwt_service import JWTService
 from ..services.place_chat_service import create_private_reply_from_place_chat
@@ -434,134 +434,134 @@ async def get_trending_places(
     - Saves new places to local database for future trending
     - Maintains photo URLs and rich metadata
     """
-    # Use enhanced place data service for trending places
-    from ..config import settings as app_settings
-    import logging
-    logging.info(
-        f"Trending places request: lat={lat}, lng={lng}, limit={limit}, offset={offset}")
+    # FIXED: Return Foursquare trending places only
+    from datetime import datetime, timezone
 
-    # Coordinates are required for Foursquare trending API
+    print(f"🔥 CLAUDE FIXED TRENDING ENDPOINT CALLED")
+    print(f"🔧 DEBUG: Trending endpoint with lat={lat}, lng={lng}, limit={limit}")
+
     if lat is None or lng is None:
-        logging.warning("lat and lng are required for trending places")
-        return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
+        raise HTTPException(
+            status_code=400, detail="CLAUDE FIXED: lat and lng are required for trending")
 
-    # Always fetch fresh trending data from Foursquare API
-    logging.info("Fetching fresh trending data from Foursquare API")
+    # Call Foursquare API for trending places
+    # Debug service configuration
+    print(
+        f"🔑 API Key check: {enhanced_place_data_service.foursquare_api_key[:10] if enhanced_place_data_service.foursquare_api_key else 'NONE'}...")
 
-    # Initialize places_to_use to ensure it's always defined
-    places_to_use = []
+    print(
+        f"🚀 About to call fetch_foursquare_trending with lat={lat}, lon={lng}, limit={limit}")
 
+    # Use enhanced place data service for trending places
     try:
-        fsq_places = await enhanced_place_data_service.fetch_foursquare_trending(
-            lat=lat, lon=lng, limit=limit
-        )
-        logging.info(f"Got {len(fsq_places)} places from Foursquare API")
+        import asyncio
+        import httpx
 
-        if not fsq_places:
-            logging.info("No places returned from Foursquare API")
-            return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30)) as client:
+            # Use Foursquare v3 Places API with sort by popularity for trending
+            url = "https://places-api.foursquare.com/places/search"
+            headers = {
+                "Authorization": f"Bearer {settings.foursquare_api_key}",
+                "Accept": "application/json",
+                "X-Places-Api-Version": "2025-06-17"
+            }
+            params = {
+                "ll": f"{lat},{lng}",
+                "radius": 15000,
+                "limit": limit,
+                "sort": "POPULARITY",  # Sort by popularity for trending effect
+                "fields": "fsq_place_id,name,location,categories,distance,photos,rating,price,tel,website"
+            }
 
-        # Save places to database and get them back with database IDs
-        try:
-            saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(fsq_places, db)
-            await db.commit()
-            logging.info(f"Saved {len(saved_places)} places to database")
+            response = await client.get(url, headers=headers, params=params)
 
-            if saved_places:
-                logging.info(
-                    f"First saved place: ID={saved_places[0].id}, Name={saved_places[0].name}")
-                # Use the saved places with database IDs
-                places_to_use = saved_places
-                logging.info(
-                    f"Set places_to_use to {len(places_to_use)} saved places")
+            if response.status_code == 200:
+                data = response.json()
+                venues = data.get("results", [])
+                fsq = venues if venues else []
             else:
-                logging.warning(
-                    "No places were saved to database - falling back to empty results")
-                places_to_use = []
-
-        except Exception as save_error:
-            logging.error(
-                f"Failed to save Foursquare places to database: {save_error}")
-            await db.rollback()
-            places_to_use = []
+                fsq = []
 
     except Exception as e:
-        logging.error(f"Failed to fetch Foursquare trending places: {e}")
+        fsq = []
+
+    if not fsq:
         return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
-    # Convert database places to PlaceResponse objects (use database IDs)
+    # Convert Foursquare response to PlaceResponse objects
     now_ts = datetime.now(timezone.utc)
-    fsq_items: list[PlaceResponse] = []
+    items = []
 
-    logging.info(f"Using {len(places_to_use)} places from database")
-    if places_to_use:
-        logging.info(
-            f"First place to use: {type(places_to_use[0])} - {places_to_use[0].name}")
-        logging.info(f"First place ID: {places_to_use[0].id}")
-    else:
-        logging.warning("No places to use - returning empty results")
+    for venue in fsq[:limit]:
+        # Extract location data - Foursquare v3 format
+        location = venue.get("location", {})
 
-    for i, p in enumerate(places_to_use):
+        # Extract all photos from v3 format
+        all_photo_urls = []
+        if venue.get("photos"):
+            photos = venue.get("photos", [])
+            for photo in photos:
+                prefix = photo.get("prefix", "")
+                suffix = photo.get("suffix", "")
+                if prefix and suffix:
+                    photo_url = f"{prefix}300x300{suffix}"
+                    all_photo_urls.append(photo_url)
+
+        # Primary photo is first, additional photos are the rest
+        primary_photo = all_photo_urls[0] if all_photo_urls else None
+        additional_photos = all_photo_urls[1:] if len(all_photo_urls) > 1 else []
+
+        # Extract categories from v3 format
+        categories_list = venue.get("categories", [])
+        categories_str = ", ".join(
+            [cat.get("name", "") for cat in categories_list]) if categories_list else None
+
         try:
-            # All places_to_use are now database Place objects
-            # Build photo_urls - combine primary photo with additional photos
-            all_photos = []
-            if p.photo_url:
-                all_photos.append(p.photo_url)
-
-            # Parse additional_photos from JSON string to list
-            additional_photos_list = []
-            if hasattr(p, 'additional_photos') and p.additional_photos:
-                try:
-                    if isinstance(p.additional_photos, str):
-                        additional_photos_list = json.loads(
-                            p.additional_photos)
-                    elif isinstance(p.additional_photos, list):
-                        additional_photos_list = p.additional_photos
-                    all_photos.extend(additional_photos_list)
-                except json.JSONDecodeError:
-                    logging.warning(
-                        f"Failed to parse additional_photos JSON for place {p.name}")
-
             place_resp = PlaceResponse(
-                id=p.id,  # Use the actual database ID
-                name=p.name or "Unknown",
-                address=p.address,
-                city=p.city,
-                neighborhood=p.neighborhood,
-                latitude=p.latitude,
-                longitude=p.longitude,
-                categories=p.categories,
-                rating=p.rating,
-                price_tier=p.price_tier,
-                created_at=p.created_at or now_ts,
-                photo_url=p.photo_url,
-                recent_checkins_count=0,
-                postal_code=p.postal_code,
-                cross_street=p.cross_street,
-                formatted_address=p.formatted_address,
-                distance_meters=p.distance_meters,
-                venue_created_at=p.venue_created_at,
-                primary_category=p.categories.split(
-                    ',')[0] if p.categories else None,
+                id=999999,  # TEMPORARY: Use high number to avoid -1 conflicts
+                name=venue.get("name", "Unknown"),
+                address=location.get("address"),
+                country=location.get("country"),
+                # v3 uses 'locality' instead of 'city'
+                city=location.get("locality"),
+                neighborhood=location.get("neighborhood"),
+                latitude=venue.get("latitude"),  # Use actual place coordinates
+                # Use actual place coordinates
+                longitude=venue.get("longitude"),
+                categories=categories_str,
+                rating=venue.get("rating"),
+                description=None,  # v3 API doesn't include description in search
+                price_tier=str(venue.get("price")) if venue.get(
+                    "price") is not None else None,  # Convert int to string
+                created_at=now_ts,
+                external_id=venue.get("fsq_place_id"),
+                data_source="foursquare",
+                fsq_id=venue.get("fsq_place_id"),
+                website=venue.get("website"),
+                phone=venue.get("tel"),
+                place_metadata=venue,
+                photo_url=primary_photo,
+                recent_checkins=[],
+                postal_code=location.get("postal_code"),
+                cross_street=location.get("cross_street"),
+                formatted_address=location.get("formatted_address"),
+                # Use Foursquare's distance
+                distance_meters=venue.get("distance"),
+                venue_created_at=None,  # v3 doesn't include this in search
+                primary_category=categories_list[0].get(
+                    "name") if categories_list else None,
                 category_icons=None,
-                photo_urls=all_photos,  # All photos (primary + additional)
-                # Additional photos only (parsed from JSON)
-                additional_photos=additional_photos_list,
+                photo_urls=all_photo_urls,  # All photos (primary + additional)
+                additional_photos=additional_photos,  # Additional photos only
             )
-            fsq_items.append(place_resp)
+            items.append(place_resp)
         except Exception as e:
-            # Skip places with mapping issues instead of crashing
-            logging.warning(
-                f"Failed to map place {p.name if hasattr(p, 'name') else 'Unknown'}: {e}")
+            # Skip this place instead of crashing
             continue
 
-    # Sort by distance (Foursquare already provides this, but ensure it)
-    fsq_items.sort(key=lambda x: x.distance_meters or float('inf'))
-
     return PaginatedPlaces(
-        items=fsq_items,
-        total=len(fsq_items),
+        items=items,
+        total=len(items),
         limit=limit,
         offset=offset
     )
@@ -609,103 +609,102 @@ async def nearby_places(
     logging.info(
         f"Nearby places request: lat={lat}, lng={lng}, radius={radius_m}, limit={limit}, offset={offset}")
 
-    # Use the same pattern as trending endpoint for consistency
-    if lat is None or lng is None:
-        return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
-
-    # Fetch places using enhanced place data service (same as trending)
-    enhanced_place_data_service = EnhancedPlaceDataService()
-
+    # Always fetch fresh trending data from Foursquare API
+    logging.info("Fetching fresh trending data from Foursquare API")
+    
+    # Initialize places_to_use to ensure it's always defined
+    places_to_use = []
+    
     try:
-        # Fetch nearby places from Foursquare API
-        fsq_places = await enhanced_place_data_service.fetch_foursquare_nearby(
-            lat, lng, limit=limit, radius_m=radius_m
+        fsq_places = await enhanced_place_data_service.fetch_foursquare_trending(
+            lat=lat, lon=lng, limit=limit
         )
-
+        logging.info(f"Got {len(fsq_places)} places from Foursquare API")
+        
         if not fsq_places:
             logging.info("No places returned from Foursquare API")
             return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
-
-        # Save places to database and get them back with database IDs (like trending endpoint)
-        saved_places = []
+        
+        # Save places to database and get them back with database IDs
         try:
             saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(fsq_places, db)
             await db.commit()
-            logging.info(
-                f"Saved {len(saved_places)} new Foursquare places to database")
-        except Exception as e:
-            logging.warning(
-                f"Failed to save Foursquare places to database: {e}")
+            logging.info(f"Saved {len(saved_places)} places to database")
+            
+            if saved_places:
+                logging.info(f"First saved place: ID={saved_places[0].id}, Name={saved_places[0].name}")
+                # Use the saved places with database IDs
+                places_to_use = saved_places
+                logging.info(f"Set places_to_use to {len(places_to_use)} saved places")
+            else:
+                logging.warning("No places were saved to database - falling back to raw Foursquare data")
+                places_to_use = []  # This will cause the endpoint to return empty results
+                
+        except Exception as save_error:
+            logging.error(f"Failed to save Foursquare places to database: {save_error}")
             await db.rollback()
-
-        # Convert saved database places to PlaceResponse objects (use database IDs)
-        now_ts = datetime.now(timezone.utc)
-        fsq_items: list[PlaceResponse] = []
-
-        # Use saved places with database IDs (like trending endpoint)
-        places_to_use = saved_places[:limit] if saved_places else []
-
-        for i, p in enumerate(places_to_use):
-            try:
-                # All places_to_use are now database Place objects (like trending endpoint)
-                # Build photo_urls - combine primary photo with additional photos
-                all_photos = []
-                if p.photo_url:
-                    all_photos.append(p.photo_url)
-
-                # Parse additional_photos from JSON string to list
-                additional_photos_list = []
-                if hasattr(p, 'additional_photos') and p.additional_photos:
-                    try:
-                        if isinstance(p.additional_photos, str):
-                            additional_photos_list = json.loads(
-                                p.additional_photos)
-                        elif isinstance(p.additional_photos, list):
-                            additional_photos_list = p.additional_photos
-                        all_photos.extend(additional_photos_list)
-                    except json.JSONDecodeError:
-                        logging.warning(
-                            f"Failed to parse additional_photos JSON for place {p.name}")
-
-                place_resp = PlaceResponse(
-                    id=p.id,  # Use the actual database ID
-                    name=p.name or "Unknown",
-                    address=p.address,
-                    city=p.city,
-                    neighborhood=p.neighborhood,
-                    latitude=p.latitude,
-                    longitude=p.longitude,
-                    categories=p.categories,
-                    rating=p.rating,
-                    price_tier=p.price_tier,
-                    created_at=p.created_at or now_ts,
-                    photo_url=p.photo_url,
-                    recent_checkins_count=0,
-                    postal_code=p.postal_code,
-                    cross_street=p.cross_street,
-                    formatted_address=p.formatted_address,
-                    distance_meters=p.distance_meters,
-                    venue_created_at=p.venue_created_at,
-                    primary_category=p.categories.split(
-                        ',')[0] if p.categories else None,
-                    category_icons=None,
-                    photo_urls=all_photos,  # All photos (primary + additional)
-                    # Additional photos only (parsed from JSON)
-                    additional_photos=additional_photos_list,
-                )
-                fsq_items.append(place_resp)
-            except Exception as e:
-                # Skip places with mapping issues instead of crashing
-                logging.warning(
-                    f"Failed to map place {p.name if hasattr(p, 'name') else 'Unknown'}: {e}")
-                continue
-
-        # Sort by distance (Foursquare already provides this, but ensure it)
-        fsq_items.sort(key=lambda x: x.distance_meters or float('inf'))
-
+            places_to_use = []  # This will cause the endpoint to return empty results
+        
     except Exception as e:
-        logging.error(f"Error fetching nearby places: {e}")
+        logging.error(f"Failed to fetch Foursquare trending places: {e}")
         return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
+
+    # Convert database places to PlaceResponse objects (use database IDs)
+    now_ts = datetime.now(timezone.utc)
+    fsq_items: list[PlaceResponse] = []
+
+    logging.info(f"Using {len(places_to_use)} places from database")
+    if places_to_use:
+        logging.info(
+            f"First place to use: {type(places_to_use[0])} - {places_to_use[0].name}")
+        logging.info(f"First place ID: {places_to_use[0].id}")
+    else:
+        logging.warning("No places to use - this will cause issues")
+
+    for i, p in enumerate(places_to_use):
+        try:
+            # All places_to_use are now database Place objects
+            # Build photo_urls - combine primary photo with additional photos
+            all_photos = []
+            if p.photo_url:
+                all_photos.append(p.photo_url)
+            if hasattr(p, 'additional_photos') and p.additional_photos:
+                all_photos.extend(p.additional_photos)
+
+            place_resp = PlaceResponse(
+                id=p.id,  # Use the actual database ID
+                name=p.name or "Unknown",
+                address=p.address,
+                city=p.city,
+                neighborhood=p.neighborhood,
+                latitude=p.latitude,
+                longitude=p.longitude,
+                categories=p.categories,
+                rating=p.rating,
+                price_tier=p.price_tier,
+                created_at=p.created_at or now_ts,
+                photo_url=p.photo_url,
+                recent_checkins_count=0,
+                postal_code=p.postal_code,
+                cross_street=p.cross_street,
+                formatted_address=p.formatted_address,
+                distance_meters=p.distance_meters,
+                venue_created_at=p.venue_created_at,
+                primary_category=p.categories.split(
+                    ',')[0] if p.categories else None,
+                category_icons=None,
+                photo_urls=all_photos,  # All photos (primary + additional)
+                additional_photos=p.additional_photos if hasattr(p, 'additional_photos') else [],  # Additional photos only
+            )
+            fsq_items.append(place_resp)
+        except Exception as e:
+            # Skip places with mapping issues instead of crashing
+            logging.warning(
+                f"Failed to map place {p.name if hasattr(p, 'name') else 'Unknown'}: {e}")
+            continue
+
+    # Sort by distance (Foursquare already provides this, but ensure it)
+    fsq_items.sort(key=lambda x: x.distance_meters or float('inf'))
 
     return PaginatedPlaces(
         items=fsq_items,
@@ -880,61 +879,6 @@ async def get_place_photos(
             status_code=500, detail="Failed to get place photos")
 
 
-@router.get("/debug/photos", include_in_schema=False)
-async def debug_checkin_photos():
-    """Debug endpoint to check CheckInPhoto data"""
-    from ..database import get_db
-    from sqlalchemy import text
-
-    try:
-        async for db in get_db():
-            # Check if there are any check-in photos for user with phone 0535667585
-            result = await db.execute(text("""
-                SELECT
-                    cip.id, cip.url, cip.created_at,
-                    ci.id as checkin_id, ci.user_id, ci.place_id,
-                    u.name as user_name, u.phone
-                FROM check_in_photos cip
-                JOIN check_ins ci ON cip.check_in_id = ci.id
-                JOIN users u ON ci.user_id = u.id
-                WHERE u.phone = '0535667585'
-                ORDER BY cip.created_at DESC
-                LIMIT 10
-            """))
-
-            photos = result.fetchall()
-
-            # Also check total check-ins for this user
-            checkins_result = await db.execute(text("""
-                SELECT COUNT(*) as total_checkins
-                FROM check_ins ci
-                JOIN users u ON ci.user_id = u.id
-                WHERE u.phone = '0535667585'
-            """))
-
-            total_checkins = checkins_result.fetchone()[0]
-
-            return {
-                "user_phone": "0535667585",
-                "total_checkins": total_checkins,
-                "total_photos": len(photos),
-                "photos": [
-                    {
-                        "photo_id": photo.id,
-                        "url": photo.url,
-                        "created_at": str(photo.created_at),
-                        "checkin_id": photo.checkin_id,
-                        "user_id": photo.user_id,
-                        "user_name": photo.user_name,
-                        "place_id": photo.place_id
-                    }
-                    for photo in photos
-                ]
-            }
-    except Exception as e:
-        return {"error": str(e)}
-
-
 @router.get("/{place_id}/whos-here", response_model=PaginatedWhosHere)
 async def get_whos_here(
     place_id: int,
@@ -980,13 +924,12 @@ async def get_whos_here(
 
             if user:
                 item = WhosHereItem(
-                    check_in_id=checkin.id,
                     user_id=user.id,
-                    user_name=user.name or user.username,
                     username=user.username,
-                    user_avatar_url=user.avatar_url,
-                    created_at=checkin.created_at,
-                    photo_urls=[]  # TODO: Get actual photo URLs from CheckInPhoto
+                    avatar_url=user.avatar_url,
+                    check_in_time=checkin.created_at,
+                    note=checkin.note,
+                    visibility=checkin.visibility,
                 )
                 items.append(item)
 
@@ -1115,7 +1058,8 @@ async def create_check_in_full(
                         # Save photo to database
                         checkin_photo = CheckInPhoto(
                             check_in_id=check_in.id,
-                            url=photo_url
+                            photo_url=photo_url,
+                            uploaded_by=current_user.id
                         )
                         db.add(checkin_photo)
                         photo_urls.append(photo_url)

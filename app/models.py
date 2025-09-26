@@ -121,6 +121,7 @@ class Place(Base):
     # When venue was created on Foursquare
     venue_created_at = Column(DateTime(timezone=True), nullable=True)
     photo_url = Column(String, nullable=True)  # Primary photo URL
+    additional_photos = Column(JSON, nullable=True)  # Additional photo URLs as JSON array
 
     # Relationships
     check_ins = relationship("CheckIn", back_populates="place")
