@@ -71,7 +71,7 @@ async def get_inbox(
         query = select(DMThread).join(DMParticipantState).where(
             and_(
                 DMParticipantState.user_id == current_user.id,
-                DMParticipantState.is_active == True
+                DMParticipantState.blocked == False
             )
         ).order_by(desc(DMThread.updated_at))
 
@@ -88,32 +88,31 @@ async def get_inbox(
         # Convert to response format
         thread_responses = []
         for thread in threads:
-            # Get other participant
-            other_participant_query = select(User).join(DMParticipantState).where(
-                and_(
-                    DMParticipantState.thread_id == thread.id,
-                    DMParticipantState.user_id != current_user.id,
-                    DMParticipantState.is_active == True
-                )
-            )
-            other_result = await db.execute(other_participant_query)
+            # Determine which user is the "other" user
+            other_user_id = thread.user_b_id if thread.user_a_id == current_user.id else thread.user_a_id
+
+            # Get other user details
+            other_user_query = select(User).where(User.id == other_user_id)
+            other_result = await db.execute(other_user_query)
             other_user = other_result.scalar_one_or_none()
 
             if other_user:
                 thread_resp = DMThreadResponse(
                     id=thread.id,
-                    other_user_id=other_user.id,
-                    other_username=other_user.username,
-                    other_display_name=other_user.display_name,
-                    other_avatar_url=other_user.avatar_url,
-                    last_message=None,  # TODO: Get last message
-                    last_message_time=thread.updated_at,
-                    unread_count=0,  # TODO: Calculate unread count
-                    is_muted=False,  # TODO: Get mute status
-                    is_pinned=False,  # TODO: Get pin status
-                    is_archived=False,  # TODO: Get archive status
+                    user_a_id=thread.user_a_id,
+                    user_b_id=thread.user_b_id,
+                    initiator_id=thread.initiator_id,
+                    status=thread.status,
                     created_at=thread.created_at,
                     updated_at=thread.updated_at,
+                    other_user_name=other_user.name,
+                    other_user_username=other_user.username,
+                    other_user_avatar=other_user.avatar_url,
+                    last_message=None,  # TODO: Get last message
+                    last_message_time=thread.updated_at,
+                    is_muted=False,  # TODO: Get mute status
+                    is_blocked=False,  # TODO: Get block status
+                    sender_photo_url=None,  # TODO: Get last message sender photo
                 )
                 thread_responses.append(thread_resp)
 

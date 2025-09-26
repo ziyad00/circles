@@ -1094,6 +1094,7 @@ async def save_place(
             id=saved_place.id,
             user_id=saved_place.user_id,
             place_id=saved_place.place_id,
+            collection_id=saved_place.collection_id,
             collection_name=saved_place.collection_name,
             notes=saved_place.notes,
             created_at=saved_place.created_at,

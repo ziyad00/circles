@@ -168,8 +168,10 @@ class SavedPlaceResponse(BaseModel):
     id: int
     user_id: int
     place_id: int
+    collection_id: int
     list_name: Optional[str] = None
     created_at: datetime
+    place: Optional[PlaceResponse] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -1037,6 +1039,8 @@ class CollectionResponse(BaseModel):
     # Backward compatibility: return both is_public and visibility
     is_public: bool
     visibility: VisibilityEnum
+    photo_urls: list[str] = []
+    place_count: int = 0
     created_at: datetime
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
@@ -1053,6 +1057,8 @@ class CollectionPlaceResponse(BaseModel):
     place_longitude: Optional[float] = None
     place_rating: Optional[float] = None
     place_photo_url: Optional[str] = None
+    photo_url: Optional[str] = None
+    photo_urls: list[str] = []
     checkin_count: int = 0
     user_checkin_photos: list[str] = []
     added_at: datetime

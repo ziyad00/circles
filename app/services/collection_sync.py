@@ -44,7 +44,12 @@ async def _get_or_create_collection(
     if collection:
         return collection
 
-    collection = UserCollection(user_id=user_id, name=name, is_public=True)
+    collection = UserCollection(
+        user_id=user_id,
+        name=name,
+        is_public=True,
+        visibility="public",
+    )
     db.add(collection)
     await db.flush()
     return collection
@@ -84,28 +89,28 @@ async def _ensure_collection_place(
     return association
 
 
+async def ensure_default_collection(db: AsyncSession, user_id: int) -> UserCollection:
+    """Ensure the user has a default Favorites collection."""
+    return await _get_or_create_collection(db, user_id, "Favorites")
+
+
 async def sync_saved_place_membership(
     db: AsyncSession,
     saved_place: SavedPlace,
-    previous_name: Optional[str] = None,
+    previous_collection_id: Optional[int] = None,
 ) -> UserCollectionPlace:
     """Ensure UserCollectionPlace rows reflect the SavedPlace state."""
-    new_name = normalize_collection_name(saved_place.list_name)
-    if previous_name is not None:
-        old_name = normalize_collection_name(previous_name)
-    else:
-        old_name = None
+    collection = saved_place.collection
+    if not collection:
+        name = normalize_collection_name(saved_place.list_name)
+        collection = await _get_or_create_collection(db, saved_place.user_id, name)
+        saved_place.collection = collection
 
-    if old_name and old_name != new_name:
-        old_collection = await _get_collection(db, saved_place.user_id, old_name)
-        if old_collection:
-            existing = await _get_collection_place(
-                db, old_collection.id, saved_place.place_id)
-            if existing:
-                await db.delete(existing)
+    if previous_collection_id and previous_collection_id != collection.id:
+        old_assoc = await _get_collection_place(db, previous_collection_id, saved_place.place_id)
+        if old_assoc:
+            await db.delete(old_assoc)
 
-    collection = await _get_or_create_collection(
-        db, saved_place.user_id, new_name)
     association = await _ensure_collection_place(
         db, collection, saved_place.place_id, saved_place.created_at)
     return association
@@ -115,10 +120,24 @@ async def remove_saved_place_membership(
     db: AsyncSession,
     user_id: int,
     place_id: int,
-    list_name: Optional[str],
+    list_name: Optional[str] = None,
+    collection_id: Optional[int] = None,
 ) -> None:
-    name = normalize_collection_name(list_name)
-    collection = await _get_collection(db, user_id, name)
+    collection: Optional[UserCollection] = None
+    if collection_id is not None:
+        res = await db.execute(
+            select(UserCollection).where(
+                UserCollection.id == collection_id,
+                UserCollection.user_id == user_id,
+            )
+        )
+        collection = res.scalar_one_or_none()
+    elif list_name is not None:
+        name = normalize_collection_name(list_name)
+        collection = await _get_collection(db, user_id, name)
+    else:
+        return
+
     if not collection:
         return
 
@@ -135,6 +154,7 @@ async def ensure_saved_place_entry(
 ) -> SavedPlace:
     """Ensure a SavedPlace exists for the given collection name."""
     desired_name = normalize_collection_name(list_name)
+    collection = await _get_or_create_collection(db, user_id, desired_name)
     res = await db.execute(
         select(SavedPlace).where(
             SavedPlace.user_id == user_id,
@@ -143,20 +163,19 @@ async def ensure_saved_place_entry(
     )
     saved = res.scalar_one_or_none()
     if saved:
-        current_name = normalize_collection_name(saved.list_name)
-        if current_name != desired_name:
-            previous = saved.list_name
-            saved.list_name = desired_name
-            await db.flush()
-            await sync_saved_place_membership(db, saved, previous)
-        else:
-            await sync_saved_place_membership(db, saved)
+        previous_collection_id = saved.collection_id
+        if saved.collection_id != collection.id:
+            saved.collection = collection
+        saved.list_name = collection.name
+        await db.flush()
+        await sync_saved_place_membership(db, saved, previous_collection_id)
         return saved
 
     saved = SavedPlace(
         user_id=user_id,
         place_id=place_id,
-        list_name=desired_name,
+        collection=collection,
+        list_name=collection.name,
     )
     db.add(saved)
     await db.flush()

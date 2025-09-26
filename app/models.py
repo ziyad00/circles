@@ -189,11 +189,18 @@ class SavedPlace(Base):
                      nullable=False, index=True)
     place_id = Column(Integer, ForeignKey("places.id"),
                       nullable=False, index=True)
+    collection_id = Column(Integer, ForeignKey(
+        "user_collections.id"), nullable=False, index=True)
     list_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="saved_places")
     place = relationship("Place", back_populates="saved_by")
+    collection = relationship("UserCollection", back_populates="saved_places")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'place_id', name='uq_saved_place_user_place'),
+    )
 
 
 class Review(Base):
@@ -481,6 +488,7 @@ class UserCollection(Base):
 
     user = relationship("User", back_populates="collections")
     places = relationship("UserCollectionPlace", back_populates="collection")
+    saved_places = relationship("SavedPlace", back_populates="collection")
 
 
 class UserCollectionPlace(Base):

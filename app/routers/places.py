@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 
 from ..models import Follow
 # from ..routers.activity import create_checkin_activity  # Removed unused activity router
@@ -41,8 +42,19 @@ from ..schemas import (
     DMMessageResponse,
     PlaceChatPrivateReply,
 )
-from ..models import Place, CheckIn, SavedPlace, User, Review, Photo, CheckInPhoto, ExternalSearchSnapshot
+from ..models import (
+    Place,
+    CheckIn,
+    SavedPlace,
+    User,
+    Review,
+    Photo,
+    CheckInPhoto,
+    ExternalSearchSnapshot,
+    UserCollection,
+)
 from ..services.collection_sync import (
+    ensure_default_collection,
     ensure_saved_place_entry,
     normalize_collection_name,
     remove_saved_place_membership,
@@ -56,9 +68,54 @@ from sqlalchemy import select, func, and_, or_, desc, asc, text
 from sqlalchemy.orm import selectinload, joinedload
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, timedelta
-import logging
 
 router = APIRouter(prefix="/places", tags=["places"])
+
+logger = logging.getLogger(__name__)
+
+
+def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
+    """Convert raw storage keys to signed URLs when needed."""
+    signed_urls: list[str] = []
+    for url in photo_urls:
+        if url and not url.startswith("http"):
+            try:
+                signed_urls.append(StorageService.generate_signed_url(url))
+            except Exception as exc:  # pragma: no cover - fallback path
+                logger.warning("Failed to sign photo URL %s: %s", url, exc)
+                signed_urls.append(url)
+        else:
+            signed_urls.append(url)
+    return signed_urls
+
+
+def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
+    """Convert a single S3 key/URL to a signed URL."""
+    if not photo_url:
+        return None
+
+    if not photo_url.startswith("http"):
+        try:
+            return StorageService.generate_signed_url(photo_url)
+        except Exception as exc:  # pragma: no cover - fallback path
+            logger.warning("Failed to sign single photo URL %s: %s", photo_url, exc)
+            return photo_url
+
+    if "s3.amazonaws.com" in photo_url or "circles-media" in photo_url:
+        try:
+            if "s3.amazonaws.com" in photo_url and "/" in photo_url:
+                if "/circles-media" in photo_url:
+                    s3_key = photo_url.split("/circles-media", 1)[1].lstrip("/")
+                else:
+                    s3_key = photo_url.split(".s3.amazonaws.com/", 1)[1]
+            else:
+                s3_key = photo_url.split(".amazonaws.com/", 1)[1]
+            return StorageService.generate_signed_url(s3_key)
+        except Exception as exc:  # pragma: no cover - fallback path
+            logger.warning("Failed to re-sign S3 photo URL %s: %s", photo_url, exc)
+            return photo_url
+
+    return photo_url
 
 # ============================================================================
 # LOOKUP ENDPOINTS (Used by frontend)
@@ -770,8 +827,13 @@ async def get_place_details(
                 CheckInPhoto.check_in_id == checkin.id)
             photo_result = await db.execute(photo_query)
             photos = photo_result.scalars().all()
-            photo_urls = [
-                photo.photo_url for photo in photos if photo.photo_url]
+            raw_photo_urls = [photo.url for photo in photos if photo.url]
+            signed_photo_urls = _convert_to_signed_urls(raw_photo_urls)
+
+            if not signed_photo_urls and checkin.photo_url:
+                single_signed = _convert_single_to_signed_url(checkin.photo_url)
+                if single_signed:
+                    signed_photo_urls = [single_signed]
 
             checkin_resp = CheckInResponse(
                 id=checkin.id,
@@ -784,8 +846,8 @@ async def get_place_details(
                 latitude=checkin.latitude,
                 longitude=checkin.longitude,
                 # Backward compatibility
-                photo_url=photo_urls[0] if photo_urls else None,
-                photo_urls=photo_urls,
+                photo_url=signed_photo_urls[0] if signed_photo_urls else _convert_single_to_signed_url(checkin.photo_url),
+                photo_urls=signed_photo_urls,
                 allowed_to_chat=allowed_to_chat,
             )
             checkin_responses.append(checkin_resp)
@@ -1177,41 +1239,43 @@ async def save_place(
         if not place:
             raise HTTPException(status_code=404, detail="Place not found")
 
-        # Check if already saved
+        desired_name = normalize_collection_name(payload.list_name)
+        await ensure_default_collection(db, current_user.id)
+
+        # Check if already saved in the same collection (one collection per place rule)
         existing_query = select(SavedPlace).where(
             and_(
                 SavedPlace.user_id == current_user.id,
                 SavedPlace.place_id == payload.place_id,
-                SavedPlace.collection_name == payload.collection_name
             )
         )
         existing_result = await db.execute(existing_query)
         existing = existing_result.scalar_one_or_none()
 
-        if existing:
+        if existing and normalize_collection_name(existing.list_name) == desired_name:
             raise HTTPException(
                 status_code=400, detail="Place already saved in this collection")
 
-        # Create saved place entry
-        saved_place = SavedPlace(
-            user_id=current_user.id,
-            place_id=payload.place_id,
-            collection_name=payload.collection_name,
-            notes=payload.notes
+        saved_place = await ensure_saved_place_entry(
+            db,
+            current_user.id,
+            payload.place_id,
+            desired_name,
         )
 
-        db.add(saved_place)
         await db.commit()
         await db.refresh(saved_place)
+
+        collection_name = saved_place.collection.name if saved_place.collection else saved_place.list_name
 
         return SavedPlaceResponse(
             id=saved_place.id,
             user_id=saved_place.user_id,
             place_id=saved_place.place_id,
-            collection_name=saved_place.collection_name,
-            notes=saved_place.notes,
+            collection_id=saved_place.collection_id,
+            list_name=collection_name,
             created_at=saved_place.created_at,
-            place=place
+            place=place,
         )
 
     except HTTPException:
@@ -1235,12 +1299,18 @@ async def unsave_place(
     **Authentication Required:** Yes
     """
     try:
-        # Find saved place entry
-        query = select(SavedPlace).where(
-            and_(
-                SavedPlace.user_id == current_user.id,
-                SavedPlace.place_id == place_id,
-                SavedPlace.collection_name == collection_name
+        normalized_name = normalize_collection_name(collection_name)
+
+        # Find saved place entry for this user/place and collection
+        query = (
+            select(SavedPlace)
+            .join(UserCollection, SavedPlace.collection_id == UserCollection.id)
+            .where(
+                and_(
+                    SavedPlace.user_id == current_user.id,
+                    SavedPlace.place_id == place_id,
+                    func.lower(UserCollection.name) == normalized_name.lower(),
+                )
             )
         )
         result = await db.execute(query)
@@ -1250,6 +1320,13 @@ async def unsave_place(
             raise HTTPException(
                 status_code=404, detail="Saved place not found")
 
+        await remove_saved_place_membership(
+            db,
+            current_user.id,
+            place_id,
+            list_name=saved_place.list_name,
+            collection_id=saved_place.collection_id,
+        )
         await db.delete(saved_place)
         await db.commit()
 

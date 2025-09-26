@@ -1,19 +1,17 @@
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Query
+import logging
 from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, case, and_, or_, desc
+from sqlalchemy import select, func, and_, or_, desc, asc
 
 from ..database import get_db
 from ..services.jwt_service import JWTService
-from ..services.storage import StorageService, _validate_image_or_raise
-from ..services.block_service import has_block_between, has_user_blocked
+from ..services.storage import StorageService
+from ..services.collection_sync import ensure_default_collection
 from ..utils import (
     can_view_checkin,
-    haversine_distance,
     can_view_profile,
-    can_view_stats,
-    can_view_follower_list,
-    can_view_following_list,
     should_appear_in_search
 )
 from ..models import (
@@ -48,6 +46,57 @@ from ..schemas import (
     AvailabilityMode,
 )
 from .dms_ws import manager
+from ..config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
+    """Convert storage keys to signed URLs when required."""
+    signed_urls: list[str] = []
+    for url in photo_urls:
+        if url and not url.startswith("http"):
+            try:
+                signed_urls.append(StorageService.generate_signed_url(url))
+            except Exception as exc:  # pragma: no cover - fallback path
+                logger.warning("Failed to sign photo URL %s: %s", url, exc)
+                signed_urls.append(url)
+        else:
+            signed_urls.append(url)
+    return signed_urls
+
+
+def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
+    """Convert a single storage key or S3 URL to a signed URL."""
+    if not photo_url:
+        return None
+
+    if not photo_url.startswith("http"):
+        try:
+            return StorageService.generate_signed_url(photo_url)
+        except Exception as exc:  # pragma: no cover - fallback path
+            logger.warning(
+                "Failed to sign single photo URL %s: %s", photo_url, exc)
+            return photo_url
+
+    if "s3.amazonaws.com" in photo_url or "circles-media" in photo_url:
+        try:
+            if "s3.amazonaws.com" in photo_url and "/" in photo_url:
+                if "/circles-media" in photo_url:
+                    s3_key = photo_url.split(
+                        "/circles-media", 1)[1].lstrip("/")
+                else:
+                    s3_key = photo_url.split(".s3.amazonaws.com/", 1)[1]
+            else:
+                s3_key = photo_url.split(".amazonaws.com/", 1)[1]
+            return StorageService.generate_signed_url(s3_key)
+        except Exception as exc:  # pragma: no cover - fallback path
+            logger.warning(
+                "Failed to re-sign S3 photo URL %s: %s", photo_url, exc)
+            return photo_url
+
+        return photo_url
+
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -62,58 +111,56 @@ async def search_users(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(JWTService.get_current_user),
 ):
-    """
-    Search for users with various filters.
+    """Search for users with various filters.
 
     **Authentication Required:** Yes
     """
     try:
-        # Build base query
-        query = select(User).where(
-            User.id != current_user.id)  # Exclude current user
+        # Build base query excluding the requester
+        query = select(User).where(User.id != current_user.id)
 
-        # Apply search filters
+        # Apply text filters
         if filters.q:
             query = query.where(
                 or_(
                     User.username.ilike(f"%{filters.q}%"),
                     User.display_name.ilike(f"%{filters.q}%"),
-                    User.bio.ilike(f"%{filters.q}%")
+                    User.bio.ilike(f"%{filters.q}%"),
                 )
             )
 
-        # Apply privacy filters
-        query = query.where(should_appear_in_search(current_user, User))
-
-        # Apply pagination
+        # Pagination
         query = query.offset(filters.offset).limit(filters.limit)
 
         result = await db.execute(query)
         users = result.scalars().all()
 
-        # Convert to response format
-        user_responses = []
+        responses: list[PublicUserSearchResponse] = []
         for user in users:
-            # Check if current user can view this user's profile
-            if can_view_profile(current_user, user):
-                user_resp = PublicUserSearchResponse(
-                    id=user.id,
-                    username=user.username,
-                    display_name=user.display_name,
-                    bio=user.bio,
-                    avatar_url=user.avatar_url,
-                    is_verified=user.is_verified,
-                    followers_count=user.followers_count,
-                    following_count=user.following_count,
-                    checkins_count=user.checkins_count,
-                    is_following=False,  # TODO: Check if current user follows this user
-                    mutual_followers_count=0,  # TODO: Calculate mutual followers
+            if not await should_appear_in_search(db, user, current_user.id):
+                continue
+
+            if await can_view_profile(db, user, current_user.id):
+                responses.append(
+                    PublicUserSearchResponse(
+                        id=user.id,
+                        username=user.username,
+                        display_name=user.display_name,
+                        bio=user.bio,
+                        avatar_url=user.avatar_url,
+                        is_verified=user.is_verified,
+                        followers_count=user.followers_count,
+                        following_count=user.following_count,
+                        checkins_count=user.checkins_count,
+                        is_following=False,  # TODO: compute follow state
+                        mutual_followers_count=0,  # TODO: compute mutual count
+                    )
                 )
-                user_responses.append(user_resp)
 
-        return user_responses
+        return responses
 
-    except Exception as e:
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        logger.error("User search failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to search users")
 
 # ============================================================================
@@ -142,9 +189,9 @@ async def get_user_profile(
             raise HTTPException(status_code=404, detail="User not found")
 
         # Check if current user can view this profile
-        if not await can_view_profile(db, user, current_user.id):
-            raise HTTPException(
-                status_code=403, detail="Cannot view this profile")
+            if not await can_view_profile(db, user, current_user.id):
+                raise HTTPException(
+                    status_code=403, detail="Cannot view this profile")
 
         # Check if current user follows this user
         follow_query = select(Follow).where(
@@ -221,7 +268,19 @@ async def update_my_profile(
         await db.commit()
         await db.refresh(current_user)
 
-        # Return updated profile
+        followers_count = await db.scalar(
+            select(func.count(Follow.id)).where(
+                Follow.followee_id == current_user.id)
+        ) or 0
+        following_count = await db.scalar(
+            select(func.count(Follow.id)).where(
+                Follow.follower_id == current_user.id)
+        ) or 0
+        checkins_count = await db.scalar(
+            select(func.count(CheckIn.id)).where(
+                CheckIn.user_id == current_user.id)
+        ) or 0
+
         return PublicUserResponse(
             id=current_user.id,
             username=current_user.username,
@@ -229,9 +288,9 @@ async def update_my_profile(
             bio=current_user.bio,
             avatar_url=current_user.avatar_url,
             is_verified=current_user.is_verified,
-            followers_count=current_user.followers_count,
-            following_count=current_user.following_count,
-            checkins_count=current_user.checkins_count,
+            followers_count=followers_count,
+            following_count=following_count,
+            check_ins_count=checkins_count,
             is_following=False,
             created_at=current_user.created_at,
         )
@@ -255,42 +314,67 @@ async def upload_avatar(
     **Authentication Required:** Yes
     """
     try:
-        # Validate image
-        _validate_image_or_raise(file)
+        filename = file.filename or "avatar.jpg"
+        content = await file.read()
 
-        # Upload to storage
-        storage_service = StorageService()
-        avatar_url = await storage_service.upload_photo(file, f"avatars/{current_user.id}")
+        if not content:
+            raise HTTPException(status_code=400, detail="Avatar file is empty")
+
+        max_bytes = int(settings.avatar_max_mb) * 1024 * 1024
+        if len(content) > max_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Avatar file size must be less than {settings.avatar_max_mb}MB",
+            )
+
+        # Storage service will perform additional validation
+        avatar_url = await StorageService.save_avatar(current_user.id, filename, content)
 
         if not avatar_url:
             raise HTTPException(
                 status_code=500, detail="Failed to upload avatar")
 
-        # Update user avatar
         current_user.avatar_url = avatar_url
         current_user.updated_at = datetime.now(timezone.utc)
 
         await db.commit()
         await db.refresh(current_user)
 
-        # Return updated profile
+        followers_count = await db.scalar(
+            select(func.count(Follow.id)).where(
+                Follow.followee_id == current_user.id)
+        ) or 0
+        following_count = await db.scalar(
+            select(func.count(Follow.id)).where(
+                Follow.follower_id == current_user.id)
+        ) or 0
+        checkins_count = await db.scalar(
+            select(func.count(CheckIn.id)).where(
+                CheckIn.user_id == current_user.id)
+        ) or 0
+
+        signed_avatar = _convert_single_to_signed_url(current_user.avatar_url)
+
         return PublicUserResponse(
             id=current_user.id,
+            name=current_user.name,
             username=current_user.username,
-            display_name=current_user.display_name,
             bio=current_user.bio,
-            avatar_url=current_user.avatar_url,
+            avatar_url=signed_avatar,
             availability_status=current_user.availability_status,
             availability_mode=current_user.availability_mode,
             created_at=current_user.created_at,
-            followers_count=current_user.followers_count,
-            following_count=current_user.following_count,
-            check_in_count=current_user.check_in_count,
+            followers_count=followers_count,
+            following_count=following_count,
+            check_ins_count=checkins_count,
+            is_followed=None,
+            is_blocked=None,
         )
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        logger.error("Avatar upload failed: %s", exc)
         await db.rollback()
         raise HTTPException(status_code=500, detail="Failed to upload avatar")
 
@@ -349,20 +433,16 @@ async def get_user_media(
         ).order_by(desc(CheckInPhoto.created_at)).offset(offset).limit(limit)
 
         result = await db.execute(checkin_photos_query)
-        media_items = result.fetchall()
+        media_items = [row.url for row in result.fetchall() if row.url]
 
-        # Convert to expected format
-        items = []
-        for item in media_items:
-            if item.url:  # Only include items with actual photos
-                media_item = {
-                    "photo_url": item.url,
-                    "created_at": item.created_at,
-                    "place_id": item.place_id,
-                }
-                items.append(media_item)
+        signed_urls = _convert_to_signed_urls(media_items)
 
-        return PaginatedMedia(items=items, total=total, limit=limit, offset=offset)
+        return PaginatedMedia(
+            items=signed_urls,
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
 
     except HTTPException:
         raise
@@ -398,44 +478,80 @@ async def get_user_checkins(
             raise HTTPException(
                 status_code=403, detail="Cannot view this user's check-ins")
 
-        # Get total count
-        count_query = select(func.count(CheckIn.id)).where(
-            CheckIn.user_id == user_id)
-        count_result = await db.execute(count_query)
-        total = count_result.scalar()
+        # Fetch all check-ins to enforce visibility rules before pagination
+        all_checkins_result = await db.execute(
+            select(CheckIn)
+            .where(CheckIn.user_id == user_id)
+            .order_by(desc(CheckIn.created_at))
+        )
+        all_checkins = all_checkins_result.scalars().all()
 
-        # Get check-ins with place info
-        checkins_query = select(CheckIn).where(
-            CheckIn.user_id == user_id
-        ).order_by(desc(CheckIn.created_at)).offset(offset).limit(limit)
+        visible_checkins: list[CheckIn] = []
+        for ci in all_checkins:
+            if await can_view_checkin(db, ci.user_id, current_user.id, ci.visibility):
+                visible_checkins.append(ci)
 
-        result = await db.execute(checkins_query)
-        checkins = result.scalars().all()
+        total = len(visible_checkins)
+        paginated_checkins = visible_checkins[offset: offset + limit]
 
-        # Convert to CheckInResponse objects
+        if not paginated_checkins:
+            return PaginatedCheckIns(items=[], total=total, limit=limit, offset=offset)
+
+        checkin_ids = [ci.id for ci in paginated_checkins]
+        photo_rows = await db.execute(
+            select(CheckInPhoto.check_in_id, CheckInPhoto.url)
+            .where(CheckInPhoto.check_in_id.in_(checkin_ids))
+            .order_by(CheckInPhoto.check_in_id, asc(CheckInPhoto.created_at))
+        )
+        photos_by_checkin: dict[int, list[str]] = {}
+        for checkin_id, url in photo_rows.all():
+            photos_by_checkin.setdefault(checkin_id, []).append(url)
+
+        chat_window = timedelta(hours=settings.place_chat_window_hours)
+        now = datetime.now(timezone.utc)
+
         checkin_responses = []
-        for checkin in checkins:
-            checkin_response = CheckInResponse(
-                id=checkin.id,
-                user_id=checkin.user_id,
-                place_id=checkin.place_id,
-                note=checkin.note,
-                visibility=checkin.visibility,
-                created_at=checkin.created_at,
-                expires_at=checkin.expires_at,
-                latitude=checkin.latitude,
-                longitude=checkin.longitude,
-                photo_url=None,  # TODO: Get photo URL from CheckInPhoto
-                photo_urls=[],   # TODO: Get photo URLs from CheckInPhoto
-                allowed_to_chat=True,  # TODO: Calculate based on time window
+        for checkin in paginated_checkins:
+            raw_photo_urls = photos_by_checkin.get(checkin.id, [])
+            signed_photos = _convert_to_signed_urls(raw_photo_urls)
+
+            # Fallback on legacy single photo field if needed
+            if not signed_photos and checkin.photo_url:
+                single_signed = _convert_single_to_signed_url(
+                    checkin.photo_url)
+                if single_signed:
+                    signed_photos = [single_signed]
+
+            if checkin.created_at.tzinfo is None:
+                created_at = checkin.created_at.replace(tzinfo=timezone.utc)
+            else:
+                created_at = checkin.created_at
+
+            allowed_to_chat = (now - created_at) <= chat_window
+
+            checkin_responses.append(
+                CheckInResponse(
+                    id=checkin.id,
+                    user_id=checkin.user_id,
+                    place_id=checkin.place_id,
+                    note=checkin.note,
+                    visibility=checkin.visibility,
+                    created_at=checkin.created_at,
+                    expires_at=checkin.expires_at,
+                    latitude=checkin.latitude,
+                    longitude=checkin.longitude,
+                    photo_url=signed_photos[0] if signed_photos else _convert_single_to_signed_url(
+                        checkin.photo_url),
+                    photo_urls=signed_photos,
+                    allowed_to_chat=allowed_to_chat,
+                )
             )
-            checkin_responses.append(checkin_response)
 
         return PaginatedCheckIns(
             items=checkin_responses,
             total=total,
             limit=limit,
-            offset=offset
+            offset=offset,
         )
 
     except HTTPException:
@@ -477,48 +593,68 @@ async def list_user_collections(
             raise HTTPException(
                 status_code=403, detail="Cannot view this user's collections")
 
-        # Get collections from UserCollection table
-        collections_query = select(UserCollection).where(
-            UserCollection.user_id == user_id
-        ).order_by(UserCollection.name)
+        await ensure_default_collection(db, user_id)
 
-        result = await db.execute(collections_query)
-        collections = result.scalars().all()
-
-        # Convert to response format with actual data
-        collection_list = []
-        for collection in collections:
-            # Get place count for this collection
-            count_query = select(func.count()).select_from(
-                select(UserCollectionPlace).where(
-                    UserCollectionPlace.collection_id == collection.id
-                ).subquery()
+        collections_stmt = (
+            select(
+                UserCollection,
+                func.count(UserCollectionPlace.id).label("place_count"),
             )
-            count_result = await db.execute(count_query)
-            place_count = count_result.scalar() or 0
+            .outerjoin(
+                UserCollectionPlace,
+                UserCollectionPlace.collection_id == UserCollection.id,
+            )
+            .where(UserCollection.user_id == user_id)
+            .group_by(UserCollection.id)
+            .order_by(UserCollection.name)
+            .offset(offset)
+            .limit(limit)
+        )
 
-            # Get sample photos from places in this collection
-            photos_query = select(CheckInPhoto.url).join(
-                CheckIn, CheckIn.id == CheckInPhoto.check_in_id
-            ).join(
-                UserCollectionPlace, UserCollectionPlace.place_id == CheckIn.place_id
-            ).where(
-                and_(
-                    UserCollectionPlace.collection_id == collection.id,
-                    CheckInPhoto.url.isnot(None)
+        result = await db.execute(collections_stmt)
+        rows = result.all()
+
+        collection_list: list[dict] = []
+        for collection, place_count in rows:
+            photos_query = (
+                select(CheckInPhoto.url)
+                .join(CheckIn, CheckInPhoto.check_in_id == CheckIn.id)
+                .join(
+                    UserCollectionPlace,
+                    UserCollectionPlace.place_id == CheckIn.place_id,
                 )
-            ).limit(3)
+                .where(
+                    and_(
+                        UserCollectionPlace.collection_id == collection.id,
+                        CheckIn.user_id == user_id,
+                        CheckInPhoto.url.isnot(None),
+                    )
+                )
+                .order_by(desc(CheckInPhoto.created_at))
+                .limit(3)
+            )
 
             photos_result = await db.execute(photos_query)
             photo_urls = [row[0] for row in photos_result.fetchall()]
+            photo_urls = _convert_to_signed_urls(photo_urls)
 
-            collection_dict = {
-                "id": collection.id,
-                "name": collection.name,
-                "count": place_count,
-                "photos": photo_urls
-            }
-            collection_list.append(collection_dict)
+            visibility_value = collection.visibility or (
+                "public" if collection.is_public else "private"
+            )
+
+            collection_list.append(
+                {
+                    "id": collection.id,
+                    "user_id": collection.user_id,
+                    "name": collection.name,
+                    "description": collection.description,
+                    "is_public": collection.is_public,
+                    "visibility": visibility_value,
+                    "photos": photo_urls,
+                    "photo_urls": photo_urls,
+                    "place_count": place_count,
+                }
+            )
 
         return collection_list
 
