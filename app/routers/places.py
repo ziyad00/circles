@@ -1755,8 +1755,12 @@ async def create_check_in(
     except Exception as e:
         logging.error(f"Error creating check-in: {e}")
         await db.rollback()
+        # Include more specific error details for debugging
+        error_msg = f"Failed to create check-in: {str(e)}"
+        if "foreign key constraint" in str(e).lower():
+            error_msg = "User or place not found - foreign key constraint failed"
         raise HTTPException(
-            status_code=500, detail="Failed to create check-in")
+            status_code=500, detail=error_msg)
 
 
 @router.post("/check-ins/full", response_model=CheckInResponse)
@@ -1843,8 +1847,12 @@ async def create_check_in_full(
     except Exception as e:
         logging.error(f"Error creating check-in with photos: {e}")
         await db.rollback()
+        # Include more specific error details for debugging
+        error_msg = f"Failed to create check-in: {str(e)}"
+        if "foreign key constraint" in str(e).lower():
+            error_msg = "User or place not found - foreign key constraint failed"
         raise HTTPException(
-            status_code=500, detail="Failed to create check-in")
+            status_code=500, detail=error_msg)
 
 # ============================================================================
 # SAVED PLACES ENDPOINTS (Used by frontend)
