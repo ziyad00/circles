@@ -19,7 +19,8 @@ else:
         password=parsed_url.password,
         host=parsed_url.host,
         port=parsed_url.port,
-        database=parsed_url.database
+        database=parsed_url.database,
+        query=parsed_url.query  # Preserve SSL and other query parameters
     )
 
 engine = create_async_engine(
