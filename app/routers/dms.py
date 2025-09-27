@@ -44,6 +44,32 @@ from ..schemas import (
 from ..services.jwt_service import JWTService
 # from ..routers.users import _convert_single_to_signed_url  # Function removed in cleaned version
 
+def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
+    """Convert a single storage key or S3 URL to a signed URL."""
+    if not photo_url:
+        return None
+
+    if not photo_url.startswith("http"):
+        if settings.storage_backend == "local":
+            return f"http://localhost:8000{photo_url}"
+        try:
+            return StorageService.generate_signed_url(photo_url)
+        except Exception:
+            return photo_url
+    elif 's3.amazonaws.com' in photo_url or 'circles-media' in photo_url:
+        try:
+            if '/circles-media' in photo_url:
+                s3_key = photo_url.split('/circles-media')[1].lstrip('/')
+            elif '.s3.amazonaws.com/' in photo_url:
+                s3_key = photo_url.split('.s3.amazonaws.com/')[1]
+            else:
+                return photo_url
+            return StorageService.generate_signed_url(s3_key)
+        except Exception:
+            return photo_url
+    else:
+        return photo_url
+
 router = APIRouter(
     prefix="/dms",
     tags=["direct messages"],
@@ -107,7 +133,7 @@ async def get_inbox(
                     updated_at=thread.updated_at,
                     other_user_name=other_user.name,
                     other_user_username=other_user.username,
-                    other_user_avatar=other_user.avatar_url,
+                    other_user_avatar=_convert_single_to_signed_url(other_user.avatar_url),
                     last_message=None,  # TODO: Get last message
                     last_message_time=thread.updated_at,
                     is_muted=False,  # TODO: Get mute status
@@ -188,7 +214,7 @@ async def get_thread_messages(
                     sender_id=message.sender_id,
                     sender_username=sender.username,
                     sender_display_name=sender.name,
-                    sender_avatar_url=sender.avatar_url,
+                    sender_avatar_url=_convert_single_to_signed_url(sender.avatar_url),
                     text=message.text,
                     message_type=message.message_type,
                     photo_url=message.photo_url,
@@ -269,7 +295,7 @@ async def send_message(
             sender_id=message.sender_id,
             sender_username=current_user.username,
             sender_display_name=current_user.name,
-            sender_avatar_url=current_user.avatar_url,
+            sender_avatar_url=_convert_single_to_signed_url(current_user.avatar_url),
             text=message.text,
             message_type=message.message_type,
             photo_url=message.photo_urls[0] if message.photo_urls else None,
@@ -358,7 +384,7 @@ async def open_dm(
                 updated_at=existing_thread.updated_at,
                 other_user_name=other_user.name,
                 other_user_username=other_user.username,
-                other_user_avatar=other_user.avatar_url,
+                other_user_avatar=_convert_single_to_signed_url(other_user.avatar_url),
                 last_message=None,
                 last_message_time=existing_thread.updated_at,
                 is_muted=False,
@@ -405,7 +431,7 @@ async def open_dm(
             updated_at=thread.updated_at,
             other_user_name=other_user.name,
             other_user_username=other_user.username,
-            other_user_avatar=other_user.avatar_url,
+            other_user_avatar=_convert_single_to_signed_url(other_user.avatar_url),
             last_message=None,
             last_message_time=thread.created_at,
             is_muted=False,
