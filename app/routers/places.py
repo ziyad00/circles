@@ -226,7 +226,24 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
             except Exception as exc:  # pragma: no cover - fallback path
                 logger.warning(
                     "Failed to sign single photo URL %s: %s", photo_url, exc)
-    return photo_url
+                return photo_url
+    elif 's3.amazonaws.com' in photo_url or 'circles-media' in photo_url:
+        # Handle existing S3 URLs that need re-signing
+        try:
+            if '/circles-media' in photo_url:
+                s3_key = photo_url.split('/circles-media')[1].lstrip('/')
+            elif '.s3.amazonaws.com/' in photo_url:
+                s3_key = photo_url.split('.s3.amazonaws.com/')[1]
+            else:
+                return photo_url
+            return StorageService.generate_signed_url(s3_key)
+        except Exception as exc:
+            logger.warning(
+                "Failed to re-sign S3 URL %s: %s", photo_url, exc)
+            return photo_url
+    else:
+        # Already a full URL (e.g., from external sources or local storage)
+        return photo_url
 
 
 def _collect_place_photos(place: Place) -> list[str]:
