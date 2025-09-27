@@ -145,7 +145,7 @@ async def get_thread_messages(
             and_(
                 DMParticipantState.thread_id == thread_id,
                 DMParticipantState.user_id == current_user.id,
-                DMParticipantState.is_active == True
+                DMParticipantState.archived == False
             )
         )
         participant_result = await db.execute(participant_query)
@@ -187,7 +187,7 @@ async def get_thread_messages(
                     thread_id=message.thread_id,
                     sender_id=message.sender_id,
                     sender_username=sender.username,
-                    sender_display_name=sender.display_name,
+                    sender_display_name=sender.name,
                     sender_avatar_url=sender.avatar_url,
                     content=message.content,
                     message_type=message.message_type,
@@ -228,7 +228,7 @@ async def send_message(
             and_(
                 DMParticipantState.thread_id == thread_id,
                 DMParticipantState.user_id == current_user.id,
-                DMParticipantState.is_active == True
+                DMParticipantState.archived == False
             )
         )
         participant_result = await db.execute(participant_query)
@@ -268,7 +268,7 @@ async def send_message(
             thread_id=message.thread_id,
             sender_id=message.sender_id,
             sender_username=current_user.username,
-            sender_display_name=current_user.display_name,
+            sender_display_name=current_user.name,
             sender_avatar_url=current_user.avatar_url,
             content=message.content,
             message_type=message.message_type,
@@ -288,7 +288,9 @@ async def send_message(
         raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to send message")
+        import logging
+        logging.error(f"Error sending message: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send message: {str(e)}")
 
 # ============================================================================
 # DM OPEN ENDPOINT (Used by frontend)
@@ -320,20 +322,24 @@ async def open_dm(
             raise HTTPException(status_code=404, detail="User not found")
 
         # Check if users can chat (not blocked)
-        if has_block_between(current_user.id, request.other_user_id):
+        if await has_block_between(db, current_user.id, request.other_user_id):
             raise HTTPException(
                 status_code=403, detail="Cannot chat with this user")
 
         # Check if thread already exists
-        existing_thread_query = select(DMThread).join(DMParticipantState).where(
+        participant_1 = aliased(DMParticipantState)
+        participant_2 = aliased(DMParticipantState)
+
+        existing_thread_query = select(DMThread).join(
+            participant_1, DMThread.id == participant_1.thread_id
+        ).join(
+            participant_2, DMThread.id == participant_2.thread_id
+        ).where(
             and_(
-                DMParticipantState.user_id == current_user.id,
-                DMParticipantState.is_active == True
-            )
-        ).join(DMParticipantState, DMThread.id == DMParticipantState.thread_id).where(
-            and_(
-                DMParticipantState.user_id == request.other_user_id,
-                DMParticipantState.is_active == True
+                participant_1.user_id == current_user.id,
+                participant_1.archived == False,
+                participant_2.user_id == request.other_user_id,
+                participant_2.archived == False
             )
         )
 
@@ -344,23 +350,29 @@ async def open_dm(
             # Return existing thread
             thread_resp = DMThreadResponse(
                 id=existing_thread.id,
-                other_user_id=other_user.id,
-                other_username=other_user.username,
-                other_display_name=other_user.display_name,
-                other_avatar_url=other_user.avatar_url,
-                last_message=None,
-                last_message_time=existing_thread.updated_at,
-                unread_count=0,
-                is_muted=False,
-                is_pinned=False,
-                is_archived=False,
+                user_a_id=existing_thread.user_a_id,
+                user_b_id=existing_thread.user_b_id,
+                initiator_id=existing_thread.initiator_id,
+                status=existing_thread.status,
                 created_at=existing_thread.created_at,
                 updated_at=existing_thread.updated_at,
+                other_user_name=other_user.name,
+                other_user_username=other_user.username,
+                other_user_avatar=other_user.avatar_url,
+                last_message=None,
+                last_message_time=existing_thread.updated_at,
+                is_muted=False,
+                is_blocked=False,
             )
             return thread_resp
 
         # Create new thread
-        thread = DMThread()
+        thread = DMThread(
+            user_a_id=current_user.id,
+            user_b_id=request.other_user_id,
+            initiator_id=current_user.id,
+            status="pending"
+        )
         db.add(thread)
         await db.flush()  # Get the ID
 
@@ -368,12 +380,12 @@ async def open_dm(
         current_user_participant = DMParticipantState(
             thread_id=thread.id,
             user_id=current_user.id,
-            is_active=True
+            archived=False
         )
         other_user_participant = DMParticipantState(
             thread_id=thread.id,
             user_id=request.other_user_id,
-            is_active=True
+            archived=False
         )
 
         db.add(current_user_participant)
@@ -385,18 +397,19 @@ async def open_dm(
         # Create response
         thread_resp = DMThreadResponse(
             id=thread.id,
-            other_user_id=other_user.id,
-            other_username=other_user.username,
-            other_display_name=other_user.display_name,
-            other_avatar_url=other_user.avatar_url,
-            last_message=None,
-            last_message_time=thread.created_at,
-            unread_count=0,
-            is_muted=False,
-            is_pinned=False,
-            is_archived=False,
+            user_a_id=thread.user_a_id,
+            user_b_id=thread.user_b_id,
+            initiator_id=thread.initiator_id,
+            status=thread.status,
             created_at=thread.created_at,
             updated_at=thread.updated_at,
+            other_user_name=other_user.name,
+            other_user_username=other_user.username,
+            other_user_avatar=other_user.avatar_url,
+            last_message=None,
+            last_message_time=thread.created_at,
+            is_muted=False,
+            is_blocked=False,
         )
 
         return thread_resp
@@ -405,4 +418,6 @@ async def open_dm(
         raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to open DM")
+        import logging
+        logging.error(f"Error opening DM: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to open DM: {str(e)}")

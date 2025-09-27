@@ -243,3 +243,6 @@ aws_token.tmp
 test_*.py
 fix_*.py
 fix_*.sql
+# Security sensitive files
+*secrets*.json
+*ssl*.json
