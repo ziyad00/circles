@@ -67,7 +67,7 @@ def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
     for url in photo_urls:
         if url and not url.startswith("http"):
             if settings.storage_backend == "local":
-                signed_urls.append(f"http://localhost:8000{url}")
+                signed_urls.append(f"{settings.local_base_url}{url}")
             else:
                 try:
                     signed_urls.append(StorageService.generate_signed_url(url))
@@ -88,7 +88,7 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
 
     if not photo_url.startswith("http"):
         if settings.storage_backend == "local":
-            return f"http://localhost:8000{photo_url}"
+            return f"{settings.local_base_url}{photo_url}"
         try:
             signed_url = StorageService.generate_signed_url(photo_url)
             logger.debug(f"Generated signed URL for key {photo_url}: {signed_url}")

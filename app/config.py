@@ -6,7 +6,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     # App settings
-    debug: bool = False
+    debug: bool = Field(default=False, env="APP_DEBUG")
     app_name: str = "Circles"
     cors_allowed_origins: List[str] = [
         "http://localhost:3000",
@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     # Storage settings
     storage_backend: str = Field(
         default="s3", env="STORAGE_BACKEND")  # "local" or "s3"
+    local_base_url: str = Field(
+        default="http://10.0.2.2:8000", env="LOCAL_BASE_URL")  # Base URL for local storage URLs
     s3_bucket: Optional[str] = Field(default=None, env="S3_BUCKET")
     s3_region: Optional[str] = Field(default=None, env="S3_REGION")
     s3_endpoint_url: Optional[str] = Field(default=None, env="S3_ENDPOINT_URL")

@@ -24,7 +24,7 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
 
     if not photo_url.startswith("http"):
         if settings.storage_backend == "local":
-            return f"http://localhost:8000{photo_url}"
+            return f"{settings.local_base_url}{photo_url}"
         try:
             signed_url = StorageService.generate_signed_url(photo_url)
             return signed_url
