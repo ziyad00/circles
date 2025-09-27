@@ -49,12 +49,19 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
     if not photo_url:
         return None
 
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.debug(f"Converting URL: {photo_url}, storage_backend: {settings.storage_backend}")
+
     if not photo_url.startswith("http"):
         if settings.storage_backend == "local":
             return f"http://localhost:8000{photo_url}"
         try:
-            return StorageService.generate_signed_url(photo_url)
-        except Exception:
+            signed_url = StorageService.generate_signed_url(photo_url)
+            logger.debug(f"Generated signed URL for key {photo_url}: {signed_url}")
+            return signed_url
+        except Exception as exc:
+            logger.warning(f"Failed to sign photo URL {photo_url}: {exc}")
             return photo_url
     elif 's3.amazonaws.com' in photo_url or 'circles-media' in photo_url:
         try:
@@ -64,8 +71,11 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
                 s3_key = photo_url.split('.s3.amazonaws.com/')[1]
             else:
                 return photo_url
-            return StorageService.generate_signed_url(s3_key)
-        except Exception:
+            signed_url = StorageService.generate_signed_url(s3_key)
+            logger.debug(f"Re-signed S3 URL {photo_url} -> {signed_url}")
+            return signed_url
+        except Exception as exc:
+            logger.warning(f"Failed to re-sign S3 photo URL {photo_url}: {exc}")
             return photo_url
     else:
         return photo_url
