@@ -18,43 +18,33 @@ _otp_verify_log: dict[tuple[str, str], list[datetime]] = {}
 
 
 def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
-    """
-    Convert a single S3 key or S3 URL to signed URL for secure access.
-    """
+    """Convert a single storage key or S3 URL to a signed URL."""
     if not photo_url:
         return None
 
-    if not photo_url.startswith('http'):
-        # This is an S3 key, convert to signed URL
+    if not photo_url.startswith("http"):
+        if settings.storage_backend == "local":
+            return f"http://localhost:8000{photo_url}"
         try:
-            return StorageService.generate_signed_url(photo_url)
-        except Exception as e:
-            # Fallback to original URL if signing fails
+            signed_url = StorageService.generate_signed_url(photo_url)
+            return signed_url
+        except Exception as exc:
             return photo_url
-    elif 's3.amazonaws.com' in photo_url or 'circles-media-259c' in photo_url:
-        # This is an S3 URL, extract the key and convert to signed URL
+    if "s3.amazonaws.com" in photo_url or "circles-media" in photo_url:
         try:
-            # Extract S3 key from URL like: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
-            # or: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
-            if 's3.amazonaws.com' in photo_url:
-                # Handle both path-style and virtual-hosted-style URLs
-                if '/circles-media-259c/' in photo_url:
-                    # Path-style: https://s3.amazonaws.com/circles-media-259c/checkins/39/test_photo.jpg
-                    s3_key = photo_url.split('/circles-media-259c/')[1]
+            if "s3.amazonaws.com" in photo_url and "/" in photo_url:
+                if "/circles-media" in photo_url:
+                    s3_key = photo_url.split("/circles-media", 1)[1].lstrip("/")
                 else:
-                    # Virtual-hosted-style: https://circles-media-259c.s3.amazonaws.com/checkins/39/test_photo.jpg
-                    s3_key = photo_url.split('.s3.amazonaws.com/')[1]
-
-                return StorageService.generate_signed_url(s3_key)
+                    s3_key = photo_url.split(".s3.amazonaws.com/", 1)[1]
             else:
-                # Fallback for other S3 URLs
-                return photo_url
-        except Exception as e:
-            # Fallback to original URL if signing fails
+                s3_key = photo_url.split(".amazonaws.com/", 1)[1]
+            signed_url = StorageService.generate_signed_url(s3_key)
+            return signed_url
+        except Exception as exc:
             return photo_url
-    else:
-        # Already a full URL (e.g., from FSQ or local storage)
-        return photo_url
+    # Return the original URL if it's already a signed URL or external URL
+    return photo_url
 
 router = APIRouter(
     prefix="/auth",
