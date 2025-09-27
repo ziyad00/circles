@@ -189,7 +189,7 @@ async def get_thread_messages(
                     sender_username=sender.username,
                     sender_display_name=sender.name,
                     sender_avatar_url=sender.avatar_url,
-                    content=message.content,
+                    text=message.text,
                     message_type=message.message_type,
                     photo_url=message.photo_url,
                     created_at=message.created_at,
@@ -242,10 +242,10 @@ async def send_message(
         message = DMMessage(
             thread_id=thread_id,
             sender_id=current_user.id,
-            content=message_data.content,
-            message_type=message_data.message_type or "text",
-            reply_to_id=message_data.reply_to_id,
-            is_forwarded=message_data.is_forwarded or False,
+            text=message_data.text,
+            message_type=getattr(message_data, 'message_type', None) or "text",
+            reply_to_id=getattr(message_data, 'reply_to_id', None),
+            is_forwarded=getattr(message_data, 'is_forwarded', False),
         )
 
         db.add(message)
@@ -270,12 +270,12 @@ async def send_message(
             sender_username=current_user.username,
             sender_display_name=current_user.name,
             sender_avatar_url=current_user.avatar_url,
-            content=message.content,
+            text=message.text,
             message_type=message.message_type,
-            photo_url=message.photo_url,
+            photo_url=message.photo_urls[0] if message.photo_urls else None,
             created_at=message.created_at,
-            updated_at=message.updated_at,
-            is_edited=False,
+            updated_at=message.created_at,  # Use created_at since updated_at doesn't exist
+            is_edited=False,  # Can't determine without updated_at field
             reply_to_id=message.reply_to_id,
             is_forwarded=message.is_forwarded,
             delivery_status=message.delivery_status,
