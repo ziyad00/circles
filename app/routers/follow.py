@@ -10,6 +10,7 @@ from ..schemas import PaginatedFollowers, PaginatedFollowing, FollowUserResponse
 from ..services.storage import StorageService
 from ..utils import can_view_follower_list, can_view_following_list
 from ..services.block_service import has_user_blocked
+from ..config import settings
 
 
 def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
@@ -20,12 +21,15 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
         return None
 
     if not photo_url.startswith('http'):
-        # This is an S3 key, convert to signed URL
-        try:
-            return StorageService.generate_signed_url(photo_url)
-        except Exception as e:
-            # Fallback to original URL if signing fails
-            return photo_url
+        # This is an S3 key or local path, convert appropriately
+        if settings.storage_backend == "local":
+            return f"{settings.local_base_url}/{photo_url.lstrip('/')}"
+        else:
+            try:
+                return StorageService.generate_signed_url(photo_url)
+            except Exception as e:
+                # Fallback to original URL if signing fails
+                return photo_url
     elif 's3.amazonaws.com' in photo_url or 'circles-media-259c' in photo_url:
         # This is an S3 URL, extract the key and convert to signed URL
         try:
@@ -130,8 +134,10 @@ async def list_followers(limit: int = Query(20, ge=1, le=100), offset: int = Que
         select(
             User,
             followers_subq.c.created_at,
-            func.coalesce(func.bool_or(
-                my_following_subq.c.followee_id.is_not(None)), False)
+            func.coalesce(func.max(sa.case(
+                (my_following_subq.c.followee_id.is_not(None), 1),
+                else_=0
+            )), 0)
         )
         .join_from(User, followers_subq, User.id == followers_subq.c.follower_id)
         .outerjoin(my_following_subq, User.id == my_following_subq.c.followee_id)
@@ -260,8 +266,10 @@ async def list_user_followers(
         select(
             User,
             followers_subq.c.created_at,
-            func.coalesce(func.bool_or(
-                my_following_subq.c.followee_id.is_not(None)), False)
+            func.coalesce(func.max(sa.case(
+                (my_following_subq.c.followee_id.is_not(None), 1),
+                else_=0
+            )), 0)
         )
         .join_from(User, followers_subq, User.id == followers_subq.c.follower_id)
         .outerjoin(my_following_subq, User.id == my_following_subq.c.followee_id)

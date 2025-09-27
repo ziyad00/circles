@@ -43,7 +43,7 @@ def _convert_to_signed_url(url: str | None) -> str | None:
 
     # For local storage, return the full URL
     if settings.storage_backend == "local":
-        return f"{settings.local_base_url}{url}"
+        return f"{settings.local_base_url}/{url.lstrip('/')}"
     else:
         # For S3, generate signed URL
         try:
@@ -307,6 +307,48 @@ async def get_collection_items(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/{collection_id}", response_model=CollectionResponse)
+async def get_collection(
+    collection_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+) -> CollectionResponse:
+    """Get collection details."""
+    collection_result = await db.execute(
+        select(UserCollection).where(UserCollection.id == collection_id)
+    )
+    collection = collection_result.scalar_one_or_none()
+    if not collection:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    if not await can_view_collection(
+        db,
+        collection.user_id,
+        current_user.id,
+        collection.visibility or ("public" if collection.is_public else "private"),
+    ):
+        raise HTTPException(status_code=403, detail="Cannot view this collection")
+
+    # Get places count for this collection
+    places_count_result = await db.execute(
+        select(func.count(UserCollectionPlace.id)).where(
+            UserCollectionPlace.collection_id == collection.id
+        )
+    )
+    places_count = places_count_result.scalar() or 0
+
+    return CollectionResponse(
+        id=collection.id,
+        name=collection.name,
+        description=collection.description,
+        user_id=collection.user_id,
+        is_public=collection.is_public,
+        visibility=collection.visibility,
+        created_at=collection.created_at,
+        places_count=places_count,
     )
 
 
