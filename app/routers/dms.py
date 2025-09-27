@@ -195,7 +195,10 @@ async def get_thread_messages(
         query = select(DMMessage).where(
             and_(
                 DMMessage.thread_id == thread_id,
-                DMMessage.deleted_by_user_id != current_user.id
+                or_(
+                    DMMessage.deleted_by_user_id.is_(None),
+                    DMMessage.deleted_by_user_id != current_user.id
+                )
             )
         ).order_by(desc(DMMessage.created_at))
 
@@ -227,10 +230,10 @@ async def get_thread_messages(
                     sender_avatar_url=_convert_single_to_signed_url(sender.avatar_url),
                     text=message.text,
                     message_type=message.message_type,
-                    photo_url=message.photo_url,
+                    photo_url=message.photo_urls,
                     created_at=message.created_at,
-                    updated_at=message.updated_at,
-                    is_edited=message.updated_at > message.created_at,
+                    updated_at=message.created_at,  # Use created_at as fallback
+                    is_edited=False,  # No edited field in schema
                     reply_to_id=message.reply_to_id,
                     is_forwarded=message.is_forwarded,
                     delivery_status=message.delivery_status,
@@ -402,12 +405,12 @@ async def open_dm(
             )
             return thread_resp
 
-        # Create new thread
+        # Create new thread with auto-acceptance
         thread = DMThread(
             user_a_id=current_user.id,
             user_b_id=request.other_user_id,
             initiator_id=current_user.id,
-            status="pending"
+            status="accepted"
         )
         db.add(thread)
         await db.flush()  # Get the ID
@@ -457,3 +460,198 @@ async def open_dm(
         import logging
         logging.error(f"Error opening DM: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to open DM: {str(e)}")
+
+
+@router.post("/messages/{message_id}/like", status_code=status.HTTP_201_CREATED)
+async def like_message(
+    message_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    """
+    Like/heart a DM message.
+
+    **Authentication Required:** Yes
+    """
+    try:
+        # Verify message exists and user has access
+        message_query = select(DMMessage).where(DMMessage.id == message_id)
+        message_result = await db.execute(message_query)
+        message = message_result.scalar_one_or_none()
+
+        if not message:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        # Verify user is part of the thread
+        participant_query = select(DMParticipantState).where(
+            DMParticipantState.thread_id == message.thread_id,
+            DMParticipantState.user_id == current_user.id
+        )
+        participant_result = await db.execute(participant_query)
+        participant = participant_result.scalar_one_or_none()
+
+        if not participant:
+            raise HTTPException(status_code=403, detail="You are not part of this conversation")
+
+        # Check if already liked
+        existing_like_query = select(DMMessageLike).where(
+            DMMessageLike.message_id == message_id,
+            DMMessageLike.user_id == current_user.id
+        )
+        existing_like_result = await db.execute(existing_like_query)
+        existing_like = existing_like_result.scalar_one_or_none()
+
+        if existing_like:
+            raise HTTPException(status_code=409, detail="Message already liked")
+
+        # Create like
+        like = DMMessageLike(
+            message_id=message_id,
+            user_id=current_user.id
+        )
+        db.add(like)
+        await db.commit()
+
+        return {"message": "Message liked successfully"}
+
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        import logging
+        logging.error(f"Error liking message {message_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to like message: {str(e)}")
+
+
+@router.delete("/messages/{message_id}/like", status_code=status.HTTP_204_NO_CONTENT)
+async def unlike_message(
+    message_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    """
+    Unlike/unheart a DM message.
+
+    **Authentication Required:** Yes
+    """
+    try:
+        # Verify message exists and user has access
+        message_query = select(DMMessage).where(DMMessage.id == message_id)
+        message_result = await db.execute(message_query)
+        message = message_result.scalar_one_or_none()
+
+        if not message:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        # Verify user is part of the thread
+        participant_query = select(DMParticipantState).where(
+            DMParticipantState.thread_id == message.thread_id,
+            DMParticipantState.user_id == current_user.id
+        )
+        participant_result = await db.execute(participant_query)
+        participant = participant_result.scalar_one_or_none()
+
+        if not participant:
+            raise HTTPException(status_code=403, detail="You are not part of this conversation")
+
+        # Find and delete like
+        like_query = select(DMMessageLike).where(
+            DMMessageLike.message_id == message_id,
+            DMMessageLike.user_id == current_user.id
+        )
+        like_result = await db.execute(like_query)
+        like = like_result.scalar_one_or_none()
+
+        if not like:
+            raise HTTPException(status_code=404, detail="Like not found")
+
+        await db.delete(like)
+        await db.commit()
+
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        import logging
+        logging.error(f"Error unliking message {message_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to unlike message: {str(e)}")
+
+
+@router.get("/threads/{thread_id}/unread-count", response_model=dict)
+async def get_thread_unread_count(
+    thread_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user)
+):
+    """Get unread message count for a specific thread."""
+    try:
+        # Check if user is participant in thread
+        participant_query = select(DMParticipantState).where(
+            DMParticipantState.thread_id == thread_id,
+            DMParticipantState.user_id == current_user.id
+        )
+        participant_result = await db.execute(participant_query)
+        participant = participant_result.scalar_one_or_none()
+
+        if not participant:
+            raise HTTPException(status_code=403, detail="You are not part of this conversation")
+
+        # Count unread messages (messages created after last_read_at)
+        from datetime import datetime
+        unread_query = select(func.count(DMMessage.id)).where(
+            DMMessage.thread_id == thread_id,
+            DMMessage.created_at > (participant.last_read_at or datetime.min)
+        )
+        unread_result = await db.execute(unread_query)
+        unread_count = unread_result.scalar() or 0
+
+        return {"unread_count": unread_count}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logging.error(f"Error getting unread count for thread {thread_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get unread count: {str(e)}")
+
+
+@router.post("/threads/{thread_id}/accept", response_model=dict)
+async def accept_thread(
+    thread_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user)
+):
+    """Accept a DM thread request."""
+    try:
+        # Get the thread
+        thread_query = select(DMThread).where(DMThread.id == thread_id)
+        thread_result = await db.execute(thread_query)
+        thread = thread_result.scalar_one_or_none()
+
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        # Check if current user is participant
+        if current_user.id not in (thread.user_a_id, thread.user_b_id):
+            raise HTTPException(status_code=403, detail="You are not part of this conversation")
+
+        # Only allow accepting if status is pending
+        if thread.status != "pending":
+            raise HTTPException(status_code=400, detail=f"Thread status is {thread.status}, not pending")
+
+        # Accept the thread
+        thread.status = "accepted"
+        await db.commit()
+
+        return {"message": "Thread accepted successfully", "status": "accepted"}
+
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        import logging
+        logging.error(f"Error accepting thread {thread_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to accept thread: {str(e)}")

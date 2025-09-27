@@ -1133,3 +1133,20 @@ class PaginatedCollectionPlaces(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class PlaceFilters(BaseModel):
+    """Minimal place filters for trending and nearby endpoints"""
+    place_type: Optional[str] = Field(None, description="Place type (e.g., restaurant, cafe)")
+    cuisine: Optional[str] = Field(None, description="Cuisine type (for restaurants)")
+    country: Optional[str] = Field(None, description="Country filter")
+    city: Optional[str] = Field(None, description="City filter")
+    neighborhood: Optional[str] = Field(None, description="Neighborhood filter")
+    price_budget: Optional[str] = Field(None, description="Price tier: $, $$, $$$")
+
+    @field_validator('price_budget')
+    @classmethod
+    def validate_price_budget(cls, v):
+        if v and v not in ['$', '$$', '$$$']:
+            raise ValueError('Price budget must be $, $$, or $$$')
+        return v
