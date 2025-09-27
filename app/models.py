@@ -123,6 +123,21 @@ class Place(Base):
     photo_url = Column(String, nullable=True)  # Primary photo URL
     additional_photos = Column(JSON, nullable=True)  # Additional photo URLs as JSON array
 
+    @property
+    def additional_photos_list(self):
+        """Get additional_photos as a list, handling both JSON and string formats."""
+        if self.additional_photos is None:
+            return None
+        if isinstance(self.additional_photos, list):
+            return self.additional_photos
+        if isinstance(self.additional_photos, str):
+            try:
+                import json
+                return json.loads(self.additional_photos)
+            except json.JSONDecodeError:
+                return None
+        return None
+
     # Relationships
     check_ins = relationship("CheckIn", back_populates="place")
     saved_by = relationship("SavedPlace", back_populates="place")

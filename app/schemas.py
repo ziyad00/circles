@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, Union, List, Dict, Any
 from enum import Enum
 from datetime import datetime
@@ -107,6 +107,22 @@ class PlaceResponse(PlaceBase):
     additional_photos: Optional[List[str]] = None  # Additional photos (excluding primary)
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator('additional_photos', mode='before')
+    @classmethod
+    def validate_additional_photos(cls, v):
+        """Handle additional_photos field, converting JSON strings to lists."""
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            try:
+                import json
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return None
+        return None
 
 
 class VisibilityEnum(str, Enum):

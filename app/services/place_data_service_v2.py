@@ -2069,9 +2069,8 @@ class EnhancedPlaceDataService:
                 distance_meters=place_data.get('distance_meters'),
                 venue_created_at=place_data.get('venue_created_at'),
                 photo_url=primary_photo,  # Primary photo
-                # Additional photos as JSON string
-                additional_photos=json.dumps(
-                    additional_photos) if additional_photos else None,
+                # Additional photos as list (SQLAlchemy JSON column handles serialization)
+                additional_photos=additional_photos if additional_photos else None,
             )
 
             if place.latitude is not None and place.longitude is not None:
