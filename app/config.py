@@ -44,7 +44,8 @@ class Settings(BaseSettings):
     storage_backend: str = Field(
         default="s3", env="STORAGE_BACKEND")  # "local" or "s3"
     local_base_url: str = Field(
-        default="http://10.0.2.2:8000", env="LOCAL_BASE_URL")  # Base URL for local storage URLs
+        # Base URL for local storage URLs
+        default="http://10.0.2.2:8000", env="LOCAL_BASE_URL")
     s3_bucket: Optional[str] = Field(default=None, env="S3_BUCKET")
     s3_region: Optional[str] = Field(default=None, env="S3_REGION")
     s3_endpoint_url: Optional[str] = Field(default=None, env="S3_ENDPOINT_URL")

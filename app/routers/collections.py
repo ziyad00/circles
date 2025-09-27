@@ -43,7 +43,7 @@ def _convert_to_signed_url(url: str | None) -> str | None:
 
     # For local storage, return the full URL
     if settings.storage_backend == "local":
-        return f"http://localhost:8000{url}"
+        return f"{settings.local_base_url}{url}"
     else:
         # For S3, generate signed URL
         try:

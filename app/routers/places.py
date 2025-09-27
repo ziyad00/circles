@@ -197,7 +197,7 @@ def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
         if url and not url.startswith("http"):
             # For local storage, return the full URL
             if settings.storage_backend == "local":
-                signed_urls.append(f"http://localhost:8000{url}")
+                signed_urls.append(f"{settings.local_base_url}{url}")
             else:
                 # For S3, generate signed URL
                 try:
@@ -218,7 +218,7 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
     if not photo_url.startswith("http"):
         # For local storage, return the full URL
         if settings.storage_backend == "local":
-            return f"http://localhost:8000{photo_url}"
+            return f"{settings.local_base_url}{photo_url}"
         else:
             # For S3, generate signed URL
             try:
