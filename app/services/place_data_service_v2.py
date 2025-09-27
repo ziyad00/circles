@@ -299,6 +299,31 @@ class EnhancedPlaceDataService:
                         "formatted_address") or location.get("address")
                     city = location.get("locality") or location.get("city")
 
+                    # Extract enriched fields
+                    cross_street = location.get("cross_street", "")
+                    formatted_address = location.get("formatted_address", "")
+                    postal_code = location.get("postcode", "")
+
+                    # Calculate distance from search center
+                    import math
+                    distance_meters = 0.0
+                    if vlat and vlon and lat and lon:
+                        # Haversine formula for distance calculation
+                        R = 6371000  # Earth's radius in meters
+                        lat1, lon1, lat2, lon2 = map(math.radians, [lat, lon, vlat, vlon])
+                        dlat = lat2 - lat1
+                        dlon = lon2 - lon1
+                        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                        c = 2 * math.asin(math.sqrt(a))
+                        distance_meters = R * c
+
+                    # Get created timestamp
+                    from datetime import datetime, timezone
+                    venue_created_at = datetime.now(timezone.utc)
+
+                    # Get photo URL (first photo if available)
+                    photo_url = photos[0] if photos else ""
+
                     results.append({
                         "id": None,
                         "name": v.get("name"),
@@ -318,6 +343,14 @@ class EnhancedPlaceDataService:
                         "description": v.get("description"),
                         "address": address,
                         "city": city,
+                        # Missing fields that were causing null values
+                        "cross_street": cross_street,
+                        "formatted_address": formatted_address,
+                        "postal_code": postal_code,
+                        "distance_meters": distance_meters,
+                        "venue_created_at": venue_created_at,
+                        "photo_url": photo_url,
+                        "additional_photos": photos[1:] if len(photos) > 1 else [],
                         "metadata": {
                             "foursquare_id": v.get("fsq_place_id") or v.get("fsq_id"),
                             "review_count": v.get("stats", {}).get("total_ratings"),
@@ -685,6 +718,16 @@ class EnhancedPlaceDataService:
                         "formatted_address") or location.get("address")
                     city = location.get("locality") or location.get("city")
 
+                    # Extract additional location fields
+                    formatted_address = location.get("formatted_address") or address
+                    cross_street = location.get("cross_street") or ""
+
+                    # Get distance if available
+                    distance_meters = v.get("distance")
+
+                    # Get venue created date if available
+                    venue_created_at = v.get("created_at")
+
                     # Check if currently open
                     hours = v.get("hours", {})
                     open_now = hours.get("open_now")
@@ -710,6 +753,11 @@ class EnhancedPlaceDataService:
                         "address": address,
                         "city": city,
                         "open_now": open_now,
+                        # Missing fields that were causing null values
+                        "cross_street": cross_street,
+                        "formatted_address": formatted_address,
+                        "distance_meters": distance_meters,
+                        "venue_created_at": venue_created_at,
                         "metadata": {
                             "foursquare_id": v.get("id"),  # v2 API uses 'id'
                             "review_count": v.get("stats", {}).get("total_ratings"),
