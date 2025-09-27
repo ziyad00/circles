@@ -63,7 +63,6 @@ async def lifespan(app: FastAPI):
                 
                 # Define required columns from the model
                 required_columns = {
-                    'postal_code': 'VARCHAR',
                     'cross_street': 'VARCHAR', 
                     'formatted_address': 'TEXT',
                     'distance_meters': 'FLOAT',

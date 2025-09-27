@@ -114,7 +114,6 @@ class Place(Base):
                               nullable=True)  # When last enriched
 
     # Additional Foursquare fields
-    postal_code = Column(String, nullable=True)
     cross_street = Column(String, nullable=True)
     formatted_address = Column(Text, nullable=True)
     # Distance from search point

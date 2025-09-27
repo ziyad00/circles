@@ -97,7 +97,6 @@ class PlaceResponse(PlaceBase):
     recent_checkins_count: int = 0
 
     # Enhanced Foursquare fields
-    postal_code: Optional[str] = None
     cross_street: Optional[str] = None
     formatted_address: Optional[str] = None
     distance_meters: Optional[float] = None
