@@ -246,3 +246,5 @@ fix_*.sql
 # Security sensitive files
 *secrets*.json
 *ssl*.json
+*.patch
+uv.lock
