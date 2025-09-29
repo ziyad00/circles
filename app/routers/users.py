@@ -20,6 +20,7 @@ from ..services.storage import StorageService
 from ..services.collection_sync import ensure_default_collection
 from ..utils import (
     can_view_checkin,
+    can_view_collection,
     can_view_profile,
     should_appear_in_search
 )
@@ -177,7 +178,7 @@ async def search_users(
             query = query.where(
                 or_(
                     User.username.ilike(f"%{filters.q}%"),
-                    User.display_name.ilike(f"%{filters.q}%"),
+                    User.name.ilike(f"%{filters.q}%"),
                     User.bio.ilike(f"%{filters.q}%"),
                 )
             )
@@ -198,22 +199,26 @@ async def search_users(
                     PublicUserSearchResponse(
                         id=user.id,
                         username=user.username,
-                        display_name=user.display_name,
+                        name=user.name,  # Use name field directly
                         bio=user.bio,
                         avatar_url=_convert_single_to_signed_url(user.avatar_url),
-                        is_verified=user.is_verified,
-                        followers_count=user.followers_count,
-                        following_count=user.following_count,
-                        checkins_count=user.checkins_count,
-                        is_following=False,  # TODO: compute follow state
-                        mutual_followers_count=0,  # TODO: compute mutual count
+                        created_at=user.created_at,
+                        followed=False,  # TODO: compute follow state
                     )
                 )
 
         return responses
 
     except Exception as exc:  # pragma: no cover - defensive fallback
-        logger.error("User search failed: %s", exc)
+        logger.error("User search failed: %s", exc, exc_info=True)
+        # Add more specific error details for debugging
+        error_details = {
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "filters": filters.model_dump() if hasattr(filters, 'model_dump') else str(filters),
+            "current_user_id": current_user.id if current_user else "None"
+        }
+        logger.error("User search error details: %s", error_details)
         raise HTTPException(status_code=500, detail="Failed to search users")
 
 # ============================================================================
@@ -295,7 +300,7 @@ async def update_my_profile(
     try:
         # Update user fields
         if user_update.display_name is not None:
-            current_user.display_name = user_update.display_name
+            current_user.name = user_update.display_name  # Update name field
         if user_update.bio is not None:
             current_user.bio = user_update.bio
         if user_update.username is not None:
@@ -336,7 +341,7 @@ async def update_my_profile(
         return PublicUserResponse(
             id=current_user.id,
             username=current_user.username,
-            display_name=current_user.display_name,
+            display_name=current_user.name,  # Use name as display_name
             bio=current_user.bio,
             avatar_url=_convert_single_to_signed_url(current_user.avatar_url),
             is_verified=current_user.is_verified,
@@ -672,7 +677,21 @@ async def list_user_collections(
             raise HTTPException(
                 status_code=403, detail="Cannot view this user's collections")
 
-        await ensure_default_collection(db, user_id)
+        # Only ensure default collection for the current user, not for other users being viewed
+        if user_id == current_user.id:
+            await ensure_default_collection(db, user_id)
+
+        # If viewing another user's collections, only show public ones
+        # If viewing own collections, show all
+        where_conditions = [UserCollection.user_id == user_id]
+        if user_id != current_user.id:
+            # Only show public collections to other users
+            where_conditions.append(
+                or_(
+                    UserCollection.visibility == "public",
+                    UserCollection.is_public == True
+                )
+            )
 
         collections_stmt = (
             select(
@@ -683,7 +702,7 @@ async def list_user_collections(
                 UserCollectionPlace,
                 UserCollectionPlace.collection_id == UserCollection.id,
             )
-            .where(UserCollection.user_id == user_id)
+            .where(and_(*where_conditions))
             .group_by(UserCollection.id)
             .order_by(UserCollection.name)
             .offset(offset)
@@ -695,6 +714,16 @@ async def list_user_collections(
 
         collection_list: list[dict] = []
         for collection, place_count in rows:
+            # Double-check visibility for each collection (extra safety)
+            visibility_value = collection.visibility or (
+                "public" if collection.is_public else "private"
+            )
+
+            # Skip private collections if viewing another user's profile
+            if (user_id != current_user.id and
+                not await can_view_collection(db, collection.user_id, current_user.id, visibility_value)):
+                continue
+
             photos_query = (
                 select(CheckInPhoto.url)
                 .join(CheckIn, CheckInPhoto.check_in_id == CheckIn.id)
