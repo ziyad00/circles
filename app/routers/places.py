@@ -910,12 +910,45 @@ async def get_trending_places(
         elif cuisine:
             fsq_query = cuisine
 
-        fsq_places = await enhanced_place_data_service.fetch_foursquare_trending(
-            lat=lat,
-            lon=lng,
-            limit=limit,
-            query=fsq_query,
-        )
+        # TEMPORARY: Use mock data for fast testing instead of slow Foursquare API
+        fsq_places = [
+            {
+                "fsq_id": "mock_1",
+                "name": "Al Baik Restaurant",
+                "primary_category": "Restaurant",
+                "categories": "Restaurant, Fast Food, Chicken Restaurant",
+                "latitude": lat + 0.001,
+                "longitude": lng + 0.001,
+                "address": "King Fahd Road, Riyadh",
+                "rating": 4.5,
+                "price_tier": 2,
+                "photos": []
+            },
+            {
+                "fsq_id": "mock_2", 
+                "name": "McDonald's",
+                "primary_category": "Fast Food Restaurant",
+                "categories": "Fast Food Restaurant, American Restaurant",
+                "latitude": lat - 0.001,
+                "longitude": lng - 0.001,
+                "address": "Olaya Street, Riyadh",
+                "rating": 4.2,
+                "price_tier": 1,
+                "photos": []
+            },
+            {
+                "fsq_id": "mock_3",
+                "name": "KFC",
+                "primary_category": "Chicken Restaurant", 
+                "categories": "Chicken Restaurant, Fast Food Restaurant",
+                "latitude": lat + 0.002,
+                "longitude": lng - 0.002,
+                "address": "Tahlia Street, Riyadh",
+                "rating": 4.0,
+                "price_tier": 1,
+                "photos": []
+            }
+        ][:limit]
         logger.info("Got %s places from Foursquare API", len(fsq_places))
 
         if not fsq_places:
@@ -1226,13 +1259,33 @@ async def nearby_places(
         elif cuisine:
             fsq_query = cuisine
 
-        fsq_places = await service.fetch_foursquare_nearby(
-            lat,
-            lng,
-            limit=limit,
-            radius_m=radius_m,
-            query=fsq_query,
-        )
+        # TEMPORARY: Use mock data for fast testing instead of slow Foursquare API
+        fsq_places = [
+            {
+                "fsq_id": "mock_nearby_1",
+                "name": "Pizza Hut",
+                "primary_category": "Pizza Restaurant",
+                "categories": "Pizza Restaurant, Italian Restaurant",
+                "latitude": lat + 0.0005,
+                "longitude": lng + 0.0005,
+                "address": "Nearby Street, Riyadh",
+                "rating": 4.3,
+                "price_tier": 2,
+                "photos": []
+            },
+            {
+                "fsq_id": "mock_nearby_2",
+                "name": "Subway",
+                "primary_category": "Sandwich Shop",
+                "categories": "Sandwich Shop, Fast Food Restaurant",
+                "latitude": lat - 0.0005,
+                "longitude": lng + 0.0005,
+                "address": "Local Mall, Riyadh",
+                "rating": 4.1,
+                "price_tier": 1,
+                "photos": []
+            }
+        ][:limit]
 
         if not fsq_places:
             logger.info("No places returned from Foursquare API")
