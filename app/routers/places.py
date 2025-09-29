@@ -205,7 +205,7 @@ def _convert_to_signed_urls(photo_urls: list[str]) -> list[str]:
                     signed_urls.append(StorageService.generate_signed_url(url))
                 except Exception as exc:  # pragma: no cover - fallback path
                     logger.warning("Failed to sign photo URL %s: %s", url, exc)
-                    signed_urls.append(url)
+                signed_urls.append(url)
         elif url:
             signed_urls.append(url)
     return signed_urls
@@ -227,14 +227,14 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
             except Exception as exc:  # pragma: no cover - fallback path
                 logger.warning(
                     "Failed to sign single photo URL %s: %s", photo_url, exc)
-                return photo_url
+            return photo_url
     elif 's3.amazonaws.com' in photo_url or 'circles-media' in photo_url:
         # Handle existing S3 URLs that need re-signing
         try:
             if '/circles-media' in photo_url:
                 s3_key = photo_url.split('/circles-media')[1].lstrip('/')
             elif '.s3.amazonaws.com/' in photo_url:
-                s3_key = photo_url.split('.s3.amazonaws.com/')[1]
+                    s3_key = photo_url.split('.s3.amazonaws.com/')[1]
             else:
                 return photo_url
             return StorageService.generate_signed_url(s3_key)
@@ -652,11 +652,11 @@ async def search_places_advanced_flexible(
     **Authentication Required:** Yes
     """
     try:
-        # Build base query
+    # Build base query
         query = select(Place).where(Place.id.isnot(None))
 
         # Apply filters
-        if filters.query:
+    if filters.query:
             query = query.where(
                 or_(
                     Place.name.ilike(f"%{filters.query}%"),
@@ -669,20 +669,20 @@ async def search_places_advanced_flexible(
             for category in filters.categories:
                 query = query.where(Place.categories.ilike(f"%{category}%"))
 
-        if filters.city:
+    if filters.city:
             query = query.where(Place.city == filters.city)
 
-        if filters.neighborhood:
+    if filters.neighborhood:
             query = query.where(Place.neighborhood.ilike(
                 f"%{filters.neighborhood}%"))
 
-        if filters.rating_min is not None:
+    if filters.rating_min is not None:
             query = query.where(Place.rating >= filters.rating_min)
 
-        if filters.rating_max is not None:
+    if filters.rating_max is not None:
             query = query.where(Place.rating <= filters.rating_max)
 
-        # Activity filters
+    # Activity filters
         if filters.has_recent_checkins is True:
             # Check for places with recent check-ins (last 24 hours)
             from datetime import datetime, timedelta
@@ -717,7 +717,7 @@ async def search_places_advanced_flexible(
         total = total_result.scalar()
 
         # Apply sorting
-        if filters.sort_by:
+    if filters.sort_by:
             if filters.sort_by == 'name':
                 order_field = Place.name
             elif filters.sort_by == 'rating':
@@ -740,9 +740,9 @@ async def search_places_advanced_flexible(
 
             if filters.sort_order == 'asc':
                 query = query.order_by(asc(order_field))
-            else:
-                query = query.order_by(desc(order_field))
         else:
+                query = query.order_by(desc(order_field))
+    else:
             # Default sorting
             query = query.order_by(desc(Place.created_at))
 
@@ -800,6 +800,7 @@ async def search_places_advanced_flexible(
 # ============================================================================
 # TRENDING AND NEARBY ENDPOINTS (Used by frontend)
 # ============================================================================
+
 
 
 @router.get("/trending", response_model=PaginatedPlaces)
@@ -910,45 +911,12 @@ async def get_trending_places(
         elif cuisine:
             fsq_query = cuisine
 
-        # TEMPORARY: Use mock data for fast testing instead of slow Foursquare API
-        fsq_places = [
-            {
-                "fsq_id": "mock_1",
-                "name": "Al Baik Restaurant",
-                "primary_category": "Restaurant",
-                "categories": "Restaurant, Fast Food, Chicken Restaurant",
-                "latitude": lat + 0.001,
-                "longitude": lng + 0.001,
-                "address": "King Fahd Road, Riyadh",
-                "rating": 4.5,
-                "price_tier": 2,
-                "photos": []
-            },
-            {
-                "fsq_id": "mock_2", 
-                "name": "McDonald's",
-                "primary_category": "Fast Food Restaurant",
-                "categories": "Fast Food Restaurant, American Restaurant",
-                "latitude": lat - 0.001,
-                "longitude": lng - 0.001,
-                "address": "Olaya Street, Riyadh",
-                "rating": 4.2,
-                "price_tier": 1,
-                "photos": []
-            },
-            {
-                "fsq_id": "mock_3",
-                "name": "KFC",
-                "primary_category": "Chicken Restaurant", 
-                "categories": "Chicken Restaurant, Fast Food Restaurant",
-                "latitude": lat + 0.002,
-                "longitude": lng - 0.002,
-                "address": "Tahlia Street, Riyadh",
-                "rating": 4.0,
-                "price_tier": 1,
-                "photos": []
-            }
-        ][:limit]
+        fsq_places = await enhanced_place_data_service.fetch_foursquare_trending(
+            lat=lat,
+            lon=lng,
+            limit=limit,
+            query=fsq_query,
+        )
         logger.info("Got %s places from Foursquare API", len(fsq_places))
 
         if not fsq_places:
@@ -1081,53 +1049,23 @@ async def get_trending_places(
     # Apply filters to the trending results
     filtered_items = []
     for item in fsq_items:
-        # Filter by place type with strict matching
+        # Flexible place type filtering
         if place_type:
             if not item.primary_category:
                 continue
-            # Strict matching for place types
+            
             place_type_lower = place_type.lower()
             category_lower = item.primary_category.lower()
             categories_lower = (item.categories or "").lower()
-
+            
             # Check if place type matches primary category or any categories
-            place_type_match = False
-
-            if place_type_lower == "restaurant":
-                # Only allow places that are explicitly restaurants or food-related
-                restaurant_keywords = ["restaurant", "food", "dining", "eatery",
-                                       "cuisine", "kitchen", "bistro", "grill", "cafe", "bar", "pub"]
-                place_type_match = any(
-                    keyword in category_lower or keyword in categories_lower for keyword in restaurant_keywords)
-            elif place_type_lower == "cafe":
-                # Only allow places that are explicitly cafes or coffee-related
-                cafe_keywords = ["cafe", "coffee", "espresso",
-                                 "coffeehouse", "coffee shop", "coffeeshop"]
-                place_type_match = any(
-                    keyword in category_lower or keyword in categories_lower for keyword in cafe_keywords)
-            elif place_type_lower == "hotel":
-                # Only allow places that are explicitly hotels
-                hotel_keywords = ["hotel", "accommodation",
-                                  "lodging", "resort", "inn"]
-                place_type_match = any(
-                    keyword in category_lower or keyword in categories_lower for keyword in hotel_keywords)
-            elif place_type_lower == "shopping":
-                # Only allow places that are explicitly shopping-related
-                shopping_keywords = ["shop", "store", "mall",
-                                     "market", "retail", "shopping", "boutique"]
-                place_type_match = any(
-                    keyword in category_lower or keyword in categories_lower for keyword in shopping_keywords)
-            elif place_type_lower == "entertainment":
-                # Only allow places that are explicitly entertainment-related
-                entertainment_keywords = ["entertainment", "theater", "cinema",
-                                          "movie", "club", "bar", "nightclub", "amusement", "park"]
-                place_type_match = any(
-                    keyword in category_lower or keyword in categories_lower for keyword in entertainment_keywords)
-            else:
-                # For other place types, use exact matching
-                place_type_match = place_type_lower in category_lower or place_type_lower in categories_lower
-
-            if not place_type_match:
+            # This is flexible and works for any place type without hardcoding
+            match = (place_type_lower in category_lower or 
+                    place_type_lower in categories_lower or
+                    category_lower in place_type_lower or
+                    any(place_type_lower in cat.strip().lower() for cat in categories_lower.split(',') if cat.strip()))
+            
+            if not match:
                 continue
 
         # Filter by cuisine (only if place_type is restaurant)
@@ -1292,15 +1230,12 @@ async def nearby_places(
             return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
         try:
-            saved_places = await service.save_foursquare_places_to_db(
+            saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(
                 fsq_places,
                 db,
             )
             await db.commit()
-            logger.info(
-                "Saved %s new Foursquare places to database",
-                len(saved_places),
-            )
+            logger.info("Saved %s places to database", len(saved_places))
             places_to_use = saved_places[:limit] if saved_places else []
         except Exception as save_error:
             logger.warning(
@@ -1337,7 +1272,7 @@ async def nearby_places(
                         "Failed to parse additional_photos JSON for place %s",
                         place.name,
                     )
-                else:
+        else:
                     all_photos.extend(additional_photos_list)
 
             recent_count = await _get_recent_checkins_count(
@@ -1387,53 +1322,23 @@ async def nearby_places(
     # Apply filters to the nearby results
     filtered_items = []
     for item in fsq_items:
-        # Filter by place type with strict matching
+        # Flexible place type filtering
         if place_type:
             if not item.primary_category:
                 continue
-            # Strict matching for place types
+            
             place_type_lower = place_type.lower()
             category_lower = item.primary_category.lower()
             categories_lower = (item.categories or "").lower()
-
+            
             # Check if place type matches primary category or any categories
-            place_type_match = False
-
-            if place_type_lower == "restaurant":
-                # Only allow places that are explicitly restaurants or food-related
-                restaurant_keywords = ["restaurant", "food", "dining", "eatery",
-                                       "cuisine", "kitchen", "bistro", "grill", "cafe", "bar", "pub"]
-                place_type_match = any(
-                    keyword in category_lower or keyword in categories_lower for keyword in restaurant_keywords)
-            elif place_type_lower == "cafe":
-                # Only allow places that are explicitly cafes or coffee-related
-                cafe_keywords = ["cafe", "coffee", "espresso",
-                                 "coffeehouse", "coffee shop", "coffeeshop"]
-                place_type_match = any(
-                    keyword in category_lower or keyword in categories_lower for keyword in cafe_keywords)
-            elif place_type_lower == "hotel":
-                # Only allow places that are explicitly hotels
-                hotel_keywords = ["hotel", "accommodation",
-                                  "lodging", "resort", "inn"]
-                place_type_match = any(
-                    keyword in category_lower or keyword in categories_lower for keyword in hotel_keywords)
-            elif place_type_lower == "shopping":
-                # Only allow places that are explicitly shopping-related
-                shopping_keywords = ["shop", "store", "mall",
-                                     "market", "retail", "shopping", "boutique"]
-                place_type_match = any(
-                    keyword in category_lower or keyword in categories_lower for keyword in shopping_keywords)
-            elif place_type_lower == "entertainment":
-                # Only allow places that are explicitly entertainment-related
-                entertainment_keywords = ["entertainment", "theater", "cinema",
-                                          "movie", "club", "bar", "nightclub", "amusement", "park"]
-                place_type_match = any(
-                    keyword in category_lower or keyword in categories_lower for keyword in entertainment_keywords)
-            else:
-                # For other place types, use exact matching
-                place_type_match = place_type_lower in category_lower or place_type_lower in categories_lower
-
-            if not place_type_match:
+            # This is flexible and works for any place type without hardcoding
+            match = (place_type_lower in category_lower or 
+                    place_type_lower in categories_lower or
+                    category_lower in place_type_lower or
+                    any(place_type_lower in cat.strip().lower() for cat in categories_lower.split(',') if cat.strip()))
+            
+            if not match:
                 continue
 
         # Filter by cuisine (only if place_type is restaurant)
@@ -1496,8 +1401,8 @@ async def get_place_details(
         result = await db.execute(query)
         place = result.scalar_one_or_none()
 
-        if not place:
-            raise HTTPException(status_code=404, detail="Place not found")
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
 
         saved_result = await db.execute(
             select(SavedPlace.id).where(
@@ -1511,7 +1416,7 @@ async def get_place_details(
 
         recent_checkins_query = (
             select(CheckIn)
-            .where(CheckIn.place_id == place_id)
+        .where(CheckIn.place_id == place_id)
             .order_by(desc(CheckIn.created_at))
             .limit(10)
         )
@@ -1593,22 +1498,22 @@ async def get_place_details(
         if not primary_photo and place_photo_candidates:
             primary_photo = place_photo_candidates[0]
 
-        return EnhancedPlaceResponse(
-            id=place.id,
-            name=place.name,
-            address=place.address,
+    return EnhancedPlaceResponse(
+        id=place.id,
+        name=place.name,
+        address=place.address,
             country=place.country,
-            city=place.city,
-            neighborhood=place.neighborhood,
-            latitude=place.latitude,
-            longitude=place.longitude,
-            categories=place.categories,
-            rating=place.rating,
+        city=place.city,
+        neighborhood=place.neighborhood,
+        latitude=place.latitude,
+        longitude=place.longitude,
+        categories=place.categories,
+        rating=place.rating,
             description=place.description,
             price_tier=place.price_tier,
             photo_url=primary_photo,
             photos=unique_photos,
-            created_at=place.created_at,
+        created_at=place.created_at,
             stats=place_stats,
             current_checkins=len(recent_checkins),
             # TODO: Calculate actual total check-ins
@@ -1616,7 +1521,7 @@ async def get_place_details(
             recent_reviews=0,  # TODO: Calculate recent reviews
             photos_count=len(unique_photos),
             is_checked_in=False,  # TODO: Check if current user is checked in
-            is_saved=is_saved,
+        is_saved=is_saved,
         )
 
     except HTTPException:
@@ -1648,8 +1553,8 @@ async def get_place_photos(
         place_result = await db.execute(place_query)
         place = place_result.scalar_one_or_none()
 
-        if not place:
-            raise HTTPException(status_code=404, detail="Place not found")
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
 
         total_query = (
             select(func.count(CheckInPhoto.id))
@@ -1849,7 +1754,7 @@ async def get_whos_here(
             user = user_result.scalar_one_or_none()
 
             if not user:
-                continue
+            continue
 
             signed_photos = _convert_to_signed_urls(
                 photos_by_checkin.get(checkin.id, [])
@@ -2039,8 +1944,8 @@ async def create_check_in(
         place_result = await db.execute(place_query)
         place = place_result.scalar_one_or_none()
 
-        if not place:
-            raise HTTPException(status_code=404, detail="Place not found")
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
 
         # Verify user exists in database (to avoid foreign key constraint errors)
         user_query = select(User).where(User.id == current_user.id)
@@ -2052,33 +1957,33 @@ async def create_check_in(
                 status_code=404, detail="User not found in database")
 
         default_vis = "public"
-        check_in = CheckIn(
-            user_id=current_user.id,
-            place_id=payload.place_id,
-            note=payload.note,
-            visibility=payload.visibility or default_vis,
+    check_in = CheckIn(
+        user_id=current_user.id,
+        place_id=payload.place_id,
+        note=payload.note,
+        visibility=payload.visibility or default_vis,
             expires_at=datetime.now(
                 timezone.utc) + timedelta(hours=settings.checkin_expiry_hours),
             latitude=payload.latitude,
             longitude=payload.longitude,
-        )
+    )
 
-        db.add(check_in)
-        await db.commit()
-        await db.refresh(check_in)
+    db.add(check_in)
+    await db.commit()
+    await db.refresh(check_in)
 
-        return CheckInResponse(
-            id=check_in.id,
-            user_id=check_in.user_id,
-            place_id=check_in.place_id,
-            note=check_in.note,
-            visibility=check_in.visibility,
-            created_at=check_in.created_at,
-            expires_at=check_in.expires_at,
+    return CheckInResponse(
+        id=check_in.id,
+        user_id=check_in.user_id,
+        place_id=check_in.place_id,
+        note=check_in.note,
+        visibility=check_in.visibility,
+        created_at=check_in.created_at,
+        expires_at=check_in.expires_at,
             latitude=check_in.latitude,
             longitude=check_in.longitude,
             photo_url=None,
-            photo_urls=[],
+        photo_urls=[],
             allowed_to_chat=True,
         )
 
@@ -2117,22 +2022,22 @@ async def create_check_in_full(
         place_result = await db.execute(place_query)
         place = place_result.scalar_one_or_none()
 
-        if not place:
-            raise HTTPException(status_code=404, detail="Place not found")
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
 
         default_vis = "public"
-        check_in = CheckIn(
-            user_id=current_user.id,
-            place_id=place_id,
-            note=note,
-            visibility=visibility or default_vis,
+    check_in = CheckIn(
+        user_id=current_user.id,
+        place_id=place_id,
+        note=note,
+        visibility=visibility or default_vis,
             expires_at=datetime.now(
                 timezone.utc) + timedelta(hours=settings.checkin_expiry_hours),
             latitude=latitude,
             longitude=longitude,
-        )
+    )
 
-        db.add(check_in)
+    db.add(check_in)
         await db.flush()  # Get the ID before committing
 
         photo_urls: list[str] = []
@@ -2155,19 +2060,19 @@ async def create_check_in_full(
                 except Exception as upload_error:
                     logging.warning("Failed to upload photo: %s", upload_error)
 
-        await db.commit()
-        await db.refresh(check_in)
+    await db.commit()
+    await db.refresh(check_in)
 
         signed_photo_urls = _convert_to_signed_urls(photo_urls)
 
-        return CheckInResponse(
-            id=check_in.id,
-            user_id=check_in.user_id,
-            place_id=check_in.place_id,
-            note=check_in.note,
-            visibility=check_in.visibility,
-            created_at=check_in.created_at,
-            expires_at=check_in.expires_at,
+    return CheckInResponse(
+        id=check_in.id,
+        user_id=check_in.user_id,
+        place_id=check_in.place_id,
+        note=check_in.note,
+        visibility=check_in.visibility,
+        created_at=check_in.created_at,
+        expires_at=check_in.expires_at,
             latitude=check_in.latitude,
             longitude=check_in.longitude,
             photo_url=signed_photo_urls[0] if signed_photo_urls else None,
@@ -2202,17 +2107,17 @@ async def delete_check_in(
     Only the user who created the check-in can delete it.
     """
     try:
-        # Find the check-in
+    # Find the check-in
         checkin_query = select(CheckIn).where(CheckIn.id == check_in_id)
         checkin_result = await db.execute(checkin_query)
         checkin = checkin_result.scalar_one_or_none()
 
         if not checkin:
-            raise HTTPException(status_code=404, detail="Check-in not found")
+        raise HTTPException(status_code=404, detail="Check-in not found")
 
-        # Verify ownership
+    # Verify ownership
         if checkin.user_id != current_user.id:
-            raise HTTPException(
+        raise HTTPException(
                 status_code=403,
                 detail="You can only delete your own check-ins"
             )
@@ -2221,7 +2126,7 @@ async def delete_check_in(
         photos_query = select(CheckInPhoto).where(
             CheckInPhoto.check_in_id == check_in_id)
         photos_result = await db.execute(photos_query)
-        photos = photos_result.scalars().all()
+    photos = photos_result.scalars().all()
 
         for photo in photos:
             # Delete photo file from storage
@@ -2236,7 +2141,7 @@ async def delete_check_in(
 
         # Delete the check-in
         await db.delete(checkin)
-        await db.commit()
+    await db.commit()
 
     except HTTPException:
         await db.rollback()
@@ -2290,7 +2195,7 @@ async def save_place(
             else:
                 collection_row = await db.execute(
                     select(UserCollection.id, UserCollection.name)
-                    .where(
+        .where(
                         and_(
                             UserCollection.user_id == current_user.id,
                             func.lower(UserCollection.name)
@@ -2372,7 +2277,7 @@ async def unsave_place(
         saved_place = result.scalar_one_or_none()
 
         if not saved_place:
-            raise HTTPException(
+        raise HTTPException(
                 status_code=404, detail="Saved place not found")
 
         await remove_saved_place_membership(
