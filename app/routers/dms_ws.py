@@ -487,15 +487,29 @@ async def _get_or_create_state(db: AsyncSession, thread_id: int, user_id: int) -
 async def dm_ws(websocket: WebSocket, thread_id: int, db: AsyncSession = Depends(get_db)):
     user_id = await _authenticate(websocket)
     if not user_id:
+        logger.warning(f"WebSocket authentication failed for thread {thread_id}")
         await websocket.close(code=4401)
         return
 
     # Authorize participant and accepted status
     res = await db.execute(select(DMThread).where(DMThread.id == thread_id))
     thread = res.scalar_one_or_none()
-    if not thread or user_id not in (thread.user_a_id, thread.user_b_id) or thread.status != "accepted":
+    if not thread:
+        logger.warning(f"Thread {thread_id} not found for user {user_id}")
+        await websocket.close(code=4404)
+        return
+
+    if user_id not in (thread.user_a_id, thread.user_b_id):
+        logger.warning(f"User {user_id} not participant in thread {thread_id} (participants: {thread.user_a_id}, {thread.user_b_id})")
         await websocket.close(code=4403)
         return
+
+    if thread.status != "accepted":
+        logger.warning(f"Thread {thread_id} status is {thread.status}, not accepted")
+        await websocket.close(code=4403)
+        return
+
+    logger.info(f"WebSocket connection established for user {user_id} in thread {thread_id}")
 
     await manager.connect(thread_id, user_id, websocket)
     await update_user_availability_from_connection(db, user_id, True)

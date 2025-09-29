@@ -47,8 +47,8 @@ async def _get_or_create_collection(
     collection = UserCollection(
         user_id=user_id,
         name=name,
-        is_public=True,
-        visibility="public",
+        is_public=False,
+        visibility="private",
     )
     db.add(collection)
     await db.flush()

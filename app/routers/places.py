@@ -98,7 +98,8 @@ def _get_all_place_photos(place) -> list[str]:
 
             all_photos.extend(additional_list)
         except (json.JSONDecodeError, TypeError):
-            logger.warning(f"Failed to parse additional_photos for place {getattr(place, 'name', 'unknown')}")
+            logger.warning(
+                f"Failed to parse additional_photos for place {getattr(place, 'name', 'unknown')}")
 
     return all_photos
 
@@ -655,21 +656,18 @@ async def search_places_advanced_flexible(
         query = select(Place).where(Place.id.isnot(None))
 
         # Apply filters
-        if filters.q:
+        if filters.query:
             query = query.where(
                 or_(
-                    Place.name.ilike(f"%{filters.q}%"),
-                    Place.categories.ilike(f"%{filters.q}%"),
-                    Place.address.ilike(f"%{filters.q}%")
+                    Place.name.ilike(f"%{filters.query}%"),
+                    Place.categories.ilike(f"%{filters.query}%"),
+                    Place.address.ilike(f"%{filters.query}%")
                 )
             )
 
-        if filters.place_type:
-            query = query.where(Place.categories.ilike(
-                f"%{filters.place_type}%"))
-
-        if filters.country:
-            query = query.where(Place.country == filters.country)
+        if filters.categories:
+            for category in filters.categories:
+                query = query.where(Place.categories.ilike(f"%{category}%"))
 
         if filters.city:
             query = query.where(Place.city == filters.city)
@@ -678,19 +676,39 @@ async def search_places_advanced_flexible(
             query = query.where(Place.neighborhood.ilike(
                 f"%{filters.neighborhood}%"))
 
-        if filters.min_rating is not None:
-            query = query.where(Place.rating >= filters.min_rating)
+        if filters.rating_min is not None:
+            query = query.where(Place.rating >= filters.rating_min)
 
-        if filters.price_tier:
-            query = query.where(Place.price_tier == filters.price_tier)
+        if filters.rating_max is not None:
+            query = query.where(Place.rating <= filters.rating_max)
+
+        # Activity filters
+        if filters.has_recent_checkins is True:
+            # Check for places with recent check-ins (last 24 hours)
+            from datetime import datetime, timedelta
+            recent_time = datetime.utcnow() - timedelta(hours=24)
+            query = query.join(CheckIn).where(
+                CheckIn.created_at >= recent_time)
+
+        if filters.has_reviews is True:
+            # Check for places with reviews (assuming reviews table exists)
+            # For now, we'll check if rating is not null as a proxy
+            query = query.where(Place.rating.isnot(None))
+
+        if filters.has_photos is True:
+            # Check for places with photos (assuming photos table exists)
+            # For now, we'll check if photo_url is not null as a proxy
+            query = query.where(Place.photo_url.isnot(None))
 
         # Location-based filtering
-        if filters.lat is not None and filters.lng is not None and filters.radius_m:
+        if filters.latitude is not None and filters.longitude is not None and filters.radius_km:
+            # Convert km to approximate meters (1 degree ≈ 111km)
+            radius_m = filters.radius_km * 1000
             query = query.where(
                 func.sqrt(
-                    func.pow(Place.latitude - filters.lat, 2) +
-                    func.pow(Place.longitude - filters.lng, 2)
-                ) * 111000 <= filters.radius_m
+                    func.pow(Place.latitude - filters.latitude, 2) +
+                    func.pow(Place.longitude - filters.longitude, 2)
+                ) * 111000 <= radius_m
             )
 
         # Get total count
@@ -698,9 +716,38 @@ async def search_places_advanced_flexible(
         total_result = await db.execute(count_query)
         total = total_result.scalar()
 
-        # Apply pagination and ordering
-        query = query.order_by(desc(Place.created_at)).offset(
-            filters.offset).limit(filters.limit)
+        # Apply sorting
+        if filters.sort_by:
+            if filters.sort_by == 'name':
+                order_field = Place.name
+            elif filters.sort_by == 'rating':
+                order_field = Place.rating
+            elif filters.sort_by == 'created_at':
+                order_field = Place.created_at
+            elif filters.sort_by == 'checkins':
+                # Count check-ins for each place
+                order_field = func.count(CheckIn.id)
+                query = query.outerjoin(CheckIn).group_by(Place.id)
+            elif filters.sort_by == 'recent_checkins':
+                # Count recent check-ins (last 24 hours)
+                from datetime import datetime, timedelta
+                recent_time = datetime.utcnow() - timedelta(hours=24)
+                order_field = func.count(CheckIn.id)
+                query = query.outerjoin(CheckIn).where(
+                    CheckIn.created_at >= recent_time).group_by(Place.id)
+            else:
+                order_field = Place.created_at
+
+            if filters.sort_order == 'asc':
+                query = query.order_by(asc(order_field))
+            else:
+                query = query.order_by(desc(order_field))
+        else:
+            # Default sorting
+            query = query.order_by(desc(Place.created_at))
+
+        # Apply pagination
+        query = query.offset(filters.offset).limit(filters.limit)
 
         result = await db.execute(query)
         places = result.scalars().all()
@@ -709,9 +756,9 @@ async def search_places_advanced_flexible(
         items = []
         for place in places:
             distance_m = None
-            if filters.lat is not None and filters.lng is not None and place.latitude and place.longitude:
+            if filters.latitude is not None and filters.longitude is not None and place.latitude and place.longitude:
                 distance_m = haversine_distance(
-                    filters.lat, filters.lng, place.latitude, place.longitude)
+                    filters.latitude, filters.longitude, place.latitude, place.longitude)
 
             place_resp = PlaceResponse(
                 id=place.id,
@@ -759,23 +806,22 @@ async def search_places_advanced_flexible(
 async def get_trending_places(
     time_window: str = Query(
         "24h", description="Time window: 1h, 6h, 24h, 7d, 30d"),
-    limit: int = Query(None, ge=1, le=100,
-                       description="Override dynamic limit (optional)"),
-    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100, description="Results per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
     lat: float | None = Query(
-        None, description="Latitude of the user location"),
+        None, description="Latitude for distance sorting"),
     lng: float | None = Query(
-        None, description="Longitude of the user location"),
-    q: str | None = Query(None, description="Search text for place name"),
+        None, description="Longitude for distance sorting"),
+    # Minimal filters
     place_type: str | None = Query(
-        None, description="Category contains (e.g., cafe)"),
-    country: str | None = Query(None, description="Country filter (optional)"),
-    city: str | None = Query(None, description="City filter (optional)"),
-    neighborhood: str | None = Query(
-        None, description="Neighborhood contains"),
-    min_rating: float | None = Query(
-        None, ge=0, le=5, description="Minimum rating"),
-    price_tier: str | None = Query(None, description="$, $$, $$$, $$$$"),
+        None, description="Place type (restaurant, cafe, etc.)"),
+    cuisine: str | None = Query(
+        None, description="Cuisine type (for restaurants)"),
+    country: str | None = Query(None, description="Country filter"),
+    city: str | None = Query(None, description="City filter"),
+    neighborhood: str | None = Query(None, description="Neighborhood filter"),
+    price_budget: str | None = Query(
+        None, description="Price tier: $, $$, $$$"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -842,11 +888,33 @@ async def get_trending_places(
 
     places_to_use: list[Place] = []
 
+    # Validate price_budget filter
+    if price_budget and price_budget not in ["$", "$$", "$$$"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid price_budget. Must be one of: $, $$, $$$"
+        )
+
+    logger.info(
+        "Trending request with filters: place_type=%s, cuisine=%s, country=%s, city=%s, neighborhood=%s, price_budget=%s",
+        place_type, cuisine, country, city, neighborhood, price_budget
+    )
+
     try:
+        # Build Foursquare query with filters
+        fsq_query = None
+        if place_type and cuisine:
+            fsq_query = f"{place_type} {cuisine}"
+        elif place_type:
+            fsq_query = place_type
+        elif cuisine:
+            fsq_query = cuisine
+
         fsq_places = await enhanced_place_data_service.fetch_foursquare_trending(
             lat=lat,
             lon=lng,
             limit=limit,
+            query=fsq_query,
         )
         logger.info("Got %s places from Foursquare API", len(fsq_places))
 
@@ -892,6 +960,13 @@ async def get_trending_places(
     now_ts = datetime.now(timezone.utc)
     hours_window = _time_window_to_hours(time_window)
     fsq_items: list[PlaceResponse] = []
+
+    # Validate price_budget filter
+    if price_budget and price_budget not in ["$", "$$", "$$$"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid price_budget. Must be one of: $, $$, $$$"
+        )
 
     logger.info("Using %s places from database", len(places_to_use))
     if places_to_use:
@@ -949,7 +1024,7 @@ async def get_trending_places(
                     created_at=place.created_at or now_ts,
                     photo_url=_convert_single_to_signed_url(place.photo_url),
                     recent_checkins_count=recent_count,
-                        cross_street=place.cross_street,
+                    cross_street=place.cross_street,
                     formatted_address=place.formatted_address,
                     distance_meters=place.distance_meters,
                     venue_created_at=place.venue_created_at,
@@ -970,11 +1045,88 @@ async def get_trending_places(
                 map_error,
             )
 
-    fsq_items.sort(key=lambda item: item.distance_meters or float("inf"))
+    # Apply filters to the trending results
+    filtered_items = []
+    for item in fsq_items:
+        # Filter by place type with strict matching
+        if place_type:
+            if not item.primary_category:
+                continue
+            # Strict matching for place types
+            place_type_lower = place_type.lower()
+            category_lower = item.primary_category.lower()
+            categories_lower = (item.categories or "").lower()
+
+            # Check if place type matches primary category or any categories
+            place_type_match = False
+
+            if place_type_lower == "restaurant":
+                # Only allow places that are explicitly restaurants or food-related
+                restaurant_keywords = ["restaurant", "food", "dining", "eatery",
+                                       "cuisine", "kitchen", "bistro", "grill", "cafe", "bar", "pub"]
+                place_type_match = any(
+                    keyword in category_lower or keyword in categories_lower for keyword in restaurant_keywords)
+            elif place_type_lower == "cafe":
+                # Only allow places that are explicitly cafes or coffee-related
+                cafe_keywords = ["cafe", "coffee", "espresso",
+                                 "coffeehouse", "coffee shop", "coffeeshop"]
+                place_type_match = any(
+                    keyword in category_lower or keyword in categories_lower for keyword in cafe_keywords)
+            elif place_type_lower == "hotel":
+                # Only allow places that are explicitly hotels
+                hotel_keywords = ["hotel", "accommodation",
+                                  "lodging", "resort", "inn"]
+                place_type_match = any(
+                    keyword in category_lower or keyword in categories_lower for keyword in hotel_keywords)
+            elif place_type_lower == "shopping":
+                # Only allow places that are explicitly shopping-related
+                shopping_keywords = ["shop", "store", "mall",
+                                     "market", "retail", "shopping", "boutique"]
+                place_type_match = any(
+                    keyword in category_lower or keyword in categories_lower for keyword in shopping_keywords)
+            elif place_type_lower == "entertainment":
+                # Only allow places that are explicitly entertainment-related
+                entertainment_keywords = ["entertainment", "theater", "cinema",
+                                          "movie", "club", "bar", "nightclub", "amusement", "park"]
+                place_type_match = any(
+                    keyword in category_lower or keyword in categories_lower for keyword in entertainment_keywords)
+            else:
+                # For other place types, use exact matching
+                place_type_match = place_type_lower in category_lower or place_type_lower in categories_lower
+
+            if not place_type_match:
+                continue
+
+        # Filter by cuisine (only if place_type is restaurant)
+        if cuisine and place_type and place_type.lower() == "restaurant":
+            if not item.categories or cuisine.lower() not in item.categories.lower():
+                continue
+
+        # Filter by location
+        if country and item.country and country.lower() not in item.country.lower():
+            continue
+        if city and item.city and city.lower() not in item.city.lower():
+            continue
+        if neighborhood and item.neighborhood and neighborhood.lower() not in item.neighborhood.lower():
+            continue
+
+        # Filter by price budget
+        if price_budget and item.price_tier:
+            # Convert price_tier to our budget format
+            if price_budget == "$" and item.price_tier > 1:
+                continue
+            elif price_budget == "$$" and item.price_tier != 2:
+                continue
+            elif price_budget == "$$$" and item.price_tier < 3:
+                continue
+
+        filtered_items.append(item)
+
+    filtered_items.sort(key=lambda item: item.distance_meters or float("inf"))
 
     return PaginatedPlaces(
-        items=fsq_items,
-        total=len(fsq_items),
+        items=filtered_items,
+        total=len(filtered_items),
         limit=limit,
         offset=offset,
     )
@@ -988,6 +1140,16 @@ async def nearby_places(
     limit: int = Query(None, ge=1, le=100,
                        description="Override dynamic limit (optional)"),
     offset: int = 0,
+    # Minimal filters
+    place_type: str | None = Query(
+        None, description="Place type (restaurant, cafe, etc.)"),
+    cuisine: str | None = Query(
+        None, description="Cuisine type (for restaurants)"),
+    country: str | None = Query(None, description="Country filter"),
+    city: str | None = Query(None, description="City filter"),
+    neighborhood: str | None = Query(None, description="Neighborhood filter"),
+    price_budget: str | None = Query(
+        None, description="Price tier: $, $$, $$$"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -1044,15 +1206,32 @@ async def nearby_places(
     if lat is None or lng is None:
         return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
+    # Validate price_budget filter
+    if price_budget and price_budget not in ["$", "$$", "$$$"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid price_budget. Must be one of: $, $$, $$$"
+        )
+
     service = EnhancedPlaceDataService()
     places_to_use: list[Place] = []
 
     try:
+        # Build Foursquare query with filters
+        fsq_query = None
+        if place_type and cuisine:
+            fsq_query = f"{place_type} {cuisine}"
+        elif place_type:
+            fsq_query = place_type
+        elif cuisine:
+            fsq_query = cuisine
+
         fsq_places = await service.fetch_foursquare_nearby(
             lat,
             lng,
             limit=limit,
             radius_m=radius_m,
+            query=fsq_query,
         )
 
         if not fsq_places:
@@ -1131,7 +1310,7 @@ async def nearby_places(
                     created_at=place.created_at or now_ts,
                     photo_url=_convert_single_to_signed_url(place.photo_url),
                     recent_checkins_count=recent_count,
-                        cross_street=place.cross_street,
+                    cross_street=place.cross_street,
                     formatted_address=place.formatted_address,
                     distance_meters=place.distance_meters,
                     venue_created_at=place.venue_created_at,
@@ -1152,11 +1331,88 @@ async def nearby_places(
                 map_error,
             )
 
-    fsq_items.sort(key=lambda item: item.distance_meters or float("inf"))
+    # Apply filters to the nearby results
+    filtered_items = []
+    for item in fsq_items:
+        # Filter by place type with strict matching
+        if place_type:
+            if not item.primary_category:
+                continue
+            # Strict matching for place types
+            place_type_lower = place_type.lower()
+            category_lower = item.primary_category.lower()
+            categories_lower = (item.categories or "").lower()
+
+            # Check if place type matches primary category or any categories
+            place_type_match = False
+
+            if place_type_lower == "restaurant":
+                # Only allow places that are explicitly restaurants or food-related
+                restaurant_keywords = ["restaurant", "food", "dining", "eatery",
+                                       "cuisine", "kitchen", "bistro", "grill", "cafe", "bar", "pub"]
+                place_type_match = any(
+                    keyword in category_lower or keyword in categories_lower for keyword in restaurant_keywords)
+            elif place_type_lower == "cafe":
+                # Only allow places that are explicitly cafes or coffee-related
+                cafe_keywords = ["cafe", "coffee", "espresso",
+                                 "coffeehouse", "coffee shop", "coffeeshop"]
+                place_type_match = any(
+                    keyword in category_lower or keyword in categories_lower for keyword in cafe_keywords)
+            elif place_type_lower == "hotel":
+                # Only allow places that are explicitly hotels
+                hotel_keywords = ["hotel", "accommodation",
+                                  "lodging", "resort", "inn"]
+                place_type_match = any(
+                    keyword in category_lower or keyword in categories_lower for keyword in hotel_keywords)
+            elif place_type_lower == "shopping":
+                # Only allow places that are explicitly shopping-related
+                shopping_keywords = ["shop", "store", "mall",
+                                     "market", "retail", "shopping", "boutique"]
+                place_type_match = any(
+                    keyword in category_lower or keyword in categories_lower for keyword in shopping_keywords)
+            elif place_type_lower == "entertainment":
+                # Only allow places that are explicitly entertainment-related
+                entertainment_keywords = ["entertainment", "theater", "cinema",
+                                          "movie", "club", "bar", "nightclub", "amusement", "park"]
+                place_type_match = any(
+                    keyword in category_lower or keyword in categories_lower for keyword in entertainment_keywords)
+            else:
+                # For other place types, use exact matching
+                place_type_match = place_type_lower in category_lower or place_type_lower in categories_lower
+
+            if not place_type_match:
+                continue
+
+        # Filter by cuisine (only if place_type is restaurant)
+        if cuisine and place_type and place_type.lower() == "restaurant":
+            if not item.categories or cuisine.lower() not in item.categories.lower():
+                continue
+
+        # Filter by location
+        if country and item.country and country.lower() not in item.country.lower():
+            continue
+        if city and item.city and city.lower() not in item.city.lower():
+            continue
+        if neighborhood and item.neighborhood and neighborhood.lower() not in item.neighborhood.lower():
+            continue
+
+        # Filter by price budget
+        if price_budget and item.price_tier:
+            # Convert price_tier to our budget format
+            if price_budget == "$" and item.price_tier > 1:
+                continue
+            elif price_budget == "$$" and item.price_tier != 2:
+                continue
+            elif price_budget == "$$$" and item.price_tier < 3:
+                continue
+
+        filtered_items.append(item)
+
+    filtered_items.sort(key=lambda item: item.distance_meters or float("inf"))
 
     return PaginatedPlaces(
-        items=fsq_items,
-        total=len(fsq_items),
+        items=filtered_items,
+        total=len(filtered_items),
         limit=limit,
         offset=offset,
     )
@@ -1739,7 +1995,8 @@ async def create_check_in(
         db_user = user_result.scalar_one_or_none()
 
         if not db_user:
-            raise HTTPException(status_code=404, detail="User not found in database")
+            raise HTTPException(
+                status_code=404, detail="User not found in database")
 
         default_vis = "public"
         check_in = CheckIn(
@@ -1747,7 +2004,8 @@ async def create_check_in(
             place_id=payload.place_id,
             note=payload.note,
             visibility=payload.visibility or default_vis,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=settings.checkin_expiry_hours),
+            expires_at=datetime.now(
+                timezone.utc) + timedelta(hours=settings.checkin_expiry_hours),
             latitude=payload.latitude,
             longitude=payload.longitude,
         )
@@ -1815,7 +2073,8 @@ async def create_check_in_full(
             place_id=place_id,
             note=note,
             visibility=visibility or default_vis,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=settings.checkin_expiry_hours),
+            expires_at=datetime.now(
+                timezone.utc) + timedelta(hours=settings.checkin_expiry_hours),
             latitude=latitude,
             longitude=longitude,
         )
@@ -1874,6 +2133,68 @@ async def create_check_in_full(
             error_msg = "User or place not found - foreign key constraint failed"
         raise HTTPException(
             status_code=500, detail=error_msg)
+
+
+@router.delete("/check-ins/{check_in_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_check_in(
+    check_in_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(JWTService.get_current_user),
+):
+    """
+    Delete a check-in.
+
+    **Authentication Required:** Yes
+
+    Only the user who created the check-in can delete it.
+    """
+    try:
+        # Find the check-in
+        checkin_query = select(CheckIn).where(CheckIn.id == check_in_id)
+        checkin_result = await db.execute(checkin_query)
+        checkin = checkin_result.scalar_one_or_none()
+
+        if not checkin:
+            raise HTTPException(status_code=404, detail="Check-in not found")
+
+        # Verify ownership
+        if checkin.user_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="You can only delete your own check-ins"
+            )
+
+        # Delete associated photos first
+        photos_query = select(CheckInPhoto).where(
+            CheckInPhoto.check_in_id == check_in_id)
+        photos_result = await db.execute(photos_query)
+        photos = photos_result.scalars().all()
+
+        for photo in photos:
+            # Delete photo file from storage
+            if photo.url:
+                try:
+                    await StorageService.delete_checkin_photo(check_in_id, photo.url)
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to delete photo file {photo.url}: {e}")
+            # Delete photo record
+            await db.delete(photo)
+
+        # Delete the check-in
+        await db.delete(checkin)
+        await db.commit()
+
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to delete check-in {check_in_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete check-in: {str(e)}"
+        )
 
 # ============================================================================
 # SAVED PLACES ENDPOINTS (Used by frontend)

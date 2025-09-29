@@ -189,7 +189,9 @@ class EnhancedPlaceDataService:
                         f"Failed to convert v2 venue {venue.get('name', 'unknown')}: {e}")
                     continue
 
-            return await self._enrich_places_with_photos(results)
+            # Temporarily disable photo enrichment for faster response
+            # return await self._enrich_places_with_photos(results)
+            return results
 
     async def _fetch_foursquare_trending_v3_fallback(
         self,
@@ -361,7 +363,9 @@ class EnhancedPlaceDataService:
 
                 logging.info(
                     f"Foursquare v3 API returning {len(results)} processed results")
-                return await self._enrich_places_with_photos(results)
+                # Temporarily disable photo enrichment for faster response
+            # return await self._enrich_places_with_photos(results)
+            return results
 
             except Exception as e:
                 logging.error(f"Error in Foursquare v3 fallback: {e}")

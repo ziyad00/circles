@@ -147,7 +147,6 @@ async def request_phone_otp(
 
     if settings.debug:
         response_data["otp"] = otp_code  # Only include in debug mode
-
     return response_data
 
 
