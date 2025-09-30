@@ -71,13 +71,13 @@ class Settings(BaseSettings):
 
     # Place Data API Keys
     foursquare_api_key: Optional[str] = Field(
-        default=None, env="FOURSQUARE_API_KEY"
+        default="FL4GZDJSAF340RYNVLFW4RLQOHZ0IY0X0YVX2LNWUNKAGYZX", env="FOURSQUARE_API_KEY"
     )
     foursquare_client_id: Optional[str] = Field(
-        default=None, env="FOURSQUARE_CLIENT_ID"
+        default="5T23EOYWM05NXX5VUNAZEY4WXJNSQ4Q5J115EVM5BNWUC3LV", env="FOURSQUARE_CLIENT_ID"
     )
     foursquare_client_secret: Optional[str] = Field(
-        default=None, env="FOURSQUARE_CLIENT_SECRET"
+        default="YBYIORTLA2DUPRYQDGF0T5URS23AWIMUU22SHAOHU4OAWFIT", env="FOURSQUARE_CLIENT_SECRET"
     )
     use_openstreetmap: bool = Field(
         default=True, env="USE_OPENSTREETMAP"
