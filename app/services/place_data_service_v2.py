@@ -213,12 +213,12 @@ class EnhancedPlaceDataService:
                        "X-Places-Api-Version": "2025-06-17",
                        "Accept": "application/json"}
             params = {
-            "ll": f"{lat},{lon}",
-            "radius": self.trending_radius_m,
-            "limit": min(limit * 2, 50),
+                "ll": f"{lat},{lon}",
+                "radius": self.trending_radius_m,
+                "limit": min(limit * 2, 50),
                 "sort": "POPULARITY",  # Best approximation of trending
                 "fields": "fsq_place_id,name,location,categories,rating,hours,website,tel,photos,price,popularity,description"
-        }
+            }
 
         # Add search filters
         if query:
@@ -279,7 +279,7 @@ class EnhancedPlaceDataService:
                     vlat = lat
                     vlon = lon
                 logging.warning(
-                        f"Using search center coordinates for venue {v.get('name')}")
+                    f"Using search center coordinates for venue {v.get('name')}")
 
                 # Extract photos
                 photos = []
@@ -302,9 +302,11 @@ class EnhancedPlaceDataService:
                 address = location.get(
                     "formatted_address") or location.get("address")
                 city = location.get("locality") or location.get("city")
-                country = location.get("country")  # 2-letter country code (e.g., "US")
+                # 2-letter country code (e.g., "US")
+                country = location.get("country")
                 region = location.get("region")  # State/province (e.g., "OR")
-                neighborhood = location.get("neighborhood")  # Neighborhood if available
+                # Neighborhood if available
+                neighborhood = location.get("neighborhood")
 
                 # Extract enriched fields
                 cross_street = location.get("cross_street", "")
@@ -317,10 +319,12 @@ class EnhancedPlaceDataService:
                 if vlat and vlon and lat and lon:
                     # Haversine formula for distance calculation
                     R = 6371000  # Earth's radius in meters
-                    lat1, lon1, lat2, lon2 = map(math.radians, [lat, lon, vlat, vlon])
+                    lat1, lon1, lat2, lon2 = map(
+                        math.radians, [lat, lon, vlat, vlon])
                     dlat = lat2 - lat1
                     dlon = lon2 - lon1
-                    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                    a = math.sin(dlat/2)**2 + math.cos(lat1) * \
+                        math.cos(lat2) * math.sin(dlon/2)**2
                     c = 2 * math.asin(math.sqrt(a))
                     distance_meters = R * c
 
@@ -601,9 +605,11 @@ class EnhancedPlaceDataService:
                         address = location.get(
                             "formatted_address") or location.get("address")
                         city = location.get("locality") or location.get("city")
-                        country = location.get("country")  # 2-letter country code from Foursquare
+                        # 2-letter country code from Foursquare
+                        country = location.get("country")
                         region = location.get("region")  # State/province
-                        neighborhood = location.get("neighborhood")  # Neighborhood if available
+                        # Neighborhood if available
+                        neighborhood = location.get("neighborhood")
 
                         results.append({
                             "id": None,
@@ -612,10 +618,10 @@ class EnhancedPlaceDataService:
                             "longitude": vlon,
                             "categories": ",".join([c.get("name", "") for c in v.get("categories", [])]) or None,
                             "rating": v.get("rating"),
-                                "phone": v.get("tel"),
+                            "phone": v.get("tel"),
                             "website": v.get("website"),
-                                # v3 API uses 'fsq_place_id'
-                                "external_id": v.get("fsq_place_id") or v.get("fsq_id"),
+                            # v3 API uses 'fsq_place_id'
+                            "external_id": v.get("fsq_place_id") or v.get("fsq_id"),
                             "data_source": "foursquare",
                             "photos": photos,
                             "price_tier": price_tier,
@@ -627,11 +633,11 @@ class EnhancedPlaceDataService:
                             "country": country,
                             "neighborhood": neighborhood,
                             "metadata": {
-                                    "foursquare_id": v.get("fsq_place_id") or v.get("fsq_id"),
+                                "foursquare_id": v.get("fsq_place_id") or v.get("fsq_id"),
                                 "review_count": v.get("stats", {}).get("total_ratings"),
                                 "photo_count": v.get("stats", {}).get("total_photos"),
-                                    "discovery_source": "foursquare_v3_nearby",
-                                    "distance": v.get("distance"),
+                                "discovery_source": "foursquare_v3_nearby",
+                                "distance": v.get("distance"),
                             },
                         })
                     except Exception as e:
@@ -735,11 +741,14 @@ class EnhancedPlaceDataService:
                     address = location.get(
                         "formatted_address") or location.get("address")
                     city = location.get("locality") or location.get("city")
-                    country = location.get("country")  # 2-letter country code (e.g., "US")
-                    neighborhood = location.get("neighborhood")  # Neighborhood if available
+                    # 2-letter country code (e.g., "US")
+                    country = location.get("country")
+                    # Neighborhood if available
+                    neighborhood = location.get("neighborhood")
 
                     # Extract additional location fields
-                    formatted_address = location.get("formatted_address") or address
+                    formatted_address = location.get(
+                        "formatted_address") or address
                     cross_street = location.get("cross_street") or ""
 
                     # Get distance if available

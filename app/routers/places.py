@@ -677,7 +677,7 @@ async def search_places_advanced_flexible(
 
         if filters.country:
             query = query.where(Place.country.ilike(f"%{filters.country}%"))
-        
+
         if filters.city:
             query = query.where(Place.city == filters.city)
 
