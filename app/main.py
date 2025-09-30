@@ -11,6 +11,7 @@ from .routers.dms_ws import router as dms_ws_router
 from .routers.onboarding import router as onboarding_router
 from .routers.collections import router as collections_router
 from .routers.checkins_original import router as checkins_router
+from .routers.lookups import router as lookups_router
 from .routers.debug import router as debug_router
 from .database import create_tables
 from contextlib import asynccontextmanager
@@ -235,6 +236,7 @@ app.include_router(dms_ws_router)
 app.include_router(onboarding_router)
 app.include_router(collections_router)
 app.include_router(checkins_router)
+app.include_router(lookups_router)
 app.include_router(debug_router)
 
 # Serve uploaded media

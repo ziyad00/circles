@@ -1,0 +1,136 @@
+{
+  "popular_cities": [
+    {
+      "name": "Riyadh",
+      "country": "SA",
+      "region": "Riyadh Region",
+      "priority": 1
+    },
+    {
+      "name": "Jeddah",
+      "country": "SA",
+      "region": "Makkah Region",
+      "priority": 2
+    },
+    {
+      "name": "Mecca",
+      "country": "SA",
+      "region": "Makkah Region",
+      "priority": 3
+    },
+    {
+      "name": "Medina",
+      "country": "SA",
+      "region": "Al Madinah Region",
+      "priority": 4
+    },
+    {
+      "name": "Dammam",
+      "country": "SA",
+      "region": "Eastern Province",
+      "priority": 5
+    },
+    {
+      "name": "Khobar",
+      "country": "SA",
+      "region": "Eastern Province",
+      "priority": 6
+    },
+    {
+      "name": "Dhahran",
+      "country": "SA",
+      "region": "Eastern Province",
+      "priority": 7
+    },
+    {
+      "name": "Taif",
+      "country": "SA",
+      "region": "Makkah Region",
+      "priority": 8
+    },
+    {
+      "name": "Buraidah",
+      "country": "SA",
+      "region": "Al-Qassim Region",
+      "priority": 9
+    },
+    {
+      "name": "Tabuk",
+      "country": "SA",
+      "region": "Tabuk Region",
+      "priority": 10
+    },
+    {
+      "name": "Khamis Mushait",
+      "country": "SA",
+      "region": "Asir Region",
+      "priority": 11
+    },
+    {
+      "name": "Najran",
+      "country": "SA",
+      "region": "Najran Region",
+      "priority": 12
+    },
+    {
+      "name": "Abha",
+      "country": "SA",
+      "region": "Asir Region",
+      "priority": 13
+    },
+    {
+      "name": "Yanbu",
+      "country": "SA",
+      "region": "Al Madinah Region",
+      "priority": 14
+    },
+    {
+      "name": "Al Jubail",
+      "country": "SA",
+      "region": "Eastern Province",
+      "priority": 15
+    },
+    {
+      "name": "Dubai",
+      "country": "AE",
+      "region": "Dubai",
+      "priority": 16
+    },
+    {
+      "name": "Abu Dhabi",
+      "country": "AE",
+      "region": "Abu Dhabi",
+      "priority": 17
+    },
+    {
+      "name": "Sharjah",
+      "country": "AE",
+      "region": "Sharjah",
+      "priority": 18
+    },
+    {
+      "name": "Kuwait City",
+      "country": "KW",
+      "region": "Al Asimah",
+      "priority": 19
+    },
+    {
+      "name": "Doha",
+      "country": "QA",
+      "region": "Doha",
+      "priority": 20
+    },
+    {
+      "name": "Manama",
+      "country": "BH",
+      "region": "Capital",
+      "priority": 21
+    },
+    {
+      "name": "Muscat",
+      "country": "OM",
+      "region": "Muscat",
+      "priority": 22
+    }
+  ]
+}
