@@ -151,66 +151,66 @@ class EnhancedPlaceDataService:
         """Use the real Foursquare v2 trending endpoint."""
         logging.info("Using Foursquare v2 REAL trending endpoint")
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.http_timeout_seconds)) as client:
-            # v2 trending endpoint - this is the real trending API
-            url = "https://api.foursquare.com/v2/venues/trending"
-            # For v2 API, use client credentials (not oauth token)
-            params = {
-                "ll": f"{lat},{lon}",
-                "limit": limit,
-                "radius": self.trending_radius_m,
-                "client_id": self.foursquare_client_id,
-                "client_secret": self.foursquare_client_secret,
-                "v": "20231010"  # API version date
-            }
+        client = self.http_client
+        # v2 trending endpoint - this is the real trending API
+        url = "https://api.foursquare.com/v2/venues/trending"
+        # For v2 API, use client credentials (not oauth token)
+        params = {
+            "ll": f"{lat},{lon}",
+            "limit": limit,
+            "radius": self.trending_radius_m,
+            "client_id": self.foursquare_client_id,
+            "client_secret": self.foursquare_client_secret,
+            "v": "20231010"  # API version date
+        }
 
-            logging.info(f"Calling v2 trending: {url} with params: {params}")
-            resp = await client.get(url, params=params)
-            logging.info(f"v2 trending response: {resp.status_code}")
+        logging.info(f"Calling v2 trending: {url} with params: {params}")
+        resp = await client.get(url, params=params)
+        logging.info(f"v2 trending response: {resp.status_code}")
 
-            if resp.status_code != 200:
-                logging.error(
-                    f"v2 trending failed: {resp.status_code}, response: {resp.text}")
-                raise Exception(
-                    f"v2 trending failed with status {resp.status_code}")
+        if resp.status_code != 200:
+            logging.error(
+                f"v2 trending failed: {resp.status_code}, response: {resp.text}")
+            raise Exception(
+                f"v2 trending failed with status {resp.status_code}")
 
-            data = resp.json()
-            venues = data.get("response", {}).get("venues", [])
-            logging.info(f"v2 trending returned {len(venues)} venues")
+        data = resp.json()
+        venues = data.get("response", {}).get("venues", [])
+        logging.info(f"v2 trending returned {len(venues)} venues")
 
-            # Convert v2 format to v3-like format for consistency
-            results = []
-            for venue in venues:
-                try:
-                    # Extract v2 venue data and convert to v3-like format
-                    location = venue.get("location", {})
-                    categories = venue.get("categories", [])
+        # Convert v2 format to v3-like format for consistency
+        results = []
+        for venue in venues:
+            try:
+                # Extract v2 venue data and convert to v3-like format
+                location = venue.get("location", {})
+                categories = venue.get("categories", [])
 
-                    converted_venue = {
-                        "fsq_place_id": venue.get("id"),  # v2 uses 'id'
-                        "name": venue.get("name"),
-                        "location": {
-                            "address": location.get("address"),
-                            "locality": location.get("city"),
-                            "region": location.get("state"),
-                            "country": location.get("country"),
-                            "formatted_address": location.get("formattedAddress", [None])[0] if location.get("formattedAddress") else None
-                        },
-                        "latitude": location.get("lat"),
-                        "longitude": location.get("lng"),
-                        "categories": [{"name": cat.get("name")} for cat in categories],
-                        "rating": venue.get("rating"),
-                        "price": venue.get("price", {}).get("tier") if venue.get("price") else None,
-                        "distance": location.get("distance"),
-                        "photos": []  # v2 photos would need separate API call
-                    }
-                    results.append(converted_venue)
-                except Exception as e:
-                    logging.warning(
-                        f"Failed to convert v2 venue {venue.get('name', 'unknown')}: {e}")
-                    continue
+                converted_venue = {
+                    "fsq_place_id": venue.get("id"),  # v2 uses 'id'
+                    "name": venue.get("name"),
+                    "location": {
+                        "address": location.get("address"),
+                        "locality": location.get("city"),
+                        "region": location.get("state"),
+                        "country": location.get("country"),
+                        "formatted_address": location.get("formattedAddress", [None])[0] if location.get("formattedAddress") else None
+                    },
+                    "latitude": location.get("lat"),
+                    "longitude": location.get("lng"),
+                    "categories": [{"name": cat.get("name")} for cat in categories],
+                    "rating": venue.get("rating"),
+                    "price": venue.get("price", {}).get("tier") if venue.get("price") else None,
+                    "distance": location.get("distance"),
+                    "photos": []  # v2 photos would need separate API call
+                }
+                results.append(converted_venue)
+            except Exception as e:
+                logging.warning(
+                    f"Failed to convert v2 venue {venue.get('name', 'unknown')}: {e}")
+                continue
 
-            return await self._enrich_places_with_photos(results)
+        return await self._enrich_places_with_photos(results)
 
     async def _fetch_foursquare_trending_v3_fallback(
         self,
