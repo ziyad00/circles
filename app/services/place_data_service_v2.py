@@ -24,11 +24,12 @@ class EnhancedPlaceDataService:
     """Enhanced place data service with OSM Overpass seeding and Foursquare enrichment"""
 
     def __init__(self):
-        self.foursquare_api_key = getattr(settings, 'foursquare_api_key', None)
+        import os
+        self.foursquare_api_key = getattr(settings, 'foursquare_api_key', None) or os.environ.get('FOURSQUARE_API_KEY')
         self.foursquare_client_id = getattr(
-            settings, 'foursquare_client_id', None)
+            settings, 'foursquare_client_id', None) or os.environ.get('FOURSQUARE_CLIENT_ID')
         self.foursquare_client_secret = getattr(
-            settings, 'foursquare_client_secret', None)
+            settings, 'foursquare_client_secret', None) or os.environ.get('FOURSQUARE_CLIENT_SECRET')
         self.enrichment_ttl_hot = settings.enrich_ttl_hot_days
         self.enrichment_ttl_cold = settings.enrich_ttl_cold_days
         self.max_enrichment_distance = settings.enrich_max_distance_m
@@ -213,73 +214,73 @@ class EnhancedPlaceDataService:
                        "X-Places-Api-Version": "2025-06-17",
                        "Accept": "application/json"}
             params = {
-                "ll": f"{lat},{lon}",
-                "radius": self.trending_radius_m,
-                "limit": min(limit * 2, 50),
+            "ll": f"{lat},{lon}",
+            "radius": self.trending_radius_m,
+            "limit": min(limit * 2, 50),
                 "sort": "POPULARITY",  # Best approximation of trending
                 "fields": "fsq_place_id,name,location,categories,rating,hours,website,tel,photos,price,popularity,description"
             }
 
-        # Add search filters
-        if query:
-            params["query"] = query
-        if categories:
-            # Use fsq_category_ids parameter for Foursquare API
-            params["fsq_category_ids"] = categories
-        if min_price is not None:
-            params["min_price"] = min_price
-        if max_price is not None:
-            params["max_price"] = max_price
+            # Add search filters
+            if query:
+                params["query"] = query
+            if categories:
+                # Use fsq_category_ids parameter for Foursquare API
+                params["fsq_category_ids"] = categories
+            if min_price is not None:
+                params["min_price"] = min_price
+            if max_price is not None:
+                params["max_price"] = max_price
 
-        try:
-            logging.info(
-                f"Foursquare v3 API request: {url} with params: {params}")
-            resp = await client.get(url, headers=headers, params=params)
-            logging.info(
-                f"Foursquare v3 API response status: {resp.status_code}")
+            try:
+                logging.info(
+                    f"Foursquare v3 API request: {url} with params: {params}")
+                resp = await client.get(url, headers=headers, params=params)
+                logging.info(
+                    f"Foursquare v3 API response status: {resp.status_code}")
 
-            if resp.status_code == 400:
-                logging.warning(
-                    f"Foursquare v3 API 400 error response: {resp.text}")
-                if 'sort' in resp.text:
-                    # Retry without sort parameter
-                    params.pop("sort", None)
-                    logging.info(
-                        f"Retrying without sort parameter: {params}")
-                    resp = await client.get(url, headers=headers, params=params)
-                    logging.info(
-                        f"Retry response status: {resp.status_code}")
+                if resp.status_code == 400:
+                    logging.warning(
+                        f"Foursquare v3 API 400 error response: {resp.text}")
+                    if 'sort' in resp.text:
+                        # Retry without sort parameter
+                        params.pop("sort", None)
+                        logging.info(
+                            f"Retrying without sort parameter: {params}")
+                        resp = await client.get(url, headers=headers, params=params)
+                        logging.info(
+                            f"Retry response status: {resp.status_code}")
 
-            if resp.status_code != 200:
-                logging.warning(
-                    f"Foursquare v3 fallback failed: {resp.status_code}, response: {resp.text}")
-                return []
+                if resp.status_code != 200:
+                    logging.warning(
+                        f"Foursquare v3 fallback failed: {resp.status_code}, response: {resp.text}")
+                    return []
 
-            data = resp.json()
-            venues = data.get("results", [])
-            logging.info(
-                f"Foursquare v3 API returned {len(venues)} venues")
+                data = resp.json()
+                venues = data.get("results", [])
+                logging.info(
+                    f"Foursquare v3 API returned {len(venues)} venues")
 
-            # Use existing v3 parsing logic
-            results: List[Dict[str, Any]] = []
-            for v in venues[:limit]:
-                # v3 API uses 'location' directly for coordinates
-                location = v.get("location", {})
-                vlat = location.get("latitude")
-                vlon = location.get("longitude")
+                # Use existing v3 parsing logic
+                results: List[Dict[str, Any]] = []
+                for v in venues[:limit]:
+                    # v3 API uses 'location' directly for coordinates
+                    location = v.get("location", {})
+                    vlat = location.get("latitude")
+                    vlon = location.get("longitude")
 
-                # Fallback to geocodes if location doesn't have coordinates
-                if vlat is None or vlon is None:
-                    geocodes = v.get("geocodes", {}).get("main", {})
-                    vlat = geocodes.get("latitude")
-                    vlon = geocodes.get("longitude")
+                    # Fallback to geocodes if location doesn't have coordinates
+                    if vlat is None or vlon is None:
+                        geocodes = v.get("geocodes", {}).get("main", {})
+                        vlat = geocodes.get("latitude")
+                        vlon = geocodes.get("longitude")
 
-                # If still no coordinates, use search center as fallback
-                if vlat is None or vlon is None:
-                    vlat = lat
-                    vlon = lon
-                logging.warning(
-                    f"Using search center coordinates for venue {v.get('name')}")
+                    # If still no coordinates, use search center as fallback
+                    if vlat is None or vlon is None:
+                        vlat = lat
+                        vlon = lon
+                        logging.warning(
+                            f"Using search center coordinates for venue {v.get('name')}")
 
                 # Extract photos
                 photos = []
@@ -545,10 +546,10 @@ class EnhancedPlaceDataService:
                         f"Foursquare v3 nearby API 400 error response: {resp.text}")
                     if 'sort' in resp.text or 'DISTANCE' in resp.text:
                         # Retry without sort parameter - DISTANCE sort might not be supported
-                        params.pop("sort", None)
+                    params.pop("sort", None)
                         logging.info(
                             f"Retrying nearby without sort parameter: {params}")
-                        resp = await client.get(url, headers=headers, params=params)
+                    resp = await client.get(url, headers=headers, params=params)
                         logging.info(
                             f"Nearby retry response status: {resp.status_code}")
 
@@ -572,7 +573,7 @@ class EnhancedPlaceDataService:
                         vlon = location.get("longitude")
 
                         # Fallback to geocodes if location doesn't have coordinates
-                        if vlat is None or vlon is None:
+                    if vlat is None or vlon is None:
                             geocodes = v.get("geocodes", {}).get("main", {})
                             vlat = geocodes.get("latitude")
                             vlon = geocodes.get("longitude")
@@ -584,62 +585,62 @@ class EnhancedPlaceDataService:
                             logging.warning(
                                 f"Using search center coordinates for venue {v.get('name')}")
 
-                        # Extract photos
-                        photos = []
-                        if v.get("photos"):
-                            for photo in v.get("photos", []):
-                                prefix = photo.get("prefix", "")
-                                suffix = photo.get("suffix", "")
-                                if prefix and suffix:
-                                    photo_url = f"{prefix}300x300{suffix}"
-                                    photos.append(photo_url)
+                    # Extract photos
+                    photos = []
+                    if v.get("photos"):
+                        for photo in v.get("photos", []):
+                            prefix = photo.get("prefix", "")
+                            suffix = photo.get("suffix", "")
+                            if prefix and suffix:
+                                photo_url = f"{prefix}300x300{suffix}"
+                                photos.append(photo_url)
 
-                        # Convert price
-                        price_tier = None
-                        fsq_price = v.get("price")
-                        if fsq_price is not None:
-                            price_map = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
-                            price_tier = price_map.get(fsq_price)
+                    # Convert price
+                    price_tier = None
+                    fsq_price = v.get("price")
+                    if fsq_price is not None:
+                        price_map = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
+                        price_tier = price_map.get(fsq_price)
 
-                        # Get address
-                        address = location.get(
-                            "formatted_address") or location.get("address")
-                        city = location.get("locality") or location.get("city")
+                    # Get address
+                    address = location.get(
+                        "formatted_address") or location.get("address")
+                    city = location.get("locality") or location.get("city")
                         # 2-letter country code from Foursquare
                         country = location.get("country")
                         region = location.get("region")  # State/province
                         # Neighborhood if available
                         neighborhood = location.get("neighborhood")
 
-                        results.append({
-                            "id": None,
-                            "name": v.get("name"),
-                            "latitude": vlat,
-                            "longitude": vlon,
-                            "categories": ",".join([c.get("name", "") for c in v.get("categories", [])]) or None,
-                            "rating": v.get("rating"),
+                    results.append({
+                        "id": None,
+                        "name": v.get("name"),
+                        "latitude": vlat,
+                        "longitude": vlon,
+                        "categories": ",".join([c.get("name", "") for c in v.get("categories", [])]) or None,
+                        "rating": v.get("rating"),
                             "phone": v.get("tel"),
-                            "website": v.get("website"),
+                        "website": v.get("website"),
                             # v3 API uses 'fsq_place_id'
                             "external_id": v.get("fsq_place_id") or v.get("fsq_id"),
-                            "data_source": "foursquare",
-                            "photos": photos,
-                            "price_tier": price_tier,
-                            "popularity": v.get("popularity"),
-                            "verified": v.get("verified"),
-                            "description": v.get("description"),
-                            "address": address,
-                            "city": city,
+                        "data_source": "foursquare",
+                        "photos": photos,
+                        "price_tier": price_tier,
+                        "popularity": v.get("popularity"),
+                        "verified": v.get("verified"),
+                        "description": v.get("description"),
+                        "address": address,
+                        "city": city,
                             "country": country,
                             "neighborhood": neighborhood,
-                            "metadata": {
+                        "metadata": {
                                 "foursquare_id": v.get("fsq_place_id") or v.get("fsq_id"),
-                                "review_count": v.get("stats", {}).get("total_ratings"),
-                                "photo_count": v.get("stats", {}).get("total_photos"),
+                            "review_count": v.get("stats", {}).get("total_ratings"),
+                            "photo_count": v.get("stats", {}).get("total_photos"),
                                 "discovery_source": "foursquare_v3_nearby",
                                 "distance": v.get("distance"),
-                            },
-                        })
+                        },
+                    })
                     except Exception as e:
                         logging.warning(
                             f"Error processing nearby venue {v.get('fsq_place_id', 'unknown')}: {e}")
@@ -2045,9 +2046,9 @@ class EnhancedPlaceDataService:
             # Skip if external_id is None to avoid "WHERE external_id IS NULL" query
             external_id = place_data.get('external_id')
             if external_id:
-                existing = await db.execute(
+            existing = await db.execute(
                     select(Place).where(Place.external_id == external_id)
-                )
+            )
                 existing_place = existing.scalar_one_or_none()
             else:
                 existing_place = None
