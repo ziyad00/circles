@@ -5,8 +5,7 @@ import logging
 from ..models import Follow
 # from ..routers.activity import create_checkin_activity  # Removed unused activity router
 from ..utils import can_view_checkin, haversine_distance
-from ..utils.category_filter import category_filter
-from ..utils.foursquare_filter_mapper import foursquare_filter_mapper
+from ..utils import category_filter, foursquare_filter_mapper
 from ..services.place_data_service_v2 import enhanced_place_data_service, EnhancedPlaceDataService
 from ..services.storage import StorageService
 from ..services.jwt_service import JWTService
@@ -2073,7 +2072,7 @@ async def delete_check_in(
 
         # Delete the check-in
         await db.delete(checkin)
-    await db.commit()
+        await db.commit()
 
     except HTTPException:
         await db.rollback()
@@ -2209,8 +2208,8 @@ async def unsave_place(
         saved_place = result.scalar_one_or_none()
 
         if not saved_place:
-        raise HTTPException(
-            status_code=404, detail="Saved place not found")
+            raise HTTPException(
+                status_code=404, detail="Saved place not found")
 
         await remove_saved_place_membership(
             db,

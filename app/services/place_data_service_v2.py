@@ -239,7 +239,7 @@ class EnhancedPlaceDataService:
                 f"Foursquare v3 API response status: {resp.status_code}")
 
             if resp.status_code == 400:
-                    logging.warning(
+                logging.warning(
                     f"Foursquare v3 API 400 error response: {resp.text}")
                 if 'sort' in resp.text:
                     # Retry without sort parameter
@@ -252,131 +252,131 @@ class EnhancedPlaceDataService:
 
             if resp.status_code != 200:
                 logging.warning(
-                        f"Foursquare v3 fallback failed: {resp.status_code}, response: {resp.text}")
-            return []
-
-                data = resp.json()
-                venues = data.get("results", [])
-                logging.info(
-                    f"Foursquare v3 API returned {len(venues)} venues")
-
-                # Use existing v3 parsing logic
-                results: List[Dict[str, Any]] = []
-                for v in venues[:limit]:
-                    # v3 API uses 'location' directly for coordinates
-                    location = v.get("location", {})
-                    vlat = location.get("latitude")
-                    vlon = location.get("longitude")
-
-                    # Fallback to geocodes if location doesn't have coordinates
-                    if vlat is None or vlon is None:
-                        geocodes = v.get("geocodes", {}).get("main", {})
-                        vlat = geocodes.get("latitude")
-                        vlon = geocodes.get("longitude")
-
-                    # If still no coordinates, use search center as fallback
-                    if vlat is None or vlon is None:
-                        vlat = lat
-                        vlon = lon
-                    logging.warning(
-                            f"Using search center coordinates for venue {v.get('name')}")
-
-                    # Extract photos
-                    photos = []
-                    if v.get("photos"):
-                        for photo in v.get("photos", []):
-                            prefix = photo.get("prefix", "")
-                            suffix = photo.get("suffix", "")
-                            if prefix and suffix:
-                                photo_url = f"{prefix}300x300{suffix}"
-                                photos.append(photo_url)
-
-                    # Convert price
-                    price_tier = None
-                    fsq_price = v.get("price")
-                    if fsq_price is not None:
-                        price_map = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
-                        price_tier = price_map.get(fsq_price)
-
-                    # Get address
-                    address = location.get(
-                        "formatted_address") or location.get("address")
-                    city = location.get("locality") or location.get("city")
-                    country = location.get("country")  # 2-letter country code (e.g., "US")
-                    region = location.get("region")  # State/province (e.g., "OR")
-                    neighborhood = location.get("neighborhood")  # Neighborhood if available
-
-                    # Extract enriched fields
-                    cross_street = location.get("cross_street", "")
-                    formatted_address = location.get("formatted_address", "")
-                    postal_code = location.get("postcode", "")
-
-                    # Calculate distance from search center
-                    import math
-                    distance_meters = 0.0
-                    if vlat and vlon and lat and lon:
-                        # Haversine formula for distance calculation
-                        R = 6371000  # Earth's radius in meters
-                        lat1, lon1, lat2, lon2 = map(math.radians, [lat, lon, vlat, vlon])
-                        dlat = lat2 - lat1
-                        dlon = lon2 - lon1
-                        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
-                        c = 2 * math.asin(math.sqrt(a))
-                        distance_meters = R * c
-
-                    # Get created timestamp
-                    from datetime import datetime, timezone
-                    venue_created_at = datetime.now(timezone.utc)
-
-                    # Get photo URL (first photo if available)
-                    photo_url = photos[0] if photos else ""
-
-                    results.append({
-                        "id": None,
-                        "name": v.get("name"),
-                        "latitude": vlat,
-                        "longitude": vlon,
-                        "categories": ",".join([c.get("name", "") for c in v.get("categories", [])]) or None,
-                        "rating": v.get("rating"),
-                        "phone": v.get("tel"),
-                        "website": v.get("website"),
-                        # v3 API uses 'fsq_place_id'
-                        "external_id": v.get("fsq_place_id") or v.get("fsq_id"),
-                        "data_source": "foursquare",
-                        "photos": photos,
-                        "price_tier": price_tier,
-                        "popularity": v.get("popularity"),
-                        "verified": v.get("verified"),
-                        "description": v.get("description"),
-                        "address": address,
-                        "city": city,
-                        "country": country,
-                        "neighborhood": neighborhood,
-                        # Additional enriched fields
-                        "cross_street": cross_street,
-                        "formatted_address": formatted_address,
-                        "postal_code": postal_code,
-                        "distance_meters": distance_meters,
-                        "venue_created_at": venue_created_at,
-                        "photo_url": photo_url,
-                        "additional_photos": photos[1:] if len(photos) > 1 else [],
-                        "metadata": {
-                            "foursquare_id": v.get("fsq_place_id") or v.get("fsq_id"),
-                            "review_count": v.get("stats", {}).get("total_ratings"),
-                            "photo_count": v.get("stats", {}).get("total_photos"),
-                            "discovery_source": "foursquare_v3_trending",
-                        },
-                    })
-
-                logging.info(
-                    f"Foursquare v3 API returning {len(results)} processed results")
-                # Temporarily disable photo enrichment for faster response
-                # return await self._enrich_places_with_photos(results)
-                return results
-
-            except Exception as e:
-                logging.error(f"Error in Foursquare v3 fallback: {e}")
+                    f"Foursquare v3 fallback failed: {resp.status_code}, response: {resp.text}")
                 return []
+
+            data = resp.json()
+            venues = data.get("results", [])
+            logging.info(
+                f"Foursquare v3 API returned {len(venues)} venues")
+
+            # Use existing v3 parsing logic
+            results: List[Dict[str, Any]] = []
+            for v in venues[:limit]:
+                # v3 API uses 'location' directly for coordinates
+                location = v.get("location", {})
+                vlat = location.get("latitude")
+                vlon = location.get("longitude")
+
+                # Fallback to geocodes if location doesn't have coordinates
+                if vlat is None or vlon is None:
+                    geocodes = v.get("geocodes", {}).get("main", {})
+                    vlat = geocodes.get("latitude")
+                    vlon = geocodes.get("longitude")
+
+                # If still no coordinates, use search center as fallback
+                if vlat is None or vlon is None:
+                    vlat = lat
+                    vlon = lon
+                logging.warning(
+                        f"Using search center coordinates for venue {v.get('name')}")
+
+                # Extract photos
+                photos = []
+                if v.get("photos"):
+                    for photo in v.get("photos", []):
+                        prefix = photo.get("prefix", "")
+                        suffix = photo.get("suffix", "")
+                        if prefix and suffix:
+                            photo_url = f"{prefix}300x300{suffix}"
+                            photos.append(photo_url)
+
+                # Convert price
+                price_tier = None
+                fsq_price = v.get("price")
+                if fsq_price is not None:
+                    price_map = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
+                    price_tier = price_map.get(fsq_price)
+
+                # Get address
+                address = location.get(
+                    "formatted_address") or location.get("address")
+                city = location.get("locality") or location.get("city")
+                country = location.get("country")  # 2-letter country code (e.g., "US")
+                region = location.get("region")  # State/province (e.g., "OR")
+                neighborhood = location.get("neighborhood")  # Neighborhood if available
+
+                # Extract enriched fields
+                cross_street = location.get("cross_street", "")
+                formatted_address = location.get("formatted_address", "")
+                postal_code = location.get("postcode", "")
+
+                # Calculate distance from search center
+                import math
+                distance_meters = 0.0
+                if vlat and vlon and lat and lon:
+                    # Haversine formula for distance calculation
+                    R = 6371000  # Earth's radius in meters
+                    lat1, lon1, lat2, lon2 = map(math.radians, [lat, lon, vlat, vlon])
+                    dlat = lat2 - lat1
+                    dlon = lon2 - lon1
+                    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                    c = 2 * math.asin(math.sqrt(a))
+                    distance_meters = R * c
+
+                # Get created timestamp
+                from datetime import datetime, timezone
+                venue_created_at = datetime.now(timezone.utc)
+
+                # Get photo URL (first photo if available)
+                photo_url = photos[0] if photos else ""
+
+                results.append({
+                    "id": None,
+                    "name": v.get("name"),
+                    "latitude": vlat,
+                    "longitude": vlon,
+                    "categories": ",".join([c.get("name", "") for c in v.get("categories", [])]) or None,
+                    "rating": v.get("rating"),
+                    "phone": v.get("tel"),
+                    "website": v.get("website"),
+                    # v3 API uses 'fsq_place_id'
+                    "external_id": v.get("fsq_place_id") or v.get("fsq_id"),
+                    "data_source": "foursquare",
+                    "photos": photos,
+                    "price_tier": price_tier,
+                    "popularity": v.get("popularity"),
+                    "verified": v.get("verified"),
+                    "description": v.get("description"),
+                    "address": address,
+                    "city": city,
+                    "country": country,
+                    "neighborhood": neighborhood,
+                    # Additional enriched fields
+                    "cross_street": cross_street,
+                    "formatted_address": formatted_address,
+                    "postal_code": postal_code,
+                    "distance_meters": distance_meters,
+                    "venue_created_at": venue_created_at,
+                    "photo_url": photo_url,
+                    "additional_photos": photos[1:] if len(photos) > 1 else [],
+                    "metadata": {
+                        "foursquare_id": v.get("fsq_place_id") or v.get("fsq_id"),
+                        "review_count": v.get("stats", {}).get("total_ratings"),
+                        "photo_count": v.get("stats", {}).get("total_photos"),
+                        "discovery_source": "foursquare_v3_trending",
+                    },
+                })
+
+            logging.info(
+                f"Foursquare v3 API returning {len(results)} processed results")
+            # Temporarily disable photo enrichment for faster response
+            # return await self._enrich_places_with_photos(results)
+            return results
+
+        except Exception as e:
+            logging.error(f"Error in Foursquare v3 fallback: {e}")
+            return []
 
     async def _enrich_places_with_photos(
         self,
