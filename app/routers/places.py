@@ -911,9 +911,11 @@ async def get_trending_places(
         # Convert place_type filter to Foursquare category IDs
         fsq_category_ids = None
         if place_type:
-            fsq_category_ids = foursquare_filter_mapper.get_category_ids(place_type)
-            logger.info(f"Mapped '{place_type}' to category IDs: {fsq_category_ids[:100] if fsq_category_ids else None}...")
-        
+            fsq_category_ids = foursquare_filter_mapper.get_category_ids(
+                place_type)
+            logger.info(
+                f"Mapped '{place_type}' to category IDs: {fsq_category_ids[:100] if fsq_category_ids else None}...")
+
         # Build Foursquare query
         fsq_query = cuisine if cuisine else None
 
@@ -1055,65 +1057,17 @@ async def get_trending_places(
                 map_error,
             )
 
-    # Apply filters to the trending results
+    # Apply post-filters (only for location filters not supported by Foursquare)
+    # Note: place_type and price are already filtered by Foursquare API
     filtered_items = []
     for item in fsq_items:
-        # Place type filtering using improved matching
-        if place_type:
-            if not item.primary_category and not item.categories:
-                continue
-
-            place_type_lower = place_type.lower().strip()
-
-            # Get all category names
-            all_categories = []
-            if item.primary_category:
-                all_categories.append(item.primary_category.lower())
-            if item.categories:
-                all_categories.extend(
-                    [cat.strip().lower() for cat in item.categories.split(',') if cat.strip()])
-
-            # Exact or word-boundary matching (more precise than substring)
-            match = False
-            for category in all_categories:
-                # Exact match
-                if place_type_lower == category:
-                    match = True
-                    break
-                # Word boundary match - "restaurant" matches "burger restaurant" but not "restaurant supply"
-                if f" {place_type_lower}" in f" {category}" or f"{place_type_lower} " in f"{category} ":
-                    match = True
-                    break
-                # Check if category ends with the filter type
-                if category.endswith(f" {place_type_lower}"):
-                    match = True
-                    break
-
-            if not match:
-                continue
-
-        # Filter by cuisine (only if place_type is restaurant)
-        if cuisine and place_type and place_type.lower() == "restaurant":
-            if not item.categories or cuisine.lower() not in item.categories.lower():
-                continue
-
-        # Filter by location
+        # Filter by location (Foursquare doesn't support these)
         if country and item.country and country.lower() not in item.country.lower():
             continue
         if city and item.city and city.lower() not in item.city.lower():
             continue
         if neighborhood and item.neighborhood and neighborhood.lower() not in item.neighborhood.lower():
             continue
-
-        # Filter by price budget
-        if price_budget and item.price_tier:
-            # Convert price_tier to our budget format
-            if price_budget == "$" and item.price_tier > 1:
-                continue
-            elif price_budget == "$$" and item.price_tier != 2:
-                continue
-            elif price_budget == "$$$" and item.price_tier < 3:
-                continue
 
         filtered_items.append(item)
 
@@ -1215,14 +1169,16 @@ async def nearby_places(
         # Convert place_type filter to Foursquare category IDs
         fsq_category_ids = None
         if place_type:
-            fsq_category_ids = foursquare_filter_mapper.get_category_ids(place_type)
-            logger.info(f"Mapped '{place_type}' to category IDs: {fsq_category_ids[:100] if fsq_category_ids else None}...")
-        
+            fsq_category_ids = foursquare_filter_mapper.get_category_ids(
+                place_type)
+            logger.info(
+                f"Mapped '{place_type}' to category IDs: {fsq_category_ids[:100] if fsq_category_ids else None}...")
+
         # Convert price_budget to price tier
         price_tier = None
         if price_budget:
             price_tier = {"$": 1, "$$": 2, "$$$": 3}.get(price_budget)
-        
+
         # Build Foursquare query
         fsq_query = cuisine if cuisine else None
 
@@ -1248,7 +1204,7 @@ async def nearby_places(
         )
         await db.commit()
         places_to_use = saved_places
-        
+
     except Exception as fetch_error:
         logger.error("Error fetching nearby places: %s", fetch_error)
         return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
@@ -1325,65 +1281,17 @@ async def nearby_places(
                 map_error,
             )
 
-    # Apply filters to the nearby results
+    # Apply post-filters (only for location filters not supported by Foursquare)
+    # Note: place_type and price are already filtered by Foursquare API
     filtered_items = []
     for item in fsq_items:
-        # Place type filtering using improved matching
-        if place_type:
-            if not item.primary_category and not item.categories:
-                continue
-
-            place_type_lower = place_type.lower().strip()
-
-            # Get all category names
-            all_categories = []
-            if item.primary_category:
-                all_categories.append(item.primary_category.lower())
-            if item.categories:
-                all_categories.extend(
-                    [cat.strip().lower() for cat in item.categories.split(',') if cat.strip()])
-
-            # Exact or word-boundary matching (more precise than substring)
-            match = False
-            for category in all_categories:
-                # Exact match
-                if place_type_lower == category:
-                    match = True
-                    break
-                # Word boundary match - "restaurant" matches "burger restaurant" but not "restaurant supply"
-                if f" {place_type_lower}" in f" {category}" or f"{place_type_lower} " in f"{category} ":
-                    match = True
-                    break
-                # Check if category ends with the filter type
-                if category.endswith(f" {place_type_lower}"):
-                    match = True
-                    break
-
-            if not match:
-                continue
-
-        # Filter by cuisine (only if place_type is restaurant)
-        if cuisine and place_type and place_type.lower() == "restaurant":
-            if not item.categories or cuisine.lower() not in item.categories.lower():
-                continue
-
-        # Filter by location
+        # Filter by location (Foursquare doesn't support these)
         if country and item.country and country.lower() not in item.country.lower():
             continue
         if city and item.city and city.lower() not in item.city.lower():
             continue
         if neighborhood and item.neighborhood and neighborhood.lower() not in item.neighborhood.lower():
             continue
-
-        # Filter by price budget
-        if price_budget and item.price_tier:
-            # Convert price_tier to our budget format
-            if price_budget == "$" and item.price_tier > 1:
-                continue
-            elif price_budget == "$$" and item.price_tier != 2:
-                continue
-            elif price_budget == "$$$" and item.price_tier < 3:
-                continue
 
         filtered_items.append(item)
 
