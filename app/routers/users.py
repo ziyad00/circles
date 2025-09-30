@@ -85,14 +85,16 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
     if not photo_url:
         return None
 
-    logger.debug(f"Converting URL: {photo_url}, storage_backend: {settings.storage_backend}")
+    logger.debug(
+        f"Converting URL: {photo_url}, storage_backend: {settings.storage_backend}")
 
     if not photo_url.startswith("http"):
         if settings.storage_backend == "local":
             return f"{settings.local_base_url}{photo_url}"
         try:
             signed_url = StorageService.generate_signed_url(photo_url)
-            logger.debug(f"Generated signed URL for key {photo_url}: {signed_url}")
+            logger.debug(
+                f"Generated signed URL for key {photo_url}: {signed_url}")
             return signed_url
         except Exception as exc:  # pragma: no cover - fallback path
             logger.warning(
@@ -119,7 +121,7 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
             return photo_url
 
     # Return the original URL if it's already a signed URL or external URL
-    return photo_url
+        return photo_url
 
 
 def _collect_place_photos(place: Place) -> list[str]:
@@ -262,14 +264,14 @@ async def get_user_profile(
 
         # Create response
         user_response = PublicUserResponse(
-            id=user.id,
-            name=user.name,
-            username=user.username,
-            bio=user.bio,
-            avatar_url=_convert_single_to_signed_url(user.avatar_url),
-            availability_status=user.availability_status,
+        id=user.id,
+        name=user.name,
+        username=user.username,
+        bio=user.bio,
+        avatar_url=_convert_single_to_signed_url(user.avatar_url),
+        availability_status=user.availability_status,
             availability_mode=user.availability_mode,
-            created_at=user.created_at,
+        created_at=user.created_at,
             followers_count=0,  # TODO: Calculate actual count
             following_count=0,  # TODO: Calculate actual count
             check_ins_count=0,  # TODO: Calculate actual count
@@ -388,14 +390,14 @@ async def upload_avatar(
         avatar_url = await StorageService.save_avatar(current_user.id, filename, content)
 
         if not avatar_url:
-            raise HTTPException(
+        raise HTTPException(
                 status_code=500, detail="Failed to upload avatar")
 
         current_user.avatar_url = avatar_url
         current_user.updated_at = datetime.now(timezone.utc)
 
-        await db.commit()
-        await db.refresh(current_user)
+    await db.commit()
+    await db.refresh(current_user)
 
         followers_count = await db.scalar(
             select(func.count(Follow.id)).where(
@@ -670,8 +672,8 @@ async def list_user_collections(
         user_result = await db.execute(user_query)
         user = user_result.scalar_one_or_none()
 
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
         if not await can_view_profile(db, user, current_user.id):
             raise HTTPException(
@@ -694,7 +696,7 @@ async def list_user_collections(
             )
 
         collections_stmt = (
-            select(
+        select(
                 UserCollection,
                 func.count(UserCollectionPlace.id).label("place_count"),
             )
