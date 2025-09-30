@@ -199,16 +199,16 @@ async def search_users(
             if await can_view_profile(db, user, current_user.id):
                 responses.append(
                     PublicUserSearchResponse(
-                id=user.id,
-                                username=user.username,
-                                name=user.name,  # Use name field directly
-                bio=user.bio,
-                                avatar_url=_convert_single_to_signed_url(
-                                    user.avatar_url),
-                created_at=user.created_at,
-                                followed=False,  # TODO: compute follow state
-                            )
-                        )
+                        id=user.id,
+                        username=user.username,
+                        name=user.name,  # Use name field directly
+                        bio=user.bio,
+                        avatar_url=_convert_single_to_signed_url(
+                            user.avatar_url),
+                        created_at=user.created_at,
+                        followed=False,  # TODO: compute follow state
+                    )
+                )
 
         return responses
 
@@ -265,14 +265,14 @@ async def get_user_profile(
 
         # Create response
         user_response = PublicUserResponse(
-        id=user.id,
-        name=user.name,
-        username=user.username,
-        bio=user.bio,
-        avatar_url=_convert_single_to_signed_url(user.avatar_url),
-        availability_status=user.availability_status,
+            id=user.id,
+            name=user.name,
+            username=user.username,
+            bio=user.bio,
+            avatar_url=_convert_single_to_signed_url(user.avatar_url),
+            availability_status=user.availability_status,
             availability_mode=user.availability_mode,
-        created_at=user.created_at,
+            created_at=user.created_at,
             followers_count=0,  # TODO: Calculate actual count
             following_count=0,  # TODO: Calculate actual count
             check_ins_count=0,  # TODO: Calculate actual count
@@ -673,7 +673,7 @@ async def list_user_collections(
         user = user_result.scalar_one_or_none()
 
         if not user:
-                raise HTTPException(status_code=404, detail="User not found")
+            raise HTTPException(status_code=404, detail="User not found")
 
         if not await can_view_profile(db, user, current_user.id):
             raise HTTPException(
@@ -696,7 +696,7 @@ async def list_user_collections(
             )
 
         collections_stmt = (
-        select(
+            select(
                 UserCollection,
                 func.count(UserCollectionPlace.id).label("place_count"),
             )
