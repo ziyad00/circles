@@ -302,6 +302,9 @@ class EnhancedPlaceDataService:
                     address = location.get(
                         "formatted_address") or location.get("address")
                     city = location.get("locality") or location.get("city")
+                    country = location.get("country")  # 2-letter country code (e.g., "US")
+                    region = location.get("region")  # State/province (e.g., "OR")
+                    neighborhood = location.get("neighborhood")  # Neighborhood if available
 
                     # Extract enriched fields
                     cross_street = location.get("cross_street", "")
@@ -347,7 +350,9 @@ class EnhancedPlaceDataService:
                         "description": v.get("description"),
                         "address": address,
                         "city": city,
-                        # Missing fields that were causing null values
+                        "country": country,
+                        "neighborhood": neighborhood,
+                        # Additional enriched fields
                         "cross_street": cross_street,
                         "formatted_address": formatted_address,
                         "postal_code": postal_code,
@@ -596,6 +601,9 @@ class EnhancedPlaceDataService:
                     address = location.get(
                         "formatted_address") or location.get("address")
                     city = location.get("locality") or location.get("city")
+                    country = location.get("country")  # 2-letter country code from Foursquare
+                    region = location.get("region")  # State/province
+                    neighborhood = location.get("neighborhood")  # Neighborhood if available
 
                     results.append({
                         "id": None,
@@ -616,6 +624,8 @@ class EnhancedPlaceDataService:
                         "description": v.get("description"),
                         "address": address,
                         "city": city,
+                        "country": country,
+                        "neighborhood": neighborhood,
                         "metadata": {
                                 "foursquare_id": v.get("fsq_place_id") or v.get("fsq_id"),
                             "review_count": v.get("stats", {}).get("total_ratings"),
@@ -725,6 +735,8 @@ class EnhancedPlaceDataService:
                     address = location.get(
                         "formatted_address") or location.get("address")
                     city = location.get("locality") or location.get("city")
+                    country = location.get("country")  # 2-letter country code (e.g., "US")
+                    neighborhood = location.get("neighborhood")  # Neighborhood if available
 
                     # Extract additional location fields
                     formatted_address = location.get("formatted_address") or address
@@ -760,8 +772,10 @@ class EnhancedPlaceDataService:
                         "description": v.get("description"),
                         "address": address,
                         "city": city,
+                        "country": country,
+                        "neighborhood": neighborhood,
                         "open_now": open_now,
-                        # Missing fields that were causing null values
+                        # Additional enriched fields
                         "cross_street": cross_street,
                         "formatted_address": formatted_address,
                         "distance_meters": distance_meters,

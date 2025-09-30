@@ -233,6 +233,7 @@ class AdvancedSearchFilters(BaseModel):
     # Text search
     query: Optional[str] = None
     # Location filters
+    country: Optional[str] = None  # 2-letter country code (e.g., "US", "SA")
     city: Optional[str] = None
     neighborhood: Optional[str] = None
     # Category filters
