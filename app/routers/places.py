@@ -180,7 +180,7 @@ async def _get_recent_checkins_count(
         since = now - timedelta(hours=hours)
         stmt = select(func.count(func.distinct(CheckIn.user_id))).where(
             and_(
-                CheckIn.place_id == place_id, 
+                CheckIn.place_id == place_id,
                 CheckIn.created_at >= since,
                 CheckIn.expires_at > now  # Only count non-expired check-ins
             )
@@ -2117,22 +2117,22 @@ async def delete_check_in(
         checkin = checkin_result.scalar_one_or_none()
 
         if not checkin:
-        raise HTTPException(status_code=404, detail="Check-in not found")
+            raise HTTPException(status_code=404, detail="Check-in not found")
 
-    # Verify ownership
+        # Verify ownership
         if checkin.user_id != current_user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="You can only delete your own check-ins"
-        )
+            raise HTTPException(
+                status_code=403,
+                detail="You can only delete your own check-ins"
+            )
 
         # Delete associated photos first
         photos_query = select(CheckInPhoto).where(
             CheckInPhoto.check_in_id == check_in_id)
         photos_result = await db.execute(photos_query)
-    photos = photos_result.scalars().all()
+        photos = photos_result.scalars().all()
 
-       for photo in photos:
+        for photo in photos:
             # Delete photo file from storage
             if photo.url:
                 try:
