@@ -541,12 +541,12 @@ class EnhancedPlaceDataService:
                         f"Foursquare v3 nearby API 400 error response: {resp.text}")
                     if 'sort' in resp.text or 'DISTANCE' in resp.text:
                         # Retry without sort parameter - DISTANCE sort might not be supported
-                    params.pop("sort", None)
+                        params.pop("sort", None)
                         logging.info(
                             f"Retrying nearby without sort parameter: {params}")
-                    resp = await client.get(url, headers=headers, params=params)
+                        resp = await client.get(url, headers=headers, params=params)
                         logging.info(
-                        f"Nearby retry response status: {resp.status_code}")
+                            f"Nearby retry response status: {resp.status_code}")
 
                 if resp.status_code != 200:
                     logging.warning(
@@ -568,7 +568,7 @@ class EnhancedPlaceDataService:
                         vlon = location.get("longitude")
 
                         # Fallback to geocodes if location doesn't have coordinates
-                    if vlat is None or vlon is None:
+                        if vlat is None or vlon is None:
                             geocodes = v.get("geocodes", {}).get("main", {})
                             vlat = geocodes.get("latitude")
                             vlon = geocodes.get("longitude")
@@ -580,60 +580,60 @@ class EnhancedPlaceDataService:
                             logging.warning(
                                 f"Using search center coordinates for venue {v.get('name')}")
 
-                    # Extract photos
-                    photos = []
-                    if v.get("photos"):
-                        for photo in v.get("photos", []):
-                            prefix = photo.get("prefix", "")
-                            suffix = photo.get("suffix", "")
-                            if prefix and suffix:
-                                photo_url = f"{prefix}300x300{suffix}"
-                                photos.append(photo_url)
+                        # Extract photos
+                        photos = []
+                        if v.get("photos"):
+                            for photo in v.get("photos", []):
+                                prefix = photo.get("prefix", "")
+                                suffix = photo.get("suffix", "")
+                                if prefix and suffix:
+                                    photo_url = f"{prefix}300x300{suffix}"
+                                    photos.append(photo_url)
 
-                    # Convert price
-                    price_tier = None
-                    fsq_price = v.get("price")
-                    if fsq_price is not None:
-                        price_map = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
-                        price_tier = price_map.get(fsq_price)
+                        # Convert price
+                        price_tier = None
+                        fsq_price = v.get("price")
+                        if fsq_price is not None:
+                            price_map = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
+                            price_tier = price_map.get(fsq_price)
 
-                    # Get address
-                    address = location.get(
-                        "formatted_address") or location.get("address")
-                    city = location.get("locality") or location.get("city")
-                    country = location.get("country")  # 2-letter country code from Foursquare
-                    region = location.get("region")  # State/province
-                    neighborhood = location.get("neighborhood")  # Neighborhood if available
+                        # Get address
+                        address = location.get(
+                            "formatted_address") or location.get("address")
+                        city = location.get("locality") or location.get("city")
+                        country = location.get("country")  # 2-letter country code from Foursquare
+                        region = location.get("region")  # State/province
+                        neighborhood = location.get("neighborhood")  # Neighborhood if available
 
-                    results.append({
-                        "id": None,
-                        "name": v.get("name"),
-                        "latitude": vlat,
-                        "longitude": vlon,
-                        "categories": ",".join([c.get("name", "") for c in v.get("categories", [])]) or None,
-                        "rating": v.get("rating"),
-                            "phone": v.get("tel"),
-                        "website": v.get("website"),
-                            # v3 API uses 'fsq_place_id'
-                            "external_id": v.get("fsq_place_id") or v.get("fsq_id"),
-                        "data_source": "foursquare",
-                        "photos": photos,
-                        "price_tier": price_tier,
-                        "popularity": v.get("popularity"),
-                        "verified": v.get("verified"),
-                        "description": v.get("description"),
-                        "address": address,
-                        "city": city,
-                        "country": country,
-                        "neighborhood": neighborhood,
-                        "metadata": {
-                                "foursquare_id": v.get("fsq_place_id") or v.get("fsq_id"),
-                            "review_count": v.get("stats", {}).get("total_ratings"),
-                            "photo_count": v.get("stats", {}).get("total_photos"),
-                                "discovery_source": "foursquare_v3_nearby",
-                                "distance": v.get("distance"),
-                        },
-                    })
+                        results.append({
+                            "id": None,
+                            "name": v.get("name"),
+                            "latitude": vlat,
+                            "longitude": vlon,
+                            "categories": ",".join([c.get("name", "") for c in v.get("categories", [])]) or None,
+                            "rating": v.get("rating"),
+                                "phone": v.get("tel"),
+                            "website": v.get("website"),
+                                # v3 API uses 'fsq_place_id'
+                                "external_id": v.get("fsq_place_id") or v.get("fsq_id"),
+                            "data_source": "foursquare",
+                            "photos": photos,
+                            "price_tier": price_tier,
+                            "popularity": v.get("popularity"),
+                            "verified": v.get("verified"),
+                            "description": v.get("description"),
+                            "address": address,
+                            "city": city,
+                            "country": country,
+                            "neighborhood": neighborhood,
+                            "metadata": {
+                                    "foursquare_id": v.get("fsq_place_id") or v.get("fsq_id"),
+                                "review_count": v.get("stats", {}).get("total_ratings"),
+                                "photo_count": v.get("stats", {}).get("total_photos"),
+                                    "discovery_source": "foursquare_v3_nearby",
+                                    "distance": v.get("distance"),
+                            },
+                        })
                     except Exception as e:
                         logging.warning(
                             f"Error processing nearby venue {v.get('fsq_place_id', 'unknown')}: {e}")
@@ -2036,9 +2036,9 @@ class EnhancedPlaceDataService:
             # Skip if external_id is None to avoid "WHERE external_id IS NULL" query
             external_id = place_data.get('external_id')
             if external_id:
-            existing = await db.execute(
+                existing = await db.execute(
                     select(Place).where(Place.external_id == external_id)
-            )
+                )
                 existing_place = existing.scalar_one_or_none()
             else:
                 existing_place = None
