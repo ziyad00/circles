@@ -205,7 +205,7 @@ class SavedPlace(Base):
     place_id = Column(Integer, ForeignKey("places.id"),
                       nullable=False, index=True)
     collection_id = Column(Integer, ForeignKey(
-        "user_collections.id"), nullable=True, index=True)
+        "user_collections.id"), nullable=False, index=True)
     list_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
