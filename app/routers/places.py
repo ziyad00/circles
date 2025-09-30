@@ -6,6 +6,7 @@ from ..models import Follow
 # from ..routers.activity import create_checkin_activity  # Removed unused activity router
 from ..utils import can_view_checkin, haversine_distance
 from ..utils.category_filter import category_filter
+from ..utils.foursquare_filter_mapper import foursquare_filter_mapper
 from ..services.place_data_service_v2 import enhanced_place_data_service, EnhancedPlaceDataService
 from ..services.storage import StorageService
 from ..services.jwt_service import JWTService
@@ -907,20 +908,23 @@ async def get_trending_places(
     )
 
     try:
-        # Build Foursquare query with filters
-        fsq_query = None
-        if place_type and cuisine:
-            fsq_query = f"{place_type} {cuisine}"
-        elif place_type:
-            fsq_query = place_type
-        elif cuisine:
-            fsq_query = cuisine
+        # Convert place_type filter to Foursquare category IDs
+        fsq_category_ids = None
+        if place_type:
+            fsq_category_ids = foursquare_filter_mapper.get_category_ids(place_type)
+            logger.info(f"Mapped '{place_type}' to category IDs: {fsq_category_ids[:100] if fsq_category_ids else None}...")
+        
+        # Build Foursquare query
+        fsq_query = cuisine if cuisine else None
 
         fsq_places = await enhanced_place_data_service.fetch_foursquare_trending(
             lat=lat,
             lon=lng,
             limit=limit,
             query=fsq_query,
+            categories=fsq_category_ids,  # Pass category IDs to Foursquare
+            min_price=price_tier if price_budget else None,
+            max_price=price_tier if price_budget else None,
         )
         logger.info("Got %s places from Foursquare API", len(fsq_places))
 
@@ -1060,14 +1064,15 @@ async def get_trending_places(
                 continue
 
             place_type_lower = place_type.lower().strip()
-            
+
             # Get all category names
             all_categories = []
             if item.primary_category:
                 all_categories.append(item.primary_category.lower())
             if item.categories:
-                all_categories.extend([cat.strip().lower() for cat in item.categories.split(',') if cat.strip()])
-            
+                all_categories.extend(
+                    [cat.strip().lower() for cat in item.categories.split(',') if cat.strip()])
+
             # Exact or word-boundary matching (more precise than substring)
             match = False
             for category in all_categories:
@@ -1083,7 +1088,7 @@ async def get_trending_places(
                 if category.endswith(f" {place_type_lower}"):
                     match = True
                     break
-            
+
             if not match:
                 continue
 
@@ -1207,61 +1212,43 @@ async def nearby_places(
     places_to_use: list[Place] = []
 
     try:
-        # Build Foursquare query with filters
-        fsq_query = None
-        if place_type and cuisine:
-            fsq_query = f"{place_type} {cuisine}"
-        elif place_type:
-            fsq_query = place_type
-        elif cuisine:
-            fsq_query = cuisine
+        # Convert place_type filter to Foursquare category IDs
+        fsq_category_ids = None
+        if place_type:
+            fsq_category_ids = foursquare_filter_mapper.get_category_ids(place_type)
+            logger.info(f"Mapped '{place_type}' to category IDs: {fsq_category_ids[:100] if fsq_category_ids else None}...")
+        
+        # Convert price_budget to price tier
+        price_tier = None
+        if price_budget:
+            price_tier = {"$": 1, "$$": 2, "$$$": 3}.get(price_budget)
+        
+        # Build Foursquare query
+        fsq_query = cuisine if cuisine else None
 
-        # TEMPORARY: Use mock data for fast testing instead of slow Foursquare API
-        fsq_places = [
-            {
-                "fsq_id": "mock_nearby_1",
-                "name": "Pizza Hut",
-                "primary_category": "Pizza Restaurant",
-                "categories": "Pizza Restaurant, Italian Restaurant",
-                "latitude": lat + 0.0005,
-                "longitude": lng + 0.0005,
-                "address": "Nearby Street, Riyadh",
-                "rating": 4.3,
-                "price_tier": 2,
-                "photos": []
-            },
-            {
-                "fsq_id": "mock_nearby_2",
-                "name": "Subway",
-                "primary_category": "Sandwich Shop",
-                "categories": "Sandwich Shop, Fast Food Restaurant",
-                "latitude": lat - 0.0005,
-                "longitude": lng + 0.0005,
-                "address": "Local Mall, Riyadh",
-                "rating": 4.1,
-                "price_tier": 1,
-                "photos": []
-            }
-        ][:limit]
+        fsq_places = await service.fetch_foursquare_nearby(
+            lat=lat,
+            lon=lng,
+            radius_m=radius_m,
+            limit=limit,
+            query=fsq_query,
+            categories=fsq_category_ids,  # Pass category IDs to Foursquare
+            min_price=price_tier,
+            max_price=price_tier,
+        )
+        logger.info("Got %s places from Foursquare API", len(fsq_places))
 
         if not fsq_places:
-            logger.info("No places returned from Foursquare API")
             return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
 
-        try:
-            saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(
-                fsq_places,
-                db,
-            )
-            await db.commit()
-            logger.info("Saved %s places to database", len(saved_places))
-            places_to_use = saved_places[:limit] if saved_places else []
-        except Exception as save_error:
-            logger.warning(
-                "Failed to save Foursquare places to database: %s",
-                save_error,
-            )
-            await db.rollback()
+        # Save places to database
+        saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(
+            fsq_places,
+            db,
+        )
+        await db.commit()
+        places_to_use = saved_places
+        
     except Exception as fetch_error:
         logger.error("Error fetching nearby places: %s", fetch_error)
         return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
@@ -1347,14 +1334,15 @@ async def nearby_places(
                 continue
 
             place_type_lower = place_type.lower().strip()
-            
+
             # Get all category names
             all_categories = []
             if item.primary_category:
                 all_categories.append(item.primary_category.lower())
             if item.categories:
-                all_categories.extend([cat.strip().lower() for cat in item.categories.split(',') if cat.strip()])
-            
+                all_categories.extend(
+                    [cat.strip().lower() for cat in item.categories.split(',') if cat.strip()])
+
             # Exact or word-boundary matching (more precise than substring)
             match = False
             for category in all_categories:
@@ -1370,7 +1358,7 @@ async def nearby_places(
                 if category.endswith(f" {place_type_lower}"):
                     match = True
                     break
-            
+
             if not match:
                 continue
 

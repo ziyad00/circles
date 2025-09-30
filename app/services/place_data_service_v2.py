@@ -220,36 +220,37 @@ class EnhancedPlaceDataService:
                 "fields": "fsq_place_id,name,location,categories,rating,hours,website,tel,photos,price,popularity,description"
         }
 
-            # Add search filters
+        # Add search filters
         if query:
-                params["query"] = query
+            params["query"] = query
         if categories:
-                params["categories"] = categories
+            # Use fsq_category_ids parameter for Foursquare API
+            params["fsq_category_ids"] = categories
         if min_price is not None:
-                params["min_price"] = min_price
+            params["min_price"] = min_price
         if max_price is not None:
-                params["max_price"] = max_price
+            params["max_price"] = max_price
 
-            try:
-                logging.info(
-                    f"Foursquare v3 API request: {url} with params: {params}")
-                resp = await client.get(url, headers=headers, params=params)
-                logging.info(
-                    f"Foursquare v3 API response status: {resp.status_code}")
+        try:
+            logging.info(
+                f"Foursquare v3 API request: {url} with params: {params}")
+            resp = await client.get(url, headers=headers, params=params)
+            logging.info(
+                f"Foursquare v3 API response status: {resp.status_code}")
 
-                if resp.status_code == 400:
+            if resp.status_code == 400:
                     logging.warning(
-                        f"Foursquare v3 API 400 error response: {resp.text}")
-                    if 'sort' in resp.text:
-                        # Retry without sort parameter
-                        params.pop("sort", None)
-                        logging.info(
-                            f"Retrying without sort parameter: {params}")
-                        resp = await client.get(url, headers=headers, params=params)
-                        logging.info(
-                            f"Retry response status: {resp.status_code}")
+                    f"Foursquare v3 API 400 error response: {resp.text}")
+                if 'sort' in resp.text:
+                    # Retry without sort parameter
+                    params.pop("sort", None)
+                    logging.info(
+                        f"Retrying without sort parameter: {params}")
+                    resp = await client.get(url, headers=headers, params=params)
+                    logging.info(
+                        f"Retry response status: {resp.status_code}")
 
-                if resp.status_code != 200:
+            if resp.status_code != 200:
                 logging.warning(
                         f"Foursquare v3 fallback failed: {resp.status_code}, response: {resp.text}")
             return []
@@ -516,7 +517,8 @@ class EnhancedPlaceDataService:
             if query:
                 params["query"] = query
             if categories:
-                params["categories"] = categories
+                # Use fsq_category_ids parameter for Foursquare API
+                params["fsq_category_ids"] = categories
             if min_price is not None:
                 params["min_price"] = min_price
             if max_price is not None:
@@ -675,7 +677,8 @@ class EnhancedPlaceDataService:
             if query:
                 params["query"] = query
             if categories:
-                params["categories"] = categories
+                # Use fsq_category_ids parameter for Foursquare API
+                params["fsq_category_ids"] = categories
             if min_price is not None:
                 params["min_price"] = min_price
             if max_price is not None:
