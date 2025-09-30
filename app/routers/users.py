@@ -203,7 +203,8 @@ async def search_users(
                         username=user.username,
                         name=user.name,  # Use name field directly
                         bio=user.bio,
-                        avatar_url=_convert_single_to_signed_url(user.avatar_url),
+                        avatar_url=_convert_single_to_signed_url(
+                            user.avatar_url),
                         created_at=user.created_at,
                         followed=False,  # TODO: compute follow state
                     )
@@ -264,14 +265,14 @@ async def get_user_profile(
 
         # Create response
         user_response = PublicUserResponse(
-        id=user.id,
-        name=user.name,
-        username=user.username,
-        bio=user.bio,
-        avatar_url=_convert_single_to_signed_url(user.avatar_url),
-        availability_status=user.availability_status,
+            id=user.id,
+            name=user.name,
+            username=user.username,
+            bio=user.bio,
+            avatar_url=_convert_single_to_signed_url(user.avatar_url),
+            availability_status=user.availability_status,
             availability_mode=user.availability_mode,
-        created_at=user.created_at,
+            created_at=user.created_at,
             followers_count=0,  # TODO: Calculate actual count
             following_count=0,  # TODO: Calculate actual count
             check_ins_count=0,  # TODO: Calculate actual count
@@ -391,7 +392,7 @@ async def upload_avatar(
 
         if not avatar_url:
         raise HTTPException(
-                status_code=500, detail="Failed to upload avatar")
+            status_code=500, detail="Failed to upload avatar")
 
         current_user.avatar_url = avatar_url
         current_user.updated_at = datetime.now(timezone.utc)
@@ -399,36 +400,36 @@ async def upload_avatar(
     await db.commit()
     await db.refresh(current_user)
 
-        followers_count = await db.scalar(
-            select(func.count(Follow.id)).where(
-                Follow.followee_id == current_user.id)
-        ) or 0
-        following_count = await db.scalar(
-            select(func.count(Follow.id)).where(
-                Follow.follower_id == current_user.id)
-        ) or 0
-        checkins_count = await db.scalar(
-            select(func.count(CheckIn.id)).where(
-                CheckIn.user_id == current_user.id)
-        ) or 0
+    followers_count = await db.scalar(
+        select(func.count(Follow.id)).where(
+            Follow.followee_id == current_user.id)
+    ) or 0
+    following_count = await db.scalar(
+        select(func.count(Follow.id)).where(
+            Follow.follower_id == current_user.id)
+    ) or 0
+    checkins_count = await db.scalar(
+        select(func.count(CheckIn.id)).where(
+            CheckIn.user_id == current_user.id)
+    ) or 0
 
-        signed_avatar = _convert_single_to_signed_url(current_user.avatar_url)
+    signed_avatar = _convert_single_to_signed_url(current_user.avatar_url)
 
-        return PublicUserResponse(
-            id=current_user.id,
-            name=current_user.name,
-            username=current_user.username,
-            bio=current_user.bio,
-            avatar_url=signed_avatar,
-            availability_status=current_user.availability_status,
-            availability_mode=current_user.availability_mode,
-            created_at=current_user.created_at,
-            followers_count=followers_count,
-            following_count=following_count,
-            check_ins_count=checkins_count,
-            is_followed=None,
-            is_blocked=None,
-        )
+    return PublicUserResponse(
+        id=current_user.id,
+        name=current_user.name,
+        username=current_user.username,
+        bio=current_user.bio,
+        avatar_url=signed_avatar,
+        availability_status=current_user.availability_status,
+        availability_mode=current_user.availability_mode,
+        created_at=current_user.created_at,
+        followers_count=followers_count,
+        following_count=following_count,
+        check_ins_count=checkins_count,
+        is_followed=None,
+        is_blocked=None,
+    )
 
     except ImageTooLargeError as exc:
         await db.rollback()
@@ -696,7 +697,7 @@ async def list_user_collections(
             )
 
         collections_stmt = (
-        select(
+            select(
                 UserCollection,
                 func.count(UserCollectionPlace.id).label("place_count"),
             )
@@ -723,7 +724,7 @@ async def list_user_collections(
 
             # Skip private collections if viewing another user's profile
             if (user_id != current_user.id and
-                not await can_view_collection(db, collection.user_id, current_user.id, visibility_value)):
+                    not await can_view_collection(db, collection.user_id, current_user.id, visibility_value)):
                 continue
 
             photos_query = (

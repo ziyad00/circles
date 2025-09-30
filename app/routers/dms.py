@@ -44,6 +44,7 @@ from ..schemas import (
 from ..services.jwt_service import JWTService
 # from ..routers.users import _convert_single_to_signed_url  # Function removed in cleaned version
 
+
 def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
     """Convert a single storage key or S3 URL to a signed URL."""
     if not photo_url:
@@ -51,14 +52,16 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
 
     import logging
     logger = logging.getLogger(__name__)
-    logger.debug(f"Converting URL: {photo_url}, storage_backend: {settings.storage_backend}")
+    logger.debug(
+        f"Converting URL: {photo_url}, storage_backend: {settings.storage_backend}")
 
     if not photo_url.startswith("http"):
         if settings.storage_backend == "local":
             return f"{settings.local_base_url}{photo_url}"
         try:
             signed_url = StorageService.generate_signed_url(photo_url)
-            logger.debug(f"Generated signed URL for key {photo_url}: {signed_url}")
+            logger.debug(
+                f"Generated signed URL for key {photo_url}: {signed_url}")
             return signed_url
         except Exception as exc:
             logger.warning(f"Failed to sign photo URL {photo_url}: {exc}")
@@ -75,10 +78,12 @@ def _convert_single_to_signed_url(photo_url: str | None) -> str | None:
             logger.debug(f"Re-signed S3 URL {photo_url} -> {signed_url}")
             return signed_url
         except Exception as exc:
-            logger.warning(f"Failed to re-sign S3 photo URL {photo_url}: {exc}")
+            logger.warning(
+                f"Failed to re-sign S3 photo URL {photo_url}: {exc}")
             return photo_url
     else:
         return photo_url
+
 
 router = APIRouter(
     prefix="/dms",
@@ -143,7 +148,8 @@ async def get_inbox(
                     updated_at=thread.updated_at,
                     other_user_name=other_user.name,
                     other_user_username=other_user.username,
-                    other_user_avatar=_convert_single_to_signed_url(other_user.avatar_url),
+                    other_user_avatar=_convert_single_to_signed_url(
+                        other_user.avatar_url),
                     last_message=None,  # TODO: Get last message
                     last_message_time=thread.updated_at,
                     is_muted=False,  # TODO: Get mute status
@@ -227,7 +233,8 @@ async def get_thread_messages(
                     sender_id=message.sender_id,
                     sender_username=sender.username,
                     sender_display_name=sender.name,
-                    sender_avatar_url=_convert_single_to_signed_url(sender.avatar_url),
+                    sender_avatar_url=_convert_single_to_signed_url(
+                        sender.avatar_url),
                     text=message.text,
                     message_type=message.message_type,
                     photo_url=message.photo_urls,
@@ -308,7 +315,8 @@ async def send_message(
             sender_id=message.sender_id,
             sender_username=current_user.username,
             sender_display_name=current_user.name,
-            sender_avatar_url=_convert_single_to_signed_url(current_user.avatar_url),
+            sender_avatar_url=_convert_single_to_signed_url(
+                current_user.avatar_url),
             text=message.text,
             message_type=message.message_type,
             photo_url=message.photo_urls[0] if message.photo_urls else None,
@@ -329,7 +337,8 @@ async def send_message(
         await db.rollback()
         import logging
         logging.error(f"Error sending message: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to send message: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to send message: {str(e)}")
 
 # ============================================================================
 # DM OPEN ENDPOINT (Used by frontend)
@@ -397,7 +406,8 @@ async def open_dm(
                 updated_at=existing_thread.updated_at,
                 other_user_name=other_user.name,
                 other_user_username=other_user.username,
-                other_user_avatar=_convert_single_to_signed_url(other_user.avatar_url),
+                other_user_avatar=_convert_single_to_signed_url(
+                    other_user.avatar_url),
                 last_message=None,
                 last_message_time=existing_thread.updated_at,
                 is_muted=False,
@@ -444,7 +454,8 @@ async def open_dm(
             updated_at=thread.updated_at,
             other_user_name=other_user.name,
             other_user_username=other_user.username,
-            other_user_avatar=_convert_single_to_signed_url(other_user.avatar_url),
+            other_user_avatar=_convert_single_to_signed_url(
+                other_user.avatar_url),
             last_message=None,
             last_message_time=thread.created_at,
             is_muted=False,
@@ -459,7 +470,8 @@ async def open_dm(
         await db.rollback()
         import logging
         logging.error(f"Error opening DM: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to open DM: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to open DM: {str(e)}")
 
 
 @router.post("/messages/{message_id}/like", status_code=status.HTTP_201_CREATED)
@@ -491,7 +503,8 @@ async def like_message(
         participant = participant_result.scalar_one_or_none()
 
         if not participant:
-            raise HTTPException(status_code=403, detail="You are not part of this conversation")
+            raise HTTPException(
+                status_code=403, detail="You are not part of this conversation")
 
         # Check if already liked
         existing_like_query = select(DMMessageLike).where(
@@ -502,7 +515,8 @@ async def like_message(
         existing_like = existing_like_result.scalar_one_or_none()
 
         if existing_like:
-            raise HTTPException(status_code=409, detail="Message already liked")
+            raise HTTPException(
+                status_code=409, detail="Message already liked")
 
         # Create like
         like = DMMessageLike(
@@ -521,7 +535,8 @@ async def like_message(
         await db.rollback()
         import logging
         logging.error(f"Error liking message {message_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to like message: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to like message: {str(e)}")
 
 
 @router.delete("/messages/{message_id}/like", status_code=status.HTTP_204_NO_CONTENT)
@@ -553,7 +568,8 @@ async def unlike_message(
         participant = participant_result.scalar_one_or_none()
 
         if not participant:
-            raise HTTPException(status_code=403, detail="You are not part of this conversation")
+            raise HTTPException(
+                status_code=403, detail="You are not part of this conversation")
 
         # Find and delete like
         like_query = select(DMMessageLike).where(
@@ -576,7 +592,8 @@ async def unlike_message(
         await db.rollback()
         import logging
         logging.error(f"Error unliking message {message_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to unlike message: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to unlike message: {str(e)}")
 
 
 @router.get("/threads/{thread_id}/unread-count", response_model=dict)
@@ -596,7 +613,8 @@ async def get_thread_unread_count(
         participant = participant_result.scalar_one_or_none()
 
         if not participant:
-            raise HTTPException(status_code=403, detail="You are not part of this conversation")
+            raise HTTPException(
+                status_code=403, detail="You are not part of this conversation")
 
         # Count unread messages (messages created after last_read_at)
         from datetime import datetime
@@ -613,8 +631,10 @@ async def get_thread_unread_count(
         raise
     except Exception as e:
         import logging
-        logging.error(f"Error getting unread count for thread {thread_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get unread count: {str(e)}")
+        logging.error(
+            f"Error getting unread count for thread {thread_id}: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get unread count: {str(e)}")
 
 
 @router.post("/threads/{thread_id}/accept", response_model=dict)
@@ -635,11 +655,13 @@ async def accept_thread(
 
         # Check if current user is participant
         if current_user.id not in (thread.user_a_id, thread.user_b_id):
-            raise HTTPException(status_code=403, detail="You are not part of this conversation")
+            raise HTTPException(
+                status_code=403, detail="You are not part of this conversation")
 
         # Only allow accepting if status is pending
         if thread.status != "pending":
-            raise HTTPException(status_code=400, detail=f"Thread status is {thread.status}, not pending")
+            raise HTTPException(
+                status_code=400, detail=f"Thread status is {thread.status}, not pending")
 
         # Accept the thread
         thread.status = "accepted"
@@ -654,4 +676,5 @@ async def accept_thread(
         await db.rollback()
         import logging
         logging.error(f"Error accepting thread {thread_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to accept thread: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to accept thread: {str(e)}")

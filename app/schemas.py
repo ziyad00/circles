@@ -103,8 +103,10 @@ class PlaceResponse(PlaceBase):
     venue_created_at: Optional[datetime] = None
     primary_category: Optional[str] = None
     category_icons: Optional[List[Dict[str, Any]]] = None
-    photo_urls: Optional[List[str]] = None  # All photos (primary + additional) for backward compatibility
-    additional_photos: Optional[List[str]] = None  # Additional photos (excluding primary)
+    # All photos (primary + additional) for backward compatibility
+    photo_urls: Optional[List[str]] = None
+    # Additional photos (excluding primary)
+    additional_photos: Optional[List[str]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1138,12 +1140,16 @@ class PaginatedCollectionPlaces(BaseModel):
 
 class PlaceFilters(BaseModel):
     """Minimal place filters for trending and nearby endpoints"""
-    place_type: Optional[str] = Field(None, description="Place type (e.g., restaurant, cafe)")
-    cuisine: Optional[str] = Field(None, description="Cuisine type (for restaurants)")
+    place_type: Optional[str] = Field(
+        None, description="Place type (e.g., restaurant, cafe)")
+    cuisine: Optional[str] = Field(
+        None, description="Cuisine type (for restaurants)")
     country: Optional[str] = Field(None, description="Country filter")
     city: Optional[str] = Field(None, description="City filter")
-    neighborhood: Optional[str] = Field(None, description="Neighborhood filter")
-    price_budget: Optional[str] = Field(None, description="Price tier: $, $$, $$$")
+    neighborhood: Optional[str] = Field(
+        None, description="Neighborhood filter")
+    price_budget: Optional[str] = Field(
+        None, description="Price tier: $, $$, $$$")
 
     @field_validator('price_budget')
     @classmethod

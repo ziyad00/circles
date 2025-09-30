@@ -165,15 +165,15 @@ async def create_collection(
         raise HTTPException(
             status_code=400, detail="Collection name cannot be empty")
 
-    existing = await db.execute(
-        select(UserCollection).where(
-            UserCollection.user_id == current_user.id,
-            func.lower(UserCollection.name) == normalized_name.lower(),
+        existing = await db.execute(
+            select(UserCollection).where(
+                UserCollection.user_id == current_user.id,
+                func.lower(UserCollection.name) == normalized_name.lower(),
+            )
         )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(
-            status_code=400, detail="Collection name already exists")
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400, detail="Collection name already exists")
 
     new_collection = UserCollection(
         user_id=current_user.id,
@@ -328,9 +328,11 @@ async def get_collection(
         db,
         collection.user_id,
         current_user.id,
-        collection.visibility or ("public" if collection.is_public else "private"),
+        collection.visibility or (
+            "public" if collection.is_public else "private"),
     ):
-        raise HTTPException(status_code=403, detail="Cannot view this collection")
+        raise HTTPException(
+            status_code=403, detail="Cannot view this collection")
 
     # Get places count for this collection
     places_count_result = await db.execute(
