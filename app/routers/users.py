@@ -181,7 +181,6 @@ async def search_users(
                 or_(
                     User.username.ilike(f"%{filters.q}%"),
                     User.name.ilike(f"%{filters.q}%"),
-                    User.bio.ilike(f"%{filters.q}%"),
                 )
             )
 

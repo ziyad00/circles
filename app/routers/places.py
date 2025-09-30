@@ -935,37 +935,47 @@ async def get_trending_places(
         logger.info("Got %s places from Foursquare API", len(fsq_places))
 
         if not fsq_places:
-            logger.info("No places returned from Foursquare API")
-            return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
-
-        try:
-            saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(
-                fsq_places,
-                db,
+            logger.info("No places returned from Foursquare API - falling back to local database trending")
+            # Fallback to local database trending when Foursquare API is not available
+            places_to_use = await _get_local_trending_places(
+                db, lat, lng, limit, time_window, place_type, cuisine, 
+                country, city, neighborhood, price_budget
             )
-            await db.commit()
-            logger.info("Saved %s places to database", len(saved_places))
-        except Exception as save_error:
-            logger.error(
-                "Failed to save Foursquare places to database: %s",
-                save_error,
-            )
-            await db.rollback()
+            if not places_to_use:
+                logger.warning("No local trending places found either")
+                return PaginatedPlaces(items=[], total=0, limit=limit, offset=offset)
+            # Skip the Foursquare saving logic and go directly to response building
+            logger.info("Using %s local trending places", len(places_to_use))
         else:
-            if saved_places:
-                logger.info(
-                    "First saved place: ID=%s, Name=%s",
-                    saved_places[0].id,
-                    saved_places[0].name,
+            # Continue with Foursquare places saving logic
+            try:
+                saved_places = await enhanced_place_data_service.save_foursquare_places_to_db(
+                    fsq_places,
+                    db,
                 )
-                places_to_use = saved_places
-                logger.info(
-                    "Set places_to_use to %s saved places", len(places_to_use)
+                await db.commit()
+                logger.info("Saved %s places to database", len(saved_places))
+            except Exception as save_error:
+                logger.error(
+                    "Failed to save Foursquare places to database: %s",
+                    save_error,
                 )
+                await db.rollback()
             else:
-                logger.warning(
-                    "No places were saved to database - falling back to empty results"
-                )
+                if saved_places:
+                    logger.info(
+                        "First saved place: ID=%s, Name=%s",
+                        saved_places[0].id,
+                        saved_places[0].name,
+                        )
+                    places_to_use = saved_places
+                    logger.info(
+                        "Set places_to_use to %s saved places", len(places_to_use)
+                    )
+                else:
+                    logger.warning(
+                        "No places were saved to database - falling back to empty results"
+                    )
     except Exception as fetch_error:
         logger.error(
             "Failed to fetch Foursquare trending places: %s",
@@ -2228,6 +2238,86 @@ async def unsave_place(
         logging.error(f"Error unsaving place: {e}")
         await db.rollback()
         raise HTTPException(status_code=500, detail="Failed to unsave place")
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+async def _get_local_trending_places(
+    db: AsyncSession,
+    lat: float,
+    lng: float,
+    limit: int,
+    time_window: str,
+    place_type: str | None = None,
+    cuisine: str | None = None,
+    country: str | None = None,
+    city: str | None = None,
+    neighborhood: str | None = None,
+    price_budget: str | None = None
+) -> List[Place]:
+    """
+    Get trending places from local database when Foursquare API is not available.
+    """
+    logger.info("Fetching local trending places from database")
+    
+    # Convert time window to hours
+    hours_window = _time_window_to_hours(time_window)
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_window)
+    
+    # Build base query for places with recent check-ins
+    query = select(Place).join(CheckIn, Place.id == CheckIn.place_id).where(
+        CheckIn.created_at >= cutoff_time
+    )
+    
+    # Apply filters
+    if place_type:
+        query = query.where(Place.primary_category.ilike(f"%{place_type}%"))
+    
+    if cuisine:
+        query = query.where(
+            or_(
+                Place.primary_category.ilike(f"%{cuisine}%"),
+                Place.categories.ilike(f"%{cuisine}%")
+            )
+        )
+    
+    if country:
+        query = query.where(Place.country.ilike(f"%{country}%"))
+    
+    if city:
+        query = query.where(Place.city.ilike(f"%{city}%"))
+    
+    if neighborhood:
+        query = query.where(Place.neighborhood.ilike(f"%{neighborhood}%"))
+    
+    if price_budget:
+        price_map = {"$": 1, "$$": 2, "$$$": 3, "$$$$": 4}
+        price_tier = price_map.get(price_budget)
+        if price_tier:
+            query = query.where(Place.price_tier == price_tier)
+    
+    # Add distance-based ordering if coordinates provided
+    if lat and lng:
+        # Calculate distance and order by it
+        distance_expr = func.sqrt(
+            func.pow(Place.latitude - lat, 2) + func.pow(Place.longitude - lng, 2)
+        )
+        query = query.order_by(distance_expr)
+    
+    # Add trending score based on recent check-ins
+    trending_score = func.count(CheckIn.id).label('trending_score')
+    query = query.group_by(Place.id).order_by(trending_score.desc())
+    
+    # Limit results
+    query = query.limit(limit)
+    
+    result = await db.execute(query)
+    places = result.scalars().all()
+    
+    logger.info("Found %s local trending places", len(places))
+    return places
+
 
 # ============================================================================
 # EXTERNAL TEST ENDPOINT (Used for testing)
