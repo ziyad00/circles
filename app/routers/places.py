@@ -5,6 +5,7 @@ import logging
 from ..models import Follow
 # from ..routers.activity import create_checkin_activity  # Removed unused activity router
 from ..utils import can_view_checkin, haversine_distance
+from ..utils.category_filter import category_filter
 from ..services.place_data_service_v2 import enhanced_place_data_service, EnhancedPlaceDataService
 from ..services.storage import StorageService
 from ..services.jwt_service import JWTService
@@ -1053,22 +1054,36 @@ async def get_trending_places(
     # Apply filters to the trending results
     filtered_items = []
     for item in fsq_items:
-        # Flexible place type filtering
+        # Place type filtering using improved matching
         if place_type:
-            if not item.primary_category:
+            if not item.primary_category and not item.categories:
                 continue
 
-            place_type_lower = place_type.lower()
-            category_lower = item.primary_category.lower()
-            categories_lower = (item.categories or "").lower()
-
-            # Check if place type matches primary category or any categories
-            # This is flexible and works for any place type without hardcoding
-            match = (place_type_lower in category_lower or
-                     place_type_lower in categories_lower or
-                     category_lower in place_type_lower or
-                     any(place_type_lower in cat.strip().lower() for cat in categories_lower.split(',') if cat.strip()))
-
+            place_type_lower = place_type.lower().strip()
+            
+            # Get all category names
+            all_categories = []
+            if item.primary_category:
+                all_categories.append(item.primary_category.lower())
+            if item.categories:
+                all_categories.extend([cat.strip().lower() for cat in item.categories.split(',') if cat.strip()])
+            
+            # Exact or word-boundary matching (more precise than substring)
+            match = False
+            for category in all_categories:
+                # Exact match
+                if place_type_lower == category:
+                    match = True
+                    break
+                # Word boundary match - "restaurant" matches "burger restaurant" but not "restaurant supply"
+                if f" {place_type_lower}" in f" {category}" or f"{place_type_lower} " in f"{category} ":
+                    match = True
+                    break
+                # Check if category ends with the filter type
+                if category.endswith(f" {place_type_lower}"):
+                    match = True
+                    break
+            
             if not match:
                 continue
 
@@ -1326,22 +1341,36 @@ async def nearby_places(
     # Apply filters to the nearby results
     filtered_items = []
     for item in fsq_items:
-        # Flexible place type filtering
+        # Place type filtering using improved matching
         if place_type:
-            if not item.primary_category:
+            if not item.primary_category and not item.categories:
                 continue
 
-            place_type_lower = place_type.lower()
-            category_lower = item.primary_category.lower()
-            categories_lower = (item.categories or "").lower()
-
-            # Check if place type matches primary category or any categories
-            # This is flexible and works for any place type without hardcoding
-            match = (place_type_lower in category_lower or
-                     place_type_lower in categories_lower or
-                     category_lower in place_type_lower or
-                     any(place_type_lower in cat.strip().lower() for cat in categories_lower.split(',') if cat.strip()))
-
+            place_type_lower = place_type.lower().strip()
+            
+            # Get all category names
+            all_categories = []
+            if item.primary_category:
+                all_categories.append(item.primary_category.lower())
+            if item.categories:
+                all_categories.extend([cat.strip().lower() for cat in item.categories.split(',') if cat.strip()])
+            
+            # Exact or word-boundary matching (more precise than substring)
+            match = False
+            for category in all_categories:
+                # Exact match
+                if place_type_lower == category:
+                    match = True
+                    break
+                # Word boundary match - "restaurant" matches "burger restaurant" but not "restaurant supply"
+                if f" {place_type_lower}" in f" {category}" or f"{place_type_lower} " in f"{category} ":
+                    match = True
+                    break
+                # Check if category ends with the filter type
+                if category.endswith(f" {place_type_lower}"):
+                    match = True
+                    break
+            
             if not match:
                 continue
 
