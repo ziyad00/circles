@@ -14,12 +14,11 @@ RUN apt-get update && apt-get install -y \
 RUN python -m venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Copy dependency files and extract requirements
-COPY pyproject.toml uv.lock ./
-RUN pip install uv && uv export --no-dev > requirements.txt
+# Copy dependency files
+COPY pyproject.toml ./
 
-# Install dependencies with pip for proper platform handling
-RUN pip install --no-cache-dir -r requirements.txt
+# Install dependencies directly from pyproject.toml
+RUN pip install --no-cache-dir -e .
 
 # Copy application code
 COPY . .
