@@ -199,13 +199,13 @@ async def search_users(
             if await can_view_profile(db, user, current_user.id):
                 responses.append(
                     PublicUserSearchResponse(
-                        id=user.id,
+                id=user.id,
                                 username=user.username,
                                 name=user.name,  # Use name field directly
-                        bio=user.bio,
+                bio=user.bio,
                                 avatar_url=_convert_single_to_signed_url(
                                     user.avatar_url),
-                        created_at=user.created_at,
+                created_at=user.created_at,
                                 followed=False,  # TODO: compute follow state
                             )
                         )
@@ -391,13 +391,13 @@ async def upload_avatar(
         avatar_url = await StorageService.save_avatar(current_user.id, filename, content)
 
         if not avatar_url:
-        raise HTTPException(
+            raise HTTPException(
                 status_code=500, detail="Failed to upload avatar")
 
         current_user.avatar_url = avatar_url
         current_user.updated_at = datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(current_user)
+        await db.commit()
+        await db.refresh(current_user)
 
         followers_count = await db.scalar(
             select(func.count(Follow.id)).where(
@@ -672,8 +672,8 @@ async def list_user_collections(
         user_result = await db.execute(user_query)
         user = user_result.scalar_one_or_none()
 
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        if not user:
+                raise HTTPException(status_code=404, detail="User not found")
 
         if not await can_view_profile(db, user, current_user.id):
             raise HTTPException(

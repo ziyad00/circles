@@ -642,8 +642,10 @@ async def search_places(
         return PaginatedPlaces(items=items, total=total, limit=limit, offset=offset)
 
     except Exception as e:
-        logging.error(f"Error searching places: {e}")
-        raise HTTPException(status_code=500, detail="Failed to search places")
+        import traceback
+        error_details = traceback.format_exc()
+        logging.error(f"Error searching places: {e}\n{error_details}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
 @router.post("/search/advanced/flexible", response_model=PaginatedPlaces)
